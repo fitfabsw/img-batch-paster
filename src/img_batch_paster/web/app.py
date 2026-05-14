@@ -8,7 +8,7 @@ from flask import Flask, jsonify, request, send_file, send_from_directory
 from PIL import Image
 
 from ..grouper import scan_folder
-from ..pptx_writer import Placement, write_placements
+from ..pptx_writer import Placement, write_pages, write_placements
 from .template_render import render_first_slide, slide_size_cm
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -145,24 +145,26 @@ def api_export():
     template = data["output"].get("template")
     template_path = Path(template).expanduser().resolve() if template else None
 
-    placements = [
-        Placement(
+    def _to_pl(p):
+        return Placement(
             path=Path(p["path"]),
-            x_cm=float(p["x_cm"]),
-            y_cm=float(p["y_cm"]),
-            w_cm=float(p["w_cm"]),
-            h_cm=float(p["h_cm"]),
+            x_cm=float(p["x_cm"]), y_cm=float(p["y_cm"]),
+            w_cm=float(p["w_cm"]), h_cm=float(p["h_cm"]),
         )
-        for p in data["placements"]
-    ]
-    if not placements:
+
+    if "pages" in data:
+        pages = [[_to_pl(p) for p in page] for page in data["pages"]]
+    else:
+        pages = [[_to_pl(p) for p in data.get("placements", [])]]
+
+    if not pages or all(len(p) == 0 for p in pages):
         return jsonify({"error": "沒有可匯出的圖片"}), 400
 
-    out = write_placements(
+    out = write_pages(
         float(slide["width_cm"]), float(slide["height_cm"]),
-        placements, out_path, template_path,
+        pages, out_path, template_path,
     )
-    return jsonify({"output": str(out)})
+    return jsonify({"output": str(out), "pages": len(pages)})
 
 
 @click.command()

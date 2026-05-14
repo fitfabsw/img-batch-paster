@@ -28,12 +28,13 @@
         width: 25,
         gap:   { x: 2, y: 3 },
         cols: 3,
+        rows: 3,   // 每頁列數
       },
       output: { path: "./out.pptx", template: null },
     };
 
-    // 把排序後的檔案 (依使用者順序) 依 cols 切成 row，計算每張圖的 cm 位置
-    function computePlacements(slide, grid, orderedFiles) {
+    // 把檔案依「每頁 cols × rows」切成多頁；每頁從 origin 開始重新計算
+    function computePages(slide, grid, orderedFiles) {
       if (!orderedFiles || orderedFiles.length === 0) return [];
       const W = slide.width_cm, H = slide.height_cm;
       const ox = W * grid.origin.x / 100;
@@ -42,26 +43,32 @@
       const gx = W * grid.gap.x / 100;
       const gy = H * grid.gap.y / 100;
       const cols = Math.max(1, grid.cols);
+      const rows = Math.max(1, grid.rows);
+      const perPage = cols * rows;
 
-      const out = [];
-      let cur_y = oy;
-      for (let i = 0; i < orderedFiles.length; i += cols) {
-        const row = orderedFiles.slice(i, i + cols);
-        const anchor = row[0];
-        const aspect = anchor.h && anchor.w ? anchor.h / anchor.w : 0.75;
-        const row_h = w * aspect;
-        row.forEach((f, ci) => {
-          out.push({
-            path: f.path,
-            x_cm: ox + ci * (w + gx),
-            y_cm: cur_y,
-            w_cm: w,
-            h_cm: row_h,
+      const pages = [];
+      for (let p = 0; p < orderedFiles.length; p += perPage) {
+        const pageFiles = orderedFiles.slice(p, p + perPage);
+        const placements = [];
+        let cur_y = oy;
+        for (let i = 0; i < pageFiles.length; i += cols) {
+          const row = pageFiles.slice(i, i + cols);
+          const anchor = row[0];
+          const aspect = anchor.h && anchor.w ? anchor.h / anchor.w : 0.75;
+          const row_h = w * aspect;
+          row.forEach((f, ci) => {
+            placements.push({
+              path: f.path,
+              x_cm: ox + ci * (w + gx),
+              y_cm: cur_y,
+              w_cm: w, h_cm: row_h,
+            });
           });
-        });
-        cur_y += row_h + gy;
+          cur_y += row_h + gy;
+        }
+        pages.push(placements);
       }
-      return out;
+      return pages;
     }
 
     function NumberInput({ label, value, onChange, step = 0.5, suffix }) {
@@ -83,6 +90,7 @@
       const [files, setFiles] = useState([]);          // 原始檔案清單（由後端掃描）
       const [order, setOrder] = useState([]);          // 使用者調整後的順序 (paths array)
       const [selected, setSelected] = useState(null);  // 目前選中的 path
+      const [currentPage, setCurrentPage] = useState(0);
       const [status, setStatus] = useState("");
       const [busy, setBusy] = useState(false);
       const [tplPath, setTplPath] = useState("");
@@ -172,17 +180,17 @@
             setOrder(j.files.map((f) => f.path));
             arr = j.files;
           }
-          const placements = computePlacements(cfg.slide, cfg.grid, arr);
-          if (placements.length === 0) throw new Error("沒有可匯出的圖片");
-          setStatus("匯出中…");
+          const pages = computePages(cfg.slide, cfg.grid, arr);
+          if (pages.length === 0) throw new Error("沒有可匯出的圖片");
+          setStatus(`匯出中… (${pages.length} 頁)`);
           const r = await fetch("/api/export", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ slide: cfg.slide, placements, output: cfg.output }),
+            body: JSON.stringify({ slide: cfg.slide, pages, output: cfg.output }),
           });
           const j = await r.json();
           if (!r.ok) throw new Error(j.error || "export failed");
-          setStatus("✓ 已輸出: " + j.output);
+          setStatus(`✓ 已輸出 ${j.pages} 頁: ${j.output}`);
         } catch (e) { setStatus("錯誤: " + e.message); console.error(e); }
         finally { setBusy(false); }
       };
@@ -207,11 +215,11 @@
       const STAGE_W = 720;
       const scale = STAGE_W / cfg.slide.width_cm;
       const stageH = cfg.slide.height_cm * scale;
-      const placements = computePlacements(cfg.slide, cfg.grid, orderedFiles);
+      const pages = computePages(cfg.slide, cfg.grid, orderedFiles);
       const imgW_cm = cfg.slide.width_cm * cfg.grid.width / 100;
       const firstAnchor = orderedFiles[0];
       const previewH_cm = firstAnchor && firstAnchor.w ? imgW_cm * (firstAnchor.h / firstAnchor.w) : null;
-      const rowsCount = Math.ceil(orderedFiles.length / Math.max(1, cfg.grid.cols));
+      const perPage = Math.max(1, cfg.grid.cols) * Math.max(1, cfg.grid.rows);
 
       return (
         <div className="max-w-[1600px] mx-auto p-4 h-screen flex flex-col">
@@ -273,7 +281,7 @@
                     圖寬 = <b>{imgW_cm.toFixed(2)} cm</b>
                     {previewH_cm && <> · 圖高 ≈ <b>{previewH_cm.toFixed(2)} cm</b></>}
                     <br />
-                    {cfg.grid.cols} 欄 × {rowsCount} 列
+                    每頁 {cfg.grid.cols} 欄 × {cfg.grid.rows} 列 = {perPage} 張 / 共 <b>{pages.length}</b> 頁
                   </div>
 
                   <div className="text-[11px] uppercase tracking-wide text-slate-400 mt-2 mb-1">第一張圖位置</div>
@@ -296,9 +304,13 @@
                       onChange={(v) => setGrid("gap.y", v)} />
                   </div>
 
-                  <div className="text-[11px] uppercase tracking-wide text-slate-400 mt-3 mb-1">欄數</div>
-                  <NumberInput label="cols" step={1} value={cfg.grid.cols}
-                    onChange={(v) => setGrid("cols", Math.max(1, parseInt(v) || 1))} />
+                  <div className="text-[11px] uppercase tracking-wide text-slate-400 mt-3 mb-1">每頁網格</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumberInput label="欄 cols" step={1} value={cfg.grid.cols}
+                      onChange={(v) => setGrid("cols", Math.max(1, parseInt(v) || 1))} />
+                    <NumberInput label="列 rows" step={1} value={cfg.grid.rows}
+                      onChange={(v) => setGrid("rows", Math.max(1, parseInt(v) || 1))} />
+                  </div>
                 </div>
 
                 <div className="border-t pt-3">
@@ -353,7 +365,10 @@
                 )}
                 {orderedFiles.map((f, idx) => (
                   <div key={f.path}
-                    onClick={() => setSelected(f.path)}
+                    onClick={() => {
+                      setSelected(f.path);
+                      setCurrentPage(Math.floor(idx / Math.max(1, cfg.grid.cols * cfg.grid.rows)));
+                    }}
                     className={`flex items-center gap-2 rounded p-1 cursor-pointer ${
                       selected === f.path ? "bg-emerald-50 ring-1 ring-emerald-300" : "hover:bg-slate-50"
                     }`}>
@@ -385,28 +400,48 @@
             {/* 右欄：預覽 */}
             <div className="col-span-6 min-h-0">
               <div className="bg-white rounded-lg shadow p-4 h-full overflow-auto">
-                <div className="text-sm text-slate-500 mb-2">
-                  預覽（1 cm ≈ {scale.toFixed(1)} px）
-                </div>
-                <div className={`${tpl ? "" : "stage"} border relative mx-auto overflow-hidden`}
-                  style={{
-                    width: STAGE_W, height: stageH,
-                    backgroundImage: tpl ? `url(${tpl.preview_url})` : undefined,
-                    backgroundSize: "100% 100%", backgroundRepeat: "no-repeat",
-                  }}>
-                  {placements.map((pl, i) => (
-                    <img key={i}
-                      src={`/api/thumb?path=${encodeURIComponent(pl.path)}&size=400`}
-                      style={{
-                        position: "absolute",
-                        left: pl.x_cm * scale,
-                        top: pl.y_cm * scale,
-                        width: pl.w_cm * scale,
-                        height: pl.h_cm * scale,
-                      }}
-                      className={selected === pl.path ? "ring-2 ring-emerald-500" : "border border-slate-300"} />
-                  ))}
-                </div>
+                {(() => {
+                  const total = Math.max(1, pages.length);
+                  const pi = Math.min(currentPage, total - 1);
+                  const pagePls = pages[pi] || [];
+                  return (
+                    <>
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="text-sm text-slate-500">
+                          預覽（1 cm ≈ {scale.toFixed(1)} px）
+                        </div>
+                        <div className="flex items-center gap-2 text-sm">
+                          <button onClick={() => setCurrentPage((p) => Math.max(0, p - 1))}
+                            disabled={pi === 0}
+                            className="border rounded px-2 py-0.5 disabled:opacity-30 hover:bg-slate-100">◀</button>
+                          <span className="tabular-nums">第 <b>{pi + 1}</b> / {pages.length || 1} 頁</span>
+                          <button onClick={() => setCurrentPage((p) => Math.min(total - 1, p + 1))}
+                            disabled={pi >= total - 1}
+                            className="border rounded px-2 py-0.5 disabled:opacity-30 hover:bg-slate-100">▶</button>
+                        </div>
+                      </div>
+                      <div className={`${tpl ? "" : "stage"} border relative mx-auto overflow-hidden`}
+                        style={{
+                          width: STAGE_W, height: stageH,
+                          backgroundImage: tpl ? `url(${tpl.preview_url})` : undefined,
+                          backgroundSize: "100% 100%", backgroundRepeat: "no-repeat",
+                        }}>
+                        {pagePls.map((pl, i) => (
+                          <img key={i}
+                            src={`/api/thumb?path=${encodeURIComponent(pl.path)}&size=400`}
+                            style={{
+                              position: "absolute",
+                              left: pl.x_cm * scale,
+                              top: pl.y_cm * scale,
+                              width: pl.w_cm * scale,
+                              height: pl.h_cm * scale,
+                            }}
+                            className={selected === pl.path ? "ring-2 ring-emerald-500" : "border border-slate-300"} />
+                        ))}
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
             </div>
           </div>
