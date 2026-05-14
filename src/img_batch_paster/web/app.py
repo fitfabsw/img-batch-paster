@@ -99,6 +99,24 @@ def api_upload_template():
     return jsonify({"path": str(dest)})
 
 
+DEFAULT_TEMPLATE = Path(__file__).resolve().parent.parent / "templates" / "default.pptx"
+
+
+@app.post("/api/template/default")
+def api_template_default():
+    """Copy the bundled default template into the workspace and return its path."""
+    if not DEFAULT_TEMPLATE.is_file():
+        return jsonify({"error": "預設範本不存在"}), 500
+    data = request.get_json(force=True, silent=True) or {}
+    ws = data.get("workspace", "")
+    base = _ws_dir(ws)
+    if not base:
+        return jsonify({"error": "invalid workspace"}), 400
+    dest = base / "template.pptx"
+    shutil.copy2(DEFAULT_TEMPLATE, dest)
+    return jsonify({"path": str(dest), "name": "default.pptx"})
+
+
 @app.post("/api/upload/images")
 def api_upload_images():
     ws = request.form.get("workspace", "")

@@ -27,3 +27,4 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "img_batch_paster.web" = ["static/*"]
+"img_batch_paster.templates" = ["*.pptx"]
