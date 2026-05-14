@@ -402,16 +402,10 @@
                 </div>
               </div>
               <div className="border-t bg-slate-50 p-3 rounded-b-lg space-y-2">
-                <div className="flex gap-2">
-                  <button disabled={busy} onClick={doScan}
-                    className="flex-1 bg-slate-800 disabled:bg-slate-300 text-white rounded px-3 py-2 text-sm">
-                    掃描
-                  </button>
-                  <button disabled={busy} onClick={doExport}
-                    className="flex-1 bg-emerald-600 disabled:bg-slate-300 text-white rounded px-3 py-2 text-sm">
-                    匯出 {cfg.output.path.toLowerCase().endsWith(".key") ? ".key" : ".pptx"}
-                  </button>
-                </div>
+                <button disabled={busy} onClick={doExport}
+                  className="w-full bg-emerald-600 disabled:bg-slate-300 text-white rounded px-3 py-2 text-sm">
+                  匯出 {cfg.output.path.toLowerCase().endsWith(".key") ? ".key" : ".pptx"}
+                </button>
                 {status && <div className="text-xs text-slate-600 break-all">{status}</div>}
               </div>
             </div>
