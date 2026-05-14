@@ -8,10 +8,15 @@ dependencies = [
     "Pillow>=10.0.0",
     "PyYAML>=6.0",
     "click>=8.1",
+    "Flask>=3.0",
 ]
+
+[project.optional-dependencies]
+desktop = ["pywebview>=5.0"]
 
 [project.scripts]
 img-batch-paster = "img_batch_paster.cli:main"
+img-batch-paster-web = "img_batch_paster.web.app:run"
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -19,3 +24,6 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"img_batch_paster.web" = ["static/*"]

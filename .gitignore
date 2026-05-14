@@ -8,3 +8,8 @@ dist/
 tests/fixtures/images/
 tests/fixtures/out.pptx
 tests/fixtures/config.yaml
+tests/fixtures/template.pptx
+tests/output-*/
+tests/*.pptx
+/out.pptx
+

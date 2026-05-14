@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>img-batch-paster</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; }
+    .stage { background: repeating-conic-gradient(#f3f4f6 0 25%, #ffffff 0 50%) 50% / 20px 20px; }
+  </style>
+</head>
+<body class="bg-slate-50">
+  <div id="root"></div>
+
+  <script type="text/babel" data-presets="react">
+    const { useState } = React;
+
+    // 全部以「投影片尺寸的百分比 (0–100)」表示
+    // origin.x / width / gap.x → 投影片寬度的 %
+    // origin.y / gap.y         → 投影片高度的 %
+    // 高度由圖片原始長寬比自動算出，不會拉伸
+    const DEFAULTS = {
+      folder: "",
+      pattern: "{group}_{n}",
+      extensions: [".png", ".jpg", ".jpeg"],
+      slide: { width_cm: 25.4, height_cm: 14.29 },
+      grid: {
+        origin: { x: 8, y: 15 },  // 第一張圖左上角 (%)
+        width: 25,                 // 每張圖寬度 (% of slide width)
+        gap:   { x: 2, y: 3 },     // 圖片間距 (%)
+        cols: 3,
+      },
+      output: { path: "./out.pptx", template: null },
+    };
+
+    // 計算每張圖的 cm 座標與大小
+    function computePlacements(slide, grid, scan) {
+      if (!scan) return [];
+      const W = slide.width_cm, H = slide.height_cm;
+      const ox = W * grid.origin.x / 100;
+      const oy = H * grid.origin.y / 100;
+      const w  = W * grid.width / 100;
+      const gx = W * grid.gap.x / 100;
+      const gy = H * grid.gap.y / 100;
+
+      const out = [];
+      let cur_y = oy;
+      for (const row of scan.rows) {
+        const anchor = row.cells.find((c) => c);
+        if (!anchor) continue;
+        const aspect = anchor.h / anchor.w;  // h/w
+        const row_h = w * aspect;
+        row.cells.forEach((c, ci) => {
+          if (!c) return;
+          out.push({
+            path: c.path,
+            x_cm: ox + ci * (w + gx),
+            y_cm: cur_y,
+            w_cm: w,
+            h_cm: row_h,
+          });
+        });
+        cur_y += row_h + gy;
+      }
+      return out;
+    }
+
+    function NumberInput({ label, value, onChange, step = 0.5, suffix }) {
+      return (
+        <label className="flex flex-col text-xs text-slate-600">
+          <span className="mb-1">{label}</span>
+          <div className="relative">
+            <input type="number" step={step} value={value}
+              onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
+              className="border rounded px-2 py-1 text-sm w-full pr-7" />
+            {suffix && <span className="absolute right-2 top-1.5 text-[10px] text-slate-400">{suffix}</span>}
+          </div>
+        </label>
+      );
+    }
+
+    function App() {
+      const [cfg, setCfg] = useState(DEFAULTS);
+      const [scan, setScan] = useState(null);
+      const [status, setStatus] = useState("");
+      const [busy, setBusy] = useState(false);
+      const [tplPath, setTplPath] = useState("");
+      const [tpl, setTpl] = useState(null);
+
+      const setGrid = (path, value) => {
+        setCfg((c) => {
+          const next = structuredClone(c);
+          let cur = next.grid;
+          const parts = path.split(".");
+          for (let i = 0; i < parts.length - 1; i++) cur = cur[parts[i]];
+          cur[parts[parts.length - 1]] = value;
+          return next;
+        });
+      };
+
+      const doLoadTemplate = async () => {
+        if (!tplPath) return;
+        setBusy(true); setStatus("載入範本中…");
+        try {
+          const r = await fetch("/api/template/load", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path: tplPath }),
+          });
+          const j = await r.json();
+          if (!r.ok) throw new Error(j.error || "載入失敗");
+          setTpl(j);
+          setCfg((c) => ({
+            ...c,
+            slide: { width_cm: j.width_cm, height_cm: j.height_cm },
+            output: { ...c.output, template: j.path },
+          }));
+          setStatus(`已載入範本 (${j.width_cm.toFixed(2)} × ${j.height_cm.toFixed(2)} cm)`);
+        } catch (e) { setStatus("錯誤: " + e.message); }
+        finally { setBusy(false); }
+      };
+
+      const scanOnly = async () => {
+        const r = await fetch("/api/scan", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            folder: cfg.folder,
+            pattern: cfg.pattern,
+            extensions: cfg.extensions,
+            cols: cfg.grid.cols,
+          }),
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || "scan failed");
+        return j;
+      };
+
+      const doScan = async () => {
+        if (!cfg.folder) { setStatus("錯誤: 請先指定圖片資料夾"); return; }
+        setBusy(true); setStatus("掃描中…");
+        try {
+          const j = await scanOnly();
+          setScan(j);
+          setStatus(`偵測到 ${j.rows.length} 列 × ${j.cols} 欄`);
+        } catch (e) { setStatus("錯誤: " + e.message); setScan(null); }
+        finally { setBusy(false); }
+      };
+
+      const doExport = async () => {
+        if (!cfg.folder) { setStatus("錯誤: 請先指定圖片資料夾"); return; }
+        setBusy(true); setStatus("匯出中…");
+        try {
+          let s = scan;
+          if (!s) { setStatus("掃描中…"); s = await scanOnly(); setScan(s); }
+          const placements = computePlacements(cfg.slide, cfg.grid, s);
+          if (placements.length === 0) throw new Error("沒有可匯出的圖片");
+          setStatus("匯出中…");
+          const r = await fetch("/api/export", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              slide: cfg.slide,
+              placements,
+              output: cfg.output,
+            }),
+          });
+          const j = await r.json();
+          if (!r.ok) throw new Error(j.error || "export failed");
+          setStatus("✓ 已輸出: " + j.output);
+        } catch (e) { setStatus("錯誤: " + e.message); console.error(e); }
+        finally { setBusy(false); }
+      };
+
+      // 預覽
+      const STAGE_W = 760;
+      const scale = STAGE_W / cfg.slide.width_cm;
+      const stageH = cfg.slide.height_cm * scale;
+      const placements = computePlacements(cfg.slide, cfg.grid, scan);
+      const imgW_cm = cfg.slide.width_cm * cfg.grid.width / 100;
+      const firstAnchor = scan?.rows.find((r) => r.cells.some((c) => c))?.cells.find((c) => c);
+      const previewH_cm = firstAnchor ? imgW_cm * (firstAnchor.h / firstAnchor.w) : null;
+
+      return (
+        <div className="max-w-7xl mx-auto p-6">
+          <h1 className="text-2xl font-bold mb-4">img-batch-paster</h1>
+
+          <div className="grid grid-cols-12 gap-6">
+            <div className="col-span-4 bg-white rounded-lg shadow p-4 space-y-4">
+              <div>
+                <label className="text-sm font-medium">範本投影片 (.pptx)</label>
+                <div className="flex gap-2 mt-1">
+                  <input value={tplPath} onChange={(e) => setTplPath(e.target.value)}
+                    placeholder="/path/to/template.pptx"
+                    className="flex-1 border rounded px-2 py-1 text-sm" />
+                  <button disabled={busy || !tplPath} onClick={doLoadTemplate}
+                    className="bg-slate-600 disabled:bg-slate-300 text-white rounded px-3 py-1 text-sm">
+                    載入
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-sm font-medium">圖片資料夾</label>
+                <input value={cfg.folder} onChange={(e) => setCfg({ ...cfg, folder: e.target.value })}
+                  placeholder="/path/to/images"
+                  className="mt-1 w-full border rounded px-2 py-1 text-sm" />
+              </div>
+
+              <div>
+                <label className="text-sm font-medium">檔名 pattern</label>
+                <input value={cfg.pattern} onChange={(e) => setCfg({ ...cfg, pattern: e.target.value })}
+                  className="mt-1 w-full border rounded px-2 py-1 text-sm font-mono" />
+              </div>
+
+              <div className="border-t pt-3">
+                <div className="text-sm font-semibold mb-2">
+                  投影片 <span className="text-xs text-slate-400 font-normal">
+                    ({cfg.slide.width_cm.toFixed(2)} × {cfg.slide.height_cm.toFixed(2)} cm)
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <NumberInput label="寬" value={cfg.slide.width_cm} suffix="cm"
+                    onChange={(v) => setCfg({ ...cfg, slide: { ...cfg.slide, width_cm: v } })} />
+                  <NumberInput label="高" value={cfg.slide.height_cm} suffix="cm"
+                    onChange={(v) => setCfg({ ...cfg, slide: { ...cfg.slide, height_cm: v } })} />
+                </div>
+              </div>
+
+              <div className="border-t pt-3">
+                <div className="text-sm font-semibold mb-2">版面（比例 %）</div>
+                <div className="text-xs text-slate-500 mb-2">
+                  圖寬 = <b>{imgW_cm.toFixed(2)} cm</b>
+                  {previewH_cm && <> · 圖高 ≈ <b>{previewH_cm.toFixed(2)} cm</b>（依圖片比例）</>}
+                </div>
+
+                <div className="text-[11px] uppercase tracking-wide text-slate-400 mt-2 mb-1">第一張圖位置</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <NumberInput label="X" suffix="%" value={cfg.grid.origin.x}
+                    onChange={(v) => setGrid("origin.x", v)} />
+                  <NumberInput label="Y" suffix="%" value={cfg.grid.origin.y}
+                    onChange={(v) => setGrid("origin.y", v)} />
+                </div>
+
+                <div className="text-[11px] uppercase tracking-wide text-slate-400 mt-3 mb-1">圖片寬度</div>
+                <NumberInput label="width" suffix="%" value={cfg.grid.width}
+                  onChange={(v) => setGrid("width", v)} />
+
+                <div className="text-[11px] uppercase tracking-wide text-slate-400 mt-3 mb-1">圖片間距</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <NumberInput label="水平 gap" suffix="%" value={cfg.grid.gap.x}
+                    onChange={(v) => setGrid("gap.x", v)} />
+                  <NumberInput label="垂直 gap" suffix="%" value={cfg.grid.gap.y}
+                    onChange={(v) => setGrid("gap.y", v)} />
+                </div>
+
+                <div className="text-[11px] uppercase tracking-wide text-slate-400 mt-3 mb-1">欄數</div>
+                <NumberInput label="cols" step={1} value={cfg.grid.cols}
+                  onChange={(v) => setGrid("cols", Math.max(1, parseInt(v) || 1))} />
+              </div>
+
+              <div className="border-t pt-3">
+                <label className="text-sm font-medium">輸出路徑</label>
+                <input value={cfg.output.path}
+                  onChange={(e) => setCfg({ ...cfg, output: { ...cfg.output, path: e.target.value } })}
+                  className="mt-1 w-full border rounded px-2 py-1 text-sm" />
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button disabled={busy} onClick={doScan}
+                  className="flex-1 bg-slate-800 disabled:bg-slate-300 text-white rounded px-3 py-2 text-sm">
+                  掃描
+                </button>
+                <button disabled={busy} onClick={doExport}
+                  className="flex-1 bg-emerald-600 disabled:bg-slate-300 text-white rounded px-3 py-2 text-sm">
+                  匯出 .pptx
+                </button>
+              </div>
+              {status && <div className="text-xs text-slate-600">{status}</div>}
+            </div>
+
+            <div className="col-span-8">
+              <div className="bg-white rounded-lg shadow p-4">
+                <div className="text-sm text-slate-500 mb-2">
+                  預覽（1 cm ≈ {scale.toFixed(1)} px）
+                </div>
+                <div className={`${tpl ? "" : "stage"} border relative mx-auto overflow-hidden`}
+                  style={{
+                    width: STAGE_W, height: stageH,
+                    backgroundImage: tpl ? `url(${tpl.preview_url})` : undefined,
+                    backgroundSize: "100% 100%", backgroundRepeat: "no-repeat",
+                  }}>
+                  {placements.map((pl, i) => (
+                    <img key={i}
+                      src={`/api/thumb?path=${encodeURIComponent(pl.path)}&size=400`}
+                      style={{
+                        position: "absolute",
+                        left: pl.x_cm * scale,
+                        top: pl.y_cm * scale,
+                        width: pl.w_cm * scale,
+                        height: pl.h_cm * scale,
+                      }}
+                      className="border border-slate-300" />
+                  ))}
+                </div>
+                {scan && (
+                  <div className="mt-3 text-xs text-slate-500">
+                    {scan.rows.map((r) => (
+                      <span key={r.group} className="inline-block mr-3">
+                        <b>{r.group}</b>: {r.cells.filter(Boolean).length}/{scan.cols}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
