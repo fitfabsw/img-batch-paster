@@ -1,0 +1,30 @@
+# 投影片尺寸 (預設 16:9, 25.4 x 14.29 cm 為 PowerPoint 預設)
+slide:
+  width_cm: 25.4
+  height_cm: 14.29
+
+# 表格網格定義
+grid:
+  origin:        # 第一格左上角座標
+    x_cm: 2.0
+    y_cm: 2.0
+  cell:          # 每格大小
+    w_cm: 6.0
+    h_cm: 4.0
+  gap:           # 格與格之間的間距
+    x_cm: 0.3
+    y_cm: 0.3
+  cols: 3        # 欄數 (列數由檔名分組數自動決定)
+
+# 輸入
+input:
+  folder: ./images
+  # 檔名規則：{group} 為同一列的識別、{n} 為欄編號 (1-based)
+  # 例：xxx_1.png, xxx_2.png → group=xxx, n=1/2
+  pattern: "{group}_{n}"
+  extensions: [".png", ".jpg", ".jpeg"]
+
+# 輸出
+output:
+  path: ./out.pptx
+  template: null   # 可選的 .pptx 範本

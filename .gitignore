@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.DS_Store
+tests/fixtures/images/
+tests/fixtures/out.pptx
+tests/fixtures/config.yaml

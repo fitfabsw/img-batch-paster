@@ -1,0 +1,21 @@
+[project]
+name = "img-batch-paster"
+version = "0.1.0"
+description = "Batch-paste images from a folder into PowerPoint/Keynote slides in a grid layout"
+requires-python = ">=3.10"
+dependencies = [
+    "python-pptx>=0.6.23",
+    "Pillow>=10.0.0",
+    "PyYAML>=6.0",
+    "click>=8.1",
+]
+
+[project.scripts]
+img-batch-paster = "img_batch_paster.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
