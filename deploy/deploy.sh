@@ -8,7 +8,9 @@
 set -euo pipefail
 
 SSH_TARGET="${SSH_TARGET:-cpdx_sw@10.35.36.168}"
-REMOTE_DIR="${REMOTE_DIR:-~/img-batch-paster}"
+REMOTE_DIR="${REMOTE_DIR:-\$HOME/img-batch-paster}"
+# 若使用者傳了 "~/..."，轉成 "$HOME/..." 讓遠端 bash 展開
+case "$REMOTE_DIR" in "~"*) REMOTE_DIR="\$HOME${REMOTE_DIR#\~}" ;; esac
 LABEL="com.zealzel.imgbatchpaster"
 PORT="${PORT:-5050}"
 
