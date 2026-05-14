@@ -2,6 +2,13 @@
 
 目標：`cpdx_sw@10.35.36.168`，launchd user agent，LAN 同事可連。
 
+## ⚠️ 路徑限制（macOS TCC）
+
+**repo 必須放在 `~/Documents/`、`~/Desktop/`、`~/Downloads/` 之外**。
+這幾個資料夾受 macOS TCC（Transparency, Consent, Control）保護，launchd 啟動的 process 無權限存取，會出 `PermissionError: [Errno 1] Operation not permitted` 開不起來。
+
+建議路徑：`~/img-batch-paster`（直接在 home 底下）或 `~/Apps/img-batch-paster`。
+
 ## 一次性安裝（在 lab mac mini 上）
 
 ```bash
@@ -15,7 +22,7 @@ ssh cpdx_sw@10.35.36.168
 brew install --cask libreoffice         # 範本預覽用 soffice
 # Keynote.app 從 App Store 安裝（.key 匯出用）
 
-# 4. clone 並執行 install
+# 4. clone 到 home（不要放在 ~/Documents/）並執行 install
 git clone <repo-url> ~/img-batch-paster
 cd ~/img-batch-paster
 ./deploy/install.sh
