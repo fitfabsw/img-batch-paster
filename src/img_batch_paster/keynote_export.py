@@ -110,15 +110,23 @@ def convert_pptx_to_key(pptx_path: Path, key_path: Path, timeout: int = 180) -> 
         # -609 (連線錯誤) 偶發；重試一次
         last_err = ""
         for attempt in range(2):
-            result = subprocess.run(
-                ["osascript", "-e", APPLESCRIPT, str(tmp_pptx), str(tmp_key)],
-                capture_output=True, text=True, timeout=timeout,
-            )
+            try:
+                result = subprocess.run(
+                    ["osascript", "-e", APPLESCRIPT, str(tmp_pptx), str(tmp_key)],
+                    capture_output=True, text=True, timeout=timeout,
+                )
+            except subprocess.TimeoutExpired as e:
+                last_err = f"osascript timeout after {timeout}s"
+                print(f"[keynote_export] attempt {attempt+1}: {last_err}", file=sys.stderr)
+                _remove(tmp_key)
+                time.sleep(2)
+                continue
             if result.returncode == 0 and tmp_key.exists():
                 break
             last_err = (result.stderr or result.stdout).strip()
+            print(f"[keynote_export] attempt {attempt+1} failed:\nstderr: {result.stderr}\nstdout: {result.stdout}",
+                  file=sys.stderr)
             _remove(tmp_key)
-            # 給 Keynote 一點時間自我恢復
             time.sleep(2)
         else:
             raise RuntimeError(f"Keynote 轉檔失敗 (重試後): {last_err}")
