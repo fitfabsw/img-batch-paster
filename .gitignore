@@ -12,4 +12,5 @@ tests/fixtures/template.pptx
 tests/output-*/
 tests/*.pptx
 /out.pptx
+/out.key
 

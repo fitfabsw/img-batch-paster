@@ -9,6 +9,7 @@ from PIL import Image
 
 from ..grouper import scan_folder
 from ..pptx_writer import Placement, write_pages, write_placements
+from ..keynote_export import convert_pptx_to_key
 from .template_render import render_first_slide, slide_size_cm
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -160,11 +161,25 @@ def api_export():
     if not pages or all(len(p) == 0 for p in pages):
         return jsonify({"error": "沒有可匯出的圖片"}), 400
 
-    out = write_pages(
+    # 副檔名 .key → 先輸出 .pptx，再經由 Keynote 轉成 .key
+    want_key = out_path.suffix.lower() == ".key"
+    pptx_out = out_path.with_suffix(".pptx") if want_key else out_path
+    write_pages(
         float(slide["width_cm"]), float(slide["height_cm"]),
-        pages, out_path, template_path,
+        pages, pptx_out, template_path,
     )
-    return jsonify({"output": str(out), "pages": len(pages)})
+
+    if want_key:
+        try:
+            convert_pptx_to_key(pptx_out, out_path)
+        except Exception as e:
+            return jsonify({
+                "error": f".key 轉檔失敗，但 .pptx 已輸出至 {pptx_out}: {e}",
+                "output": str(pptx_out), "pages": len(pages),
+            }), 500
+        # 保留中介 .pptx 供 debug；要刪可改為 pptx_out.unlink(missing_ok=True)
+
+    return jsonify({"output": str(out_path), "pages": len(pages)})
 
 
 @click.command()
