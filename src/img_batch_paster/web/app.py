@@ -69,6 +69,51 @@ def api_thumb():
     return send_file(buf, mimetype=f"image/{fmt.lower()}")
 
 
+@app.post("/api/pick")
+def api_pick():
+    """用 macOS osascript 開原生檔案/資料夾選擇器。"""
+    import subprocess
+    data = request.get_json(force=True) or {}
+    kind = data.get("kind", "folder")  # "folder" | "file"
+    prompt = data.get("prompt", "請選擇")
+
+    # 起始位置：以欄位現有路徑為基準（找最近存在的祖先目錄）
+    default = data.get("default", "")
+    default_clause = ""
+    if default:
+        start = Path(default).expanduser()
+        if not start.is_dir():
+            start = start.parent
+        while start != start.parent and not start.is_dir():
+            start = start.parent
+        if start.is_dir():
+            default_clause = f' default location POSIX file "{start}"'
+
+    if kind == "folder":
+        script = f'POSIX path of (choose folder with prompt "{prompt}"{default_clause})'
+    else:
+        ext_filter = data.get("extensions")
+        if ext_filter:
+            of = "{" + ", ".join(f'"{e.lstrip(".")}"' for e in ext_filter) + "}"
+            script = f'POSIX path of (choose file with prompt "{prompt}" of type {of}{default_clause})'
+        else:
+            script = f'POSIX path of (choose file with prompt "{prompt}"{default_clause})'
+
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True, timeout=300,
+        )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    if result.returncode != 0:
+        # 使用者取消會回 1；其它錯誤同樣回空字串
+        return jsonify({"path": None, "cancelled": True})
+    path = result.stdout.strip().rstrip("/")
+    return jsonify({"path": path})
+
+
 @app.post("/api/template/load")
 def api_template_load():
     data = request.get_json(force=True)

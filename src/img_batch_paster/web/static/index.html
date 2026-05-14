@@ -91,6 +91,17 @@
       const [tplPath, setTplPath] = useState("");
       const [tpl, setTpl] = useState(null);
 
+      const pick = async (kind, prompt, extensions, defaultPath) => {
+        const r = await fetch("/api/pick", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ kind, prompt, extensions, default: defaultPath || "" }),
+        });
+        const j = await r.json();
+        if (j.cancelled || !j.path) return null;
+        return j.path;
+      };
+
       const setGrid = (path, value) => {
         setCfg((c) => {
           const next = structuredClone(c);
@@ -194,10 +205,15 @@
              <div className="p-3 space-y-3 overflow-y-auto flex-1">
               <div>
                 <label className="text-sm font-medium">範本投影片 (.pptx)</label>
-                <div className="flex gap-2 mt-1">
+                <div className="flex gap-1 mt-1">
                   <input value={tplPath} onChange={(e) => setTplPath(e.target.value)}
                     placeholder="/path/to/template.pptx"
-                    className="flex-1 border rounded px-2 py-1 text-sm" />
+                    className="flex-1 min-w-0 border rounded px-2 py-1 text-sm" />
+                  <button title="選擇檔案" onClick={async () => {
+                      const p = await pick("file", "選擇範本 pptx", [".pptx"], tplPath);
+                      if (p) setTplPath(p);
+                    }}
+                    className="border rounded px-2 text-sm hover:bg-slate-100">📁</button>
                   <button disabled={busy || !tplPath} onClick={doLoadTemplate}
                     className="bg-slate-600 disabled:bg-slate-300 text-white rounded px-3 py-1 text-sm">
                     載入
@@ -207,9 +223,16 @@
 
               <div>
                 <label className="text-sm font-medium">圖片資料夾</label>
-                <input value={cfg.folder} onChange={(e) => setCfg({ ...cfg, folder: e.target.value })}
-                  placeholder="/path/to/images"
-                  className="mt-1 w-full border rounded px-2 py-1 text-sm" />
+                <div className="flex gap-1 mt-1">
+                  <input value={cfg.folder} onChange={(e) => setCfg({ ...cfg, folder: e.target.value })}
+                    placeholder="/path/to/images"
+                    className="flex-1 min-w-0 border rounded px-2 py-1 text-sm" />
+                  <button title="選擇資料夾" onClick={async () => {
+                      const p = await pick("folder", "選擇圖片資料夾", null, cfg.folder);
+                      if (p) setCfg((c) => ({ ...c, folder: p }));
+                    }}
+                    className="border rounded px-2 text-sm hover:bg-slate-100">📁</button>
+                </div>
               </div>
 
               <div>
@@ -266,9 +289,19 @@
 
               <div className="border-t pt-3">
                 <label className="text-sm font-medium">輸出路徑</label>
-                <input value={cfg.output.path}
-                  onChange={(e) => setCfg({ ...cfg, output: { ...cfg.output, path: e.target.value } })}
-                  className="mt-1 w-full border rounded px-2 py-1 text-sm" />
+                <div className="flex gap-1 mt-1">
+                  <input value={cfg.output.path}
+                    onChange={(e) => setCfg({ ...cfg, output: { ...cfg.output, path: e.target.value } })}
+                    className="flex-1 min-w-0 border rounded px-2 py-1 text-sm" />
+                  <button title="選擇輸出資料夾" onClick={async () => {
+                      const p = await pick("folder", "選擇輸出資料夾", null, cfg.output.path);
+                      if (p) {
+                        const name = (cfg.output.path.split("/").pop() || "out.pptx") || "out.pptx";
+                        setCfg((c) => ({ ...c, output: { ...c.output, path: `${p}/${name}` } }));
+                      }
+                    }}
+                    className="border rounded px-2 text-sm hover:bg-slate-100">📁</button>
+                </div>
               </div>
 
              </div>
