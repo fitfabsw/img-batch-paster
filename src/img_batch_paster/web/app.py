@@ -68,6 +68,9 @@ def api_thumb():
 def api_pick():
     """用 macOS osascript 開原生檔案/資料夾選擇器。"""
     import subprocess
+    import sys
+    if sys.platform != "darwin":
+        return jsonify({"error": "檔案選擇器僅在 macOS 主機可用；請手動輸入路徑"}), 501
     data = request.get_json(force=True) or {}
     kind = data.get("kind", "folder")  # "folder" | "file"
     prompt = data.get("prompt", "請選擇")
