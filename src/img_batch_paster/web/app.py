@@ -25,30 +25,24 @@ def index():
 def api_scan():
     data = request.get_json(force=True)
     folder = Path(data["folder"]).expanduser().resolve()
-    pattern = data.get("pattern", "{group}_{n}")
     extensions = data.get("extensions", [".png", ".jpg", ".jpeg"])
-    cols = int(data.get("cols", 3))
+    exts = {e.lower() for e in extensions}
 
     if not folder.is_dir():
         return jsonify({"error": f"資料夾不存在: {folder}"}), 400
 
-    grouped = scan_folder(folder, pattern, extensions, cols)
-
-    def _cell(p):
-        if p is None:
-            return None
+    files = []
+    for entry in sorted(folder.iterdir()):
+        if not entry.is_file() or entry.suffix.lower() not in exts:
+            continue
         try:
-            with Image.open(p) as im:
+            with Image.open(entry) as im:
                 w, h = im.size
         except Exception:
             w, h = 0, 0
-        return {"path": str(p), "w": w, "h": h}
+        files.append({"path": str(entry), "name": entry.name, "w": w, "h": h})
 
-    rows = [
-        {"group": name, "cells": [_cell(p) for p in row]}
-        for name, row in grouped.rows
-    ]
-    return jsonify({"folder": str(folder), "cols": grouped.cols, "rows": rows})
+    return jsonify({"folder": str(folder), "files": files})
 
 
 @app.get("/api/thumb")

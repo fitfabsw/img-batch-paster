@@ -17,47 +17,42 @@
   <div id="root"></div>
 
   <script type="text/babel" data-presets="react">
-    const { useState } = React;
+    const { useState, useMemo } = React;
 
-    // 全部以「投影片尺寸的百分比 (0–100)」表示
-    // origin.x / width / gap.x → 投影片寬度的 %
-    // origin.y / gap.y         → 投影片高度的 %
-    // 高度由圖片原始長寬比自動算出，不會拉伸
     const DEFAULTS = {
       folder: "",
-      pattern: "{group}_{n}",
       extensions: [".png", ".jpg", ".jpeg"],
       slide: { width_cm: 25.4, height_cm: 14.29 },
       grid: {
-        origin: { x: 8, y: 15 },  // 第一張圖左上角 (%)
-        width: 25,                 // 每張圖寬度 (% of slide width)
-        gap:   { x: 2, y: 3 },     // 圖片間距 (%)
+        origin: { x: 8, y: 15 },
+        width: 25,
+        gap:   { x: 2, y: 3 },
         cols: 3,
       },
       output: { path: "./out.pptx", template: null },
     };
 
-    // 計算每張圖的 cm 座標與大小
-    function computePlacements(slide, grid, scan) {
-      if (!scan) return [];
+    // 把排序後的檔案 (依使用者順序) 依 cols 切成 row，計算每張圖的 cm 位置
+    function computePlacements(slide, grid, orderedFiles) {
+      if (!orderedFiles || orderedFiles.length === 0) return [];
       const W = slide.width_cm, H = slide.height_cm;
       const ox = W * grid.origin.x / 100;
       const oy = H * grid.origin.y / 100;
       const w  = W * grid.width / 100;
       const gx = W * grid.gap.x / 100;
       const gy = H * grid.gap.y / 100;
+      const cols = Math.max(1, grid.cols);
 
       const out = [];
       let cur_y = oy;
-      for (const row of scan.rows) {
-        const anchor = row.cells.find((c) => c);
-        if (!anchor) continue;
-        const aspect = anchor.h / anchor.w;  // h/w
+      for (let i = 0; i < orderedFiles.length; i += cols) {
+        const row = orderedFiles.slice(i, i + cols);
+        const anchor = row[0];
+        const aspect = anchor.h && anchor.w ? anchor.h / anchor.w : 0.75;
         const row_h = w * aspect;
-        row.cells.forEach((c, ci) => {
-          if (!c) return;
+        row.forEach((f, ci) => {
           out.push({
-            path: c.path,
+            path: f.path,
             x_cm: ox + ci * (w + gx),
             y_cm: cur_y,
             w_cm: w,
@@ -85,22 +80,18 @@
 
     function App() {
       const [cfg, setCfg] = useState(DEFAULTS);
-      const [scan, setScan] = useState(null);
+      const [files, setFiles] = useState([]);          // 原始檔案清單（由後端掃描）
+      const [order, setOrder] = useState([]);          // 使用者調整後的順序 (paths array)
+      const [selected, setSelected] = useState(null);  // 目前選中的 path
       const [status, setStatus] = useState("");
       const [busy, setBusy] = useState(false);
       const [tplPath, setTplPath] = useState("");
       const [tpl, setTpl] = useState(null);
 
-      const pick = async (kind, prompt, extensions, defaultPath) => {
-        const r = await fetch("/api/pick", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ kind, prompt, extensions, default: defaultPath || "" }),
-        });
-        const j = await r.json();
-        if (j.cancelled || !j.path) return null;
-        return j.path;
-      };
+      const orderedFiles = useMemo(() => {
+        const map = new Map(files.map((f) => [f.path, f]));
+        return order.map((p) => map.get(p)).filter(Boolean);
+      }, [files, order]);
 
       const setGrid = (path, value) => {
         setCfg((c) => {
@@ -111,6 +102,17 @@
           cur[parts[parts.length - 1]] = value;
           return next;
         });
+      };
+
+      const pick = async (kind, prompt, extensions, defaultPath) => {
+        const r = await fetch("/api/pick", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ kind, prompt, extensions, default: defaultPath || "" }),
+        });
+        const j = await r.json();
+        if (j.cancelled || !j.path) return null;
+        return j.path;
       };
 
       const doLoadTemplate = async () => {
@@ -139,12 +141,7 @@
         const r = await fetch("/api/scan", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            folder: cfg.folder,
-            pattern: cfg.pattern,
-            extensions: cfg.extensions,
-            cols: cfg.grid.cols,
-          }),
+          body: JSON.stringify({ folder: cfg.folder, extensions: cfg.extensions }),
         });
         const j = await r.json();
         if (!r.ok) throw new Error(j.error || "scan failed");
@@ -156,9 +153,10 @@
         setBusy(true); setStatus("掃描中…");
         try {
           const j = await scanOnly();
-          setScan(j);
-          setStatus(`偵測到 ${j.rows.length} 列 × ${j.cols} 欄`);
-        } catch (e) { setStatus("錯誤: " + e.message); setScan(null); }
+          setFiles(j.files);
+          setOrder(j.files.map((f) => f.path));  // 預設字母序
+          setStatus(`偵測到 ${j.files.length} 張圖`);
+        } catch (e) { setStatus("錯誤: " + e.message); setFiles([]); setOrder([]); }
         finally { setBusy(false); }
       };
 
@@ -166,19 +164,21 @@
         if (!cfg.folder) { setStatus("錯誤: 請先指定圖片資料夾"); return; }
         setBusy(true); setStatus("匯出中…");
         try {
-          let s = scan;
-          if (!s) { setStatus("掃描中…"); s = await scanOnly(); setScan(s); }
-          const placements = computePlacements(cfg.slide, cfg.grid, s);
+          let arr = orderedFiles;
+          if (arr.length === 0) {
+            setStatus("掃描中…");
+            const j = await scanOnly();
+            setFiles(j.files);
+            setOrder(j.files.map((f) => f.path));
+            arr = j.files;
+          }
+          const placements = computePlacements(cfg.slide, cfg.grid, arr);
           if (placements.length === 0) throw new Error("沒有可匯出的圖片");
           setStatus("匯出中…");
           const r = await fetch("/api/export", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              slide: cfg.slide,
-              placements,
-              output: cfg.output,
-            }),
+            body: JSON.stringify({ slide: cfg.slide, placements, output: cfg.output }),
           });
           const j = await r.json();
           if (!r.ok) throw new Error(j.error || "export failed");
@@ -187,124 +187,137 @@
         finally { setBusy(false); }
       };
 
-      // 預覽
-      const STAGE_W = 760;
+      // --- 排序操作 ---
+      const moveBy = (path, delta) => {
+        setOrder((o) => {
+          const idx = o.indexOf(path);
+          if (idx < 0) return o;
+          const tgt = idx + delta;
+          if (tgt < 0 || tgt >= o.length) return o;
+          const next = [...o];
+          [next[idx], next[tgt]] = [next[tgt], next[idx]];
+          return next;
+        });
+      };
+      const moveTop    = (path) => setOrder((o) => [path, ...o.filter((p) => p !== path)]);
+      const moveBottom = (path) => setOrder((o) => [...o.filter((p) => p !== path), path]);
+      const resetSort  = () => setOrder([...files].sort((a, b) => a.name.localeCompare(b.name)).map((f) => f.path));
+
+      // --- 預覽 ---
+      const STAGE_W = 720;
       const scale = STAGE_W / cfg.slide.width_cm;
       const stageH = cfg.slide.height_cm * scale;
-      const placements = computePlacements(cfg.slide, cfg.grid, scan);
+      const placements = computePlacements(cfg.slide, cfg.grid, orderedFiles);
       const imgW_cm = cfg.slide.width_cm * cfg.grid.width / 100;
-      const firstAnchor = scan?.rows.find((r) => r.cells.some((c) => c))?.cells.find((c) => c);
-      const previewH_cm = firstAnchor ? imgW_cm * (firstAnchor.h / firstAnchor.w) : null;
+      const firstAnchor = orderedFiles[0];
+      const previewH_cm = firstAnchor && firstAnchor.w ? imgW_cm * (firstAnchor.h / firstAnchor.w) : null;
+      const rowsCount = Math.ceil(orderedFiles.length / Math.max(1, cfg.grid.cols));
 
       return (
-        <div className="max-w-7xl mx-auto p-4 h-screen flex flex-col">
+        <div className="max-w-[1600px] mx-auto p-4 h-screen flex flex-col">
           <h1 className="text-xl font-bold mb-3">img-batch-paster</h1>
 
           <div className="grid grid-cols-12 gap-4 flex-1 min-h-0">
-            <div className="col-span-4 bg-white rounded-lg shadow flex flex-col min-h-0">
-             <div className="p-3 space-y-3 overflow-y-auto flex-1">
-              <div>
-                <label className="text-sm font-medium">範本投影片 (.pptx)</label>
-                <div className="flex gap-1 mt-1">
-                  <input value={tplPath} onChange={(e) => setTplPath(e.target.value)}
-                    placeholder="/path/to/template.pptx"
-                    className="flex-1 min-w-0 border rounded px-2 py-1 text-sm" />
-                  <button title="選擇檔案" onClick={async () => {
-                      const p = await pick("file", "選擇範本 pptx", [".pptx"], tplPath);
-                      if (p) setTplPath(p);
-                    }}
-                    className="border rounded px-2 text-sm hover:bg-slate-100">📁</button>
-                  <button disabled={busy || !tplPath} onClick={doLoadTemplate}
-                    className="bg-slate-600 disabled:bg-slate-300 text-white rounded px-3 py-1 text-sm">
-                    載入
-                  </button>
+            {/* 左欄：設定 */}
+            <div className="col-span-3 bg-white rounded-lg shadow flex flex-col min-h-0">
+              <div className="p-3 space-y-3 overflow-y-auto flex-1">
+                <div>
+                  <label className="text-sm font-medium">範本投影片 (.pptx)</label>
+                  <div className="flex gap-1 mt-1">
+                    <input value={tplPath} onChange={(e) => setTplPath(e.target.value)}
+                      placeholder="/path/to/template.pptx"
+                      className="flex-1 min-w-0 border rounded px-2 py-1 text-sm" />
+                    <button title="選擇檔案" onClick={async () => {
+                        const p = await pick("file", "選擇範本 pptx", [".pptx"], tplPath);
+                        if (p) setTplPath(p);
+                      }}
+                      className="border rounded px-2 text-sm hover:bg-slate-100">📁</button>
+                    <button disabled={busy || !tplPath} onClick={doLoadTemplate}
+                      className="bg-slate-600 disabled:bg-slate-300 text-white rounded px-2 py-1 text-sm">
+                      載入
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-sm font-medium">圖片資料夾</label>
+                  <div className="flex gap-1 mt-1">
+                    <input value={cfg.folder} onChange={(e) => setCfg({ ...cfg, folder: e.target.value })}
+                      placeholder="/path/to/images"
+                      className="flex-1 min-w-0 border rounded px-2 py-1 text-sm" />
+                    <button title="選擇資料夾" onClick={async () => {
+                        const p = await pick("folder", "選擇圖片資料夾", null, cfg.folder);
+                        if (p) setCfg((c) => ({ ...c, folder: p }));
+                      }}
+                      className="border rounded px-2 text-sm hover:bg-slate-100">📁</button>
+                  </div>
+                </div>
+
+                <div className="border-t pt-3">
+                  <div className="text-sm font-semibold mb-2">
+                    投影片 <span className="text-xs text-slate-400 font-normal">
+                      ({cfg.slide.width_cm.toFixed(2)} × {cfg.slide.height_cm.toFixed(2)} cm)
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumberInput label="寬" value={cfg.slide.width_cm} suffix="cm"
+                      onChange={(v) => setCfg({ ...cfg, slide: { ...cfg.slide, width_cm: v } })} />
+                    <NumberInput label="高" value={cfg.slide.height_cm} suffix="cm"
+                      onChange={(v) => setCfg({ ...cfg, slide: { ...cfg.slide, height_cm: v } })} />
+                  </div>
+                </div>
+
+                <div className="border-t pt-3">
+                  <div className="text-sm font-semibold mb-2">版面（比例 %）</div>
+                  <div className="text-xs text-slate-500 mb-2">
+                    圖寬 = <b>{imgW_cm.toFixed(2)} cm</b>
+                    {previewH_cm && <> · 圖高 ≈ <b>{previewH_cm.toFixed(2)} cm</b></>}
+                    <br />
+                    {cfg.grid.cols} 欄 × {rowsCount} 列
+                  </div>
+
+                  <div className="text-[11px] uppercase tracking-wide text-slate-400 mt-2 mb-1">第一張圖位置</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumberInput label="X" suffix="%" value={cfg.grid.origin.x}
+                      onChange={(v) => setGrid("origin.x", v)} />
+                    <NumberInput label="Y" suffix="%" value={cfg.grid.origin.y}
+                      onChange={(v) => setGrid("origin.y", v)} />
+                  </div>
+
+                  <div className="text-[11px] uppercase tracking-wide text-slate-400 mt-3 mb-1">圖片寬度</div>
+                  <NumberInput label="width" suffix="%" value={cfg.grid.width}
+                    onChange={(v) => setGrid("width", v)} />
+
+                  <div className="text-[11px] uppercase tracking-wide text-slate-400 mt-3 mb-1">圖片間距</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumberInput label="水平 gap" suffix="%" value={cfg.grid.gap.x}
+                      onChange={(v) => setGrid("gap.x", v)} />
+                    <NumberInput label="垂直 gap" suffix="%" value={cfg.grid.gap.y}
+                      onChange={(v) => setGrid("gap.y", v)} />
+                  </div>
+
+                  <div className="text-[11px] uppercase tracking-wide text-slate-400 mt-3 mb-1">欄數</div>
+                  <NumberInput label="cols" step={1} value={cfg.grid.cols}
+                    onChange={(v) => setGrid("cols", Math.max(1, parseInt(v) || 1))} />
+                </div>
+
+                <div className="border-t pt-3">
+                  <label className="text-sm font-medium">輸出路徑</label>
+                  <div className="flex gap-1 mt-1">
+                    <input value={cfg.output.path}
+                      onChange={(e) => setCfg({ ...cfg, output: { ...cfg.output, path: e.target.value } })}
+                      className="flex-1 min-w-0 border rounded px-2 py-1 text-sm" />
+                    <button title="選擇輸出資料夾" onClick={async () => {
+                        const p = await pick("folder", "選擇輸出資料夾", null, cfg.output.path);
+                        if (p) {
+                          const name = (cfg.output.path.split("/").pop() || "out.pptx") || "out.pptx";
+                          setCfg((c) => ({ ...c, output: { ...c.output, path: `${p}/${name}` } }));
+                        }
+                      }}
+                      className="border rounded px-2 text-sm hover:bg-slate-100">📁</button>
+                  </div>
                 </div>
               </div>
-
-              <div>
-                <label className="text-sm font-medium">圖片資料夾</label>
-                <div className="flex gap-1 mt-1">
-                  <input value={cfg.folder} onChange={(e) => setCfg({ ...cfg, folder: e.target.value })}
-                    placeholder="/path/to/images"
-                    className="flex-1 min-w-0 border rounded px-2 py-1 text-sm" />
-                  <button title="選擇資料夾" onClick={async () => {
-                      const p = await pick("folder", "選擇圖片資料夾", null, cfg.folder);
-                      if (p) setCfg((c) => ({ ...c, folder: p }));
-                    }}
-                    className="border rounded px-2 text-sm hover:bg-slate-100">📁</button>
-                </div>
-              </div>
-
-              <div>
-                <label className="text-sm font-medium">檔名 pattern</label>
-                <input value={cfg.pattern} onChange={(e) => setCfg({ ...cfg, pattern: e.target.value })}
-                  className="mt-1 w-full border rounded px-2 py-1 text-sm font-mono" />
-              </div>
-
-              <div className="border-t pt-3">
-                <div className="text-sm font-semibold mb-2">
-                  投影片 <span className="text-xs text-slate-400 font-normal">
-                    ({cfg.slide.width_cm.toFixed(2)} × {cfg.slide.height_cm.toFixed(2)} cm)
-                  </span>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <NumberInput label="寬" value={cfg.slide.width_cm} suffix="cm"
-                    onChange={(v) => setCfg({ ...cfg, slide: { ...cfg.slide, width_cm: v } })} />
-                  <NumberInput label="高" value={cfg.slide.height_cm} suffix="cm"
-                    onChange={(v) => setCfg({ ...cfg, slide: { ...cfg.slide, height_cm: v } })} />
-                </div>
-              </div>
-
-              <div className="border-t pt-3">
-                <div className="text-sm font-semibold mb-2">版面（比例 %）</div>
-                <div className="text-xs text-slate-500 mb-2">
-                  圖寬 = <b>{imgW_cm.toFixed(2)} cm</b>
-                  {previewH_cm && <> · 圖高 ≈ <b>{previewH_cm.toFixed(2)} cm</b>（依圖片比例）</>}
-                </div>
-
-                <div className="text-[11px] uppercase tracking-wide text-slate-400 mt-2 mb-1">第一張圖位置</div>
-                <div className="grid grid-cols-2 gap-2">
-                  <NumberInput label="X" suffix="%" value={cfg.grid.origin.x}
-                    onChange={(v) => setGrid("origin.x", v)} />
-                  <NumberInput label="Y" suffix="%" value={cfg.grid.origin.y}
-                    onChange={(v) => setGrid("origin.y", v)} />
-                </div>
-
-                <div className="text-[11px] uppercase tracking-wide text-slate-400 mt-3 mb-1">圖片寬度</div>
-                <NumberInput label="width" suffix="%" value={cfg.grid.width}
-                  onChange={(v) => setGrid("width", v)} />
-
-                <div className="text-[11px] uppercase tracking-wide text-slate-400 mt-3 mb-1">圖片間距</div>
-                <div className="grid grid-cols-2 gap-2">
-                  <NumberInput label="水平 gap" suffix="%" value={cfg.grid.gap.x}
-                    onChange={(v) => setGrid("gap.x", v)} />
-                  <NumberInput label="垂直 gap" suffix="%" value={cfg.grid.gap.y}
-                    onChange={(v) => setGrid("gap.y", v)} />
-                </div>
-
-                <div className="text-[11px] uppercase tracking-wide text-slate-400 mt-3 mb-1">欄數</div>
-                <NumberInput label="cols" step={1} value={cfg.grid.cols}
-                  onChange={(v) => setGrid("cols", Math.max(1, parseInt(v) || 1))} />
-              </div>
-
-              <div className="border-t pt-3">
-                <label className="text-sm font-medium">輸出路徑</label>
-                <div className="flex gap-1 mt-1">
-                  <input value={cfg.output.path}
-                    onChange={(e) => setCfg({ ...cfg, output: { ...cfg.output, path: e.target.value } })}
-                    className="flex-1 min-w-0 border rounded px-2 py-1 text-sm" />
-                  <button title="選擇輸出資料夾" onClick={async () => {
-                      const p = await pick("folder", "選擇輸出資料夾", null, cfg.output.path);
-                      if (p) {
-                        const name = (cfg.output.path.split("/").pop() || "out.pptx") || "out.pptx";
-                        setCfg((c) => ({ ...c, output: { ...c.output, path: `${p}/${name}` } }));
-                      }
-                    }}
-                    className="border rounded px-2 text-sm hover:bg-slate-100">📁</button>
-                </div>
-              </div>
-
-             </div>
               <div className="border-t bg-slate-50 p-3 rounded-b-lg space-y-2">
                 <div className="flex gap-2">
                   <button disabled={busy} onClick={doScan}
@@ -320,7 +333,57 @@
               </div>
             </div>
 
-            <div className="col-span-8 min-h-0">
+            {/* 中欄：檔案清單 */}
+            <div className="col-span-3 bg-white rounded-lg shadow flex flex-col min-h-0">
+              <div className="p-3 border-b flex items-center justify-between">
+                <div className="text-sm font-semibold">
+                  檔案 <span className="text-slate-400 font-normal">({orderedFiles.length})</span>
+                </div>
+                <button onClick={resetSort} disabled={files.length === 0}
+                  title="依檔名 A→Z 排序"
+                  className="text-xs border rounded px-2 py-0.5 disabled:opacity-40 hover:bg-slate-100">
+                  A→Z
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-2 space-y-1">
+                {orderedFiles.length === 0 && (
+                  <div className="text-xs text-slate-400 text-center py-8">
+                    指定資料夾後按「掃描」
+                  </div>
+                )}
+                {orderedFiles.map((f, idx) => (
+                  <div key={f.path}
+                    onClick={() => setSelected(f.path)}
+                    className={`flex items-center gap-2 rounded p-1 cursor-pointer ${
+                      selected === f.path ? "bg-emerald-50 ring-1 ring-emerald-300" : "hover:bg-slate-50"
+                    }`}>
+                    <div className="text-xs text-slate-400 w-6 text-right tabular-nums">{idx + 1}</div>
+                    <img src={`/api/thumb?path=${encodeURIComponent(f.path)}&size=80`}
+                      className="w-10 h-10 object-cover border rounded" />
+                    <div className="flex-1 min-w-0 text-xs truncate" title={f.name}>{f.name}</div>
+                    <div className="flex flex-col">
+                      <button onClick={(e) => { e.stopPropagation(); moveBy(f.path, -1); }}
+                        disabled={idx === 0}
+                        className="text-[10px] leading-none px-1 disabled:opacity-30 hover:bg-slate-200 rounded">▲</button>
+                      <button onClick={(e) => { e.stopPropagation(); moveBy(f.path, +1); }}
+                        disabled={idx === orderedFiles.length - 1}
+                        className="text-[10px] leading-none px-1 disabled:opacity-30 hover:bg-slate-200 rounded">▼</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {selected && (
+                <div className="border-t p-2 flex gap-1 text-xs">
+                  <button onClick={() => moveTop(selected)}
+                    className="flex-1 border rounded py-1 hover:bg-slate-100">置頂</button>
+                  <button onClick={() => moveBottom(selected)}
+                    className="flex-1 border rounded py-1 hover:bg-slate-100">置底</button>
+                </div>
+              )}
+            </div>
+
+            {/* 右欄：預覽 */}
+            <div className="col-span-6 min-h-0">
               <div className="bg-white rounded-lg shadow p-4 h-full overflow-auto">
                 <div className="text-sm text-slate-500 mb-2">
                   預覽（1 cm ≈ {scale.toFixed(1)} px）
@@ -341,18 +404,9 @@
                         width: pl.w_cm * scale,
                         height: pl.h_cm * scale,
                       }}
-                      className="border border-slate-300" />
+                      className={selected === pl.path ? "ring-2 ring-emerald-500" : "border border-slate-300"} />
                   ))}
                 </div>
-                {scan && (
-                  <div className="mt-3 text-xs text-slate-500">
-                    {scan.rows.map((r) => (
-                      <span key={r.group} className="inline-block mr-3">
-                        <b>{r.group}</b>: {r.cells.filter(Boolean).length}/{scan.cols}
-                      </span>
-                    ))}
-                  </div>
-                )}
               </div>
             </div>
           </div>
