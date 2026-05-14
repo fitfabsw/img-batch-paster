@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import io
+import shutil
+import tempfile
+import uuid
 from pathlib import Path
 
 import click
@@ -13,8 +16,18 @@ from ..keynote_export import convert_pptx_to_key
 from .template_render import render_first_slide, slide_size_cm
 
 STATIC_DIR = Path(__file__).parent / "static"
+UPLOAD_DIR = Path(tempfile.gettempdir()) / "img-batch-paster-uploads"
+UPLOAD_DIR.mkdir(exist_ok=True)
 
 app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/static")
+app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024 * 1024  # 2 GB per request
+
+
+def _ws_dir(ws: str) -> Path | None:
+    if not ws or "/" in ws or ".." in ws:
+        return None
+    p = UPLOAD_DIR / ws
+    return p if p.is_dir() else None
 
 
 @app.get("/")
@@ -62,6 +75,65 @@ def api_thumb():
     img.convert("RGB" if fmt == "JPEG" else img.mode).save(buf, fmt)
     buf.seek(0)
     return send_file(buf, mimetype=f"image/{fmt.lower()}")
+
+
+@app.post("/api/workspace")
+def api_workspace():
+    """Create a fresh per-browser workspace under /tmp/img-batch-paster-uploads/."""
+    ws = uuid.uuid4().hex[:12]
+    (UPLOAD_DIR / ws / "images").mkdir(parents=True, exist_ok=True)
+    return jsonify({"workspace": ws})
+
+
+@app.post("/api/upload/template")
+def api_upload_template():
+    ws = request.form.get("workspace", "")
+    base = _ws_dir(ws)
+    if not base:
+        return jsonify({"error": "invalid workspace"}), 400
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify({"error": "no file"}), 400
+    dest = base / "template.pptx"
+    f.save(str(dest))
+    return jsonify({"path": str(dest)})
+
+
+@app.post("/api/upload/images")
+def api_upload_images():
+    ws = request.form.get("workspace", "")
+    base = _ws_dir(ws)
+    if not base:
+        return jsonify({"error": "invalid workspace"}), 400
+    folder = base / "images"
+    # Replace any previous uploads in this workspace
+    if folder.exists():
+        shutil.rmtree(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+
+    files = request.files.getlist("files")
+    saved = 0
+    for f in files:
+        if not f.filename:
+            continue
+        # 只保留檔名，剝掉路徑成分；保留 unicode（避免 secure_filename 過濾中文）
+        name = Path(f.filename).name
+        if not name:
+            continue
+        f.save(str(folder / name))
+        saved += 1
+    return jsonify({"folder": str(folder), "count": saved})
+
+
+@app.get("/api/download/<ws>/<path:filename>")
+def api_download(ws, filename):
+    base = _ws_dir(ws)
+    if not base:
+        return "not found", 404
+    p = base / filename
+    if not p.is_file() or ".." in filename:
+        return "not found", 404
+    return send_file(str(p), as_attachment=True, download_name=Path(filename).name)
 
 
 @app.post("/api/pick")
@@ -145,7 +217,17 @@ def api_template_preview():
 def api_export():
     data = request.get_json(force=True)
     slide = data["slide"]
-    out_path = Path(data["output"]["path"]).expanduser().resolve()
+
+    # 若指定 workspace，輸出寫進該 workspace 目錄（用 output.path 的 basename）
+    ws = data.get("workspace") or data["output"].get("workspace")
+    requested = data["output"]["path"]
+    base = _ws_dir(ws) if ws else None
+    if base:
+        out_name = Path(requested).name or "out.pptx"
+        out_path = base / out_name
+    else:
+        out_path = Path(requested).expanduser().resolve()
+
     template = data["output"].get("template")
     template_path = Path(template).expanduser().resolve() if template else None
 
@@ -182,7 +264,10 @@ def api_export():
             }), 500
         # 保留中介 .pptx 供 debug；要刪可改為 pptx_out.unlink(missing_ok=True)
 
-    return jsonify({"output": str(out_path), "pages": len(pages)})
+    resp = {"output": str(out_path), "pages": len(pages)}
+    if base:
+        resp["download_url"] = f"/api/download/{ws}/{out_path.name}"
+    return jsonify(resp)
 
 
 @click.command()

@@ -17,7 +17,7 @@
   <div id="root"></div>
 
   <script type="text/babel" data-presets="react">
-    const { useState, useMemo } = React;
+    const { useState, useMemo, useEffect, useRef } = React;
 
     const DEFAULTS = {
       folder: "",
@@ -95,6 +95,16 @@
       const [busy, setBusy] = useState(false);
       const [tplPath, setTplPath] = useState("");
       const [tpl, setTpl] = useState(null);
+      const [ws, setWs] = useState("");
+      const tplInputRef = useRef(null);
+      const imgInputRef = useRef(null);
+
+      // 取得 workspace（server 一個 session 一份暫存資料夾）
+      useEffect(() => {
+        fetch("/api/workspace", { method: "POST" })
+          .then((r) => r.json()).then((j) => setWs(j.workspace || ""))
+          .catch(() => {});
+      }, []);
 
       const orderedFiles = useMemo(() => {
         const map = new Map(files.map((f) => [f.path, f]));
@@ -123,14 +133,62 @@
         return j.path;
       };
 
-      const doLoadTemplate = async () => {
-        if (!tplPath) return;
+      const uploadTemplate = async (file) => {
+        if (!ws || !file) return;
+        setBusy(true); setStatus("上傳範本中…");
+        try {
+          const fd = new FormData();
+          fd.append("workspace", ws);
+          fd.append("file", file);
+          const r = await fetch("/api/upload/template", { method: "POST", body: fd });
+          const j = await r.json();
+          if (!r.ok) throw new Error(j.error || "上傳失敗");
+          setTplPath(j.path);
+          // 上傳成功後自動載入
+          await doLoadTemplate(j.path);
+        } catch (e) { setStatus("錯誤: " + e.message); }
+        finally { setBusy(false); }
+      };
+
+      const uploadImages = async (files) => {
+        if (!ws || !files || files.length === 0) return;
+        setBusy(true); setStatus(`上傳 ${files.length} 張圖片中…`);
+        try {
+          const fd = new FormData();
+          fd.append("workspace", ws);
+          for (const f of files) fd.append("files", f);
+          const r = await fetch("/api/upload/images", { method: "POST", body: fd });
+          const j = await r.json();
+          if (!r.ok) throw new Error(j.error || "上傳失敗");
+          setCfg((c) => ({ ...c, folder: j.folder }));
+          // 自動掃描
+          await doScanFolder(j.folder);
+        } catch (e) { setStatus("錯誤: " + e.message); }
+        finally { setBusy(false); }
+      };
+
+      const doScanFolder = async (folder) => {
+        const r = await fetch("/api/scan", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ folder, extensions: cfg.extensions }),
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || "scan failed");
+        setFiles(j.files);
+        setOrder(j.files.map((f) => f.path));
+        setStatus(`偵測到 ${j.files.length} 張圖`);
+      };
+
+      const doLoadTemplate = async (overridePath) => {
+        const path = overridePath || tplPath;
+        if (!path) return;
         setBusy(true); setStatus("載入範本中…");
         try {
           const r = await fetch("/api/template/load", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ path: tplPath }),
+            body: JSON.stringify({ path }),
           });
           const j = await r.json();
           if (!r.ok) throw new Error(j.error || "載入失敗");
@@ -186,11 +244,20 @@
           const r = await fetch("/api/export", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ slide: cfg.slide, pages, output: cfg.output }),
+            body: JSON.stringify({ slide: cfg.slide, pages, output: cfg.output, workspace: ws }),
           });
           const j = await r.json();
           if (!r.ok) throw new Error(j.error || "export failed");
-          setStatus(`✓ 已輸出 ${j.pages} 頁: ${j.output}`);
+          if (j.download_url) {
+            // 觸發瀏覽器下載
+            const a = document.createElement("a");
+            a.href = j.download_url;
+            a.download = "";
+            document.body.appendChild(a); a.click(); a.remove();
+            setStatus(`✓ 已產出 ${j.pages} 頁，已開始下載`);
+          } else {
+            setStatus(`✓ 已輸出 ${j.pages} 頁: ${j.output}`);
+          }
         } catch (e) { setStatus("錯誤: " + e.message); console.error(e); }
         finally { setBusy(false); }
       };
@@ -232,32 +299,26 @@
                 <div>
                   <label className="text-sm font-medium">範本投影片 (.pptx)</label>
                   <div className="flex gap-1 mt-1">
-                    <input value={tplPath} onChange={(e) => setTplPath(e.target.value)}
-                      placeholder="/path/to/template.pptx"
-                      className="flex-1 min-w-0 border rounded px-2 py-1 text-sm" />
-                    <button title="選擇檔案" onClick={async () => {
-                        const p = await pick("file", "選擇範本 pptx", [".pptx"], tplPath);
-                        if (p) setTplPath(p);
-                      }}
-                      className="border rounded px-2 text-sm hover:bg-slate-100">📁</button>
-                    <button disabled={busy || !tplPath} onClick={doLoadTemplate}
-                      className="bg-slate-600 disabled:bg-slate-300 text-white rounded px-2 py-1 text-sm">
-                      載入
+                    <button onClick={() => tplInputRef.current?.click()}
+                      className="flex-1 border rounded px-2 py-1 text-sm hover:bg-slate-100 text-left truncate">
+                      📤 {tplPath ? tplPath.split("/").pop() : "上傳範本…"}
                     </button>
+                    <input ref={tplInputRef} type="file" accept=".pptx" className="hidden"
+                      onChange={(e) => uploadTemplate(e.target.files?.[0])} />
                   </div>
                 </div>
 
                 <div>
                   <label className="text-sm font-medium">圖片資料夾</label>
                   <div className="flex gap-1 mt-1">
-                    <input value={cfg.folder} onChange={(e) => setCfg({ ...cfg, folder: e.target.value })}
-                      placeholder="/path/to/images"
-                      className="flex-1 min-w-0 border rounded px-2 py-1 text-sm" />
-                    <button title="選擇資料夾" onClick={async () => {
-                        const p = await pick("folder", "選擇圖片資料夾", null, cfg.folder);
-                        if (p) setCfg((c) => ({ ...c, folder: p }));
-                      }}
-                      className="border rounded px-2 text-sm hover:bg-slate-100">📁</button>
+                    <button onClick={() => imgInputRef.current?.click()}
+                      className="flex-1 border rounded px-2 py-1 text-sm hover:bg-slate-100 text-left truncate">
+                      📤 {files.length > 0 ? `已上傳 ${files.length} 張` : "上傳圖片資料夾…"}
+                    </button>
+                    <input ref={imgInputRef} type="file" multiple
+                      webkitdirectory="" directory=""
+                      className="hidden"
+                      onChange={(e) => uploadImages(e.target.files)} />
                   </div>
                 </div>
 
@@ -315,16 +376,16 @@
 
                 <div className="border-t pt-3">
                   <div className="flex items-center justify-between mb-1">
-                    <label className="text-sm font-medium">輸出路徑</label>
+                    <label className="text-sm font-medium">輸出檔名</label>
                     <div className="flex text-xs border rounded overflow-hidden">
                       {[".pptx", ".key"].map((ext) => {
                         const active = cfg.output.path.toLowerCase().endsWith(ext);
                         return (
                           <button key={ext}
                             onClick={() => setCfg((c) => {
-                              const cur = c.output.path || "./out.pptx";
-                              const newPath = cur.replace(/\.(pptx|key)$/i, "") + ext;
-                              return { ...c, output: { ...c.output, path: newPath } };
+                              const cur = c.output.path || "out.pptx";
+                              const base = cur.replace(/\.(pptx|key)$/i, "").split("/").pop() || "out";
+                              return { ...c, output: { ...c.output, path: base + ext } };
                             })}
                             className={`px-2 py-0.5 ${active ? "bg-slate-700 text-white" : "hover:bg-slate-100"}`}>
                             {ext}
@@ -333,19 +394,11 @@
                       })}
                     </div>
                   </div>
-                  <div className="flex gap-1">
-                    <input value={cfg.output.path}
-                      onChange={(e) => setCfg({ ...cfg, output: { ...cfg.output, path: e.target.value } })}
-                      className="flex-1 min-w-0 border rounded px-2 py-1 text-sm" />
-                    <button title="選擇輸出資料夾" onClick={async () => {
-                        const p = await pick("folder", "選擇輸出資料夾", null, cfg.output.path);
-                        if (p) {
-                          const name = (cfg.output.path.split("/").pop() || "out.pptx") || "out.pptx";
-                          setCfg((c) => ({ ...c, output: { ...c.output, path: `${p}/${name}` } }));
-                        }
-                      }}
-                      className="border rounded px-2 text-sm hover:bg-slate-100">📁</button>
-                  </div>
+                  <input value={cfg.output.path}
+                    onChange={(e) => setCfg({ ...cfg, output: { ...cfg.output, path: e.target.value } })}
+                    placeholder="out.pptx"
+                    className="w-full border rounded px-2 py-1 text-sm" />
+                  <div className="text-[11px] text-slate-400 mt-1">匯出後會自動下載到你電腦</div>
                 </div>
               </div>
               <div className="border-t bg-slate-50 p-3 rounded-b-lg space-y-2">
