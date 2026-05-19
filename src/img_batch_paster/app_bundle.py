@@ -46,7 +46,7 @@ def main() -> None:
 
     try:
         import webview  # type: ignore
-        webview.create_window("img-batch-paster", url, width=1400, height=900)
+        webview.create_window("img-batch-paster", url, width=1600, height=1000, resizable=True)
         webview.start()
     except ImportError:
         # 沒裝 pywebview 就 fallback 開瀏覽器

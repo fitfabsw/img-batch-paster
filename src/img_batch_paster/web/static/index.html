@@ -413,21 +413,36 @@
         fetch("/api/version").then((r) => r.json()).then(setVersionInfo).catch(() => {});
       }, []);
 
-      // 切換 mode 或載入新內容時自動 fit：只縮小不放大 (cap 1.0)
+      // 自動 fit：只縮小不放大 (cap 1.0)。除了 mode/template 變動，
+      // 也在容器尺寸變化時重算 (ResizeObserver)；解決 pywebview 初始 layout 抓不準的問題。
       useEffect(() => {
         const el = stageWrapRef.current;
         if (!el) return;
-        const containerW = el.clientWidth - 16;
-        if (containerW <= 0) return;
-        let contentW = 0;
-        if (mode === "excel" && xlGrid) {
-          contentW = xlGrid.cols.reduce((a, c) => a + c.w_px, 0) + 40;
-        } else if (mode === "slides") {
-          contentW = 720;
+        const recompute = () => {
+          const containerW = el.clientWidth - 16;
+          if (containerW <= 0) return;
+          let contentW = 0;
+          if (mode === "excel" && xlGrid) {
+            contentW = xlGrid.cols.reduce((a, c) => a + c.w_px, 0) + 40;
+          } else if (mode === "slides") {
+            contentW = 720;
+          }
+          if (contentW > 0) {
+            setZoom(Math.min(1, Math.max(0.3, containerW / contentW)));
+          }
+        };
+        recompute();
+        // 容器/視窗變化都重算
+        let ro;
+        if (typeof ResizeObserver !== "undefined") {
+          ro = new ResizeObserver(recompute);
+          ro.observe(el);
         }
-        if (contentW > 0) {
-          setZoom(Math.min(1, Math.max(0.3, containerW / contentW)));
-        }
+        window.addEventListener("resize", recompute);
+        return () => {
+          if (ro) ro.disconnect();
+          window.removeEventListener("resize", recompute);
+        };
       }, [mode, xlGrid, tplPath]);
       const tplInputRef = useRef(null);
       const imgInputRef = useRef(null);
