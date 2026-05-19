@@ -12,6 +12,7 @@ from PIL import Image
 
 from ..grouper import scan_folder
 from ..pptx_writer import Placement, write_pages, write_placements
+from ..xlsx_writer import CellPlacement, write_xlsx
 from ..keynote_export import convert_key_to_pptx, convert_pptx_to_key
 from .template_render import render_first_slide, slide_size_cm
 
@@ -98,10 +99,15 @@ def api_upload_template():
 
     ext = Path(f.filename).suffix.lower()
     dest_pptx = base / "template.pptx"
+    dest_xlsx = base / "template.xlsx"
 
     if ext == ".pptx":
         f.save(str(dest_pptx))
-        return jsonify({"path": str(dest_pptx)})
+        return jsonify({"path": str(dest_pptx), "mode": "slides"})
+
+    if ext == ".xlsx":
+        f.save(str(dest_xlsx))
+        return jsonify({"path": str(dest_xlsx), "mode": "excel"})
 
     if ext == ".key":
         if _sys.platform != "darwin":
@@ -115,9 +121,9 @@ def api_upload_template():
         finally:
             if tmp_key.exists():
                 tmp_key.unlink()
-        return jsonify({"path": str(dest_pptx)})
+        return jsonify({"path": str(dest_pptx), "mode": "slides"})
 
-    return jsonify({"error": f"不支援的副檔名: {ext}（請用 .pptx 或 .key）"}), 400
+    return jsonify({"error": f"不支援的副檔名: {ext}（請用 .pptx / .key / .xlsx）"}), 400
 
 
 DEFAULT_TEMPLATE = Path(__file__).resolve().parent.parent / "templates" / "default.pptx"
@@ -242,6 +248,74 @@ def api_template_load():
     })
 
 
+@app.post("/api/template/excel-grid")
+def api_template_excel_grid():
+    """Return cell-grid structure of an .xlsx template for frontend preview."""
+    from openpyxl import load_workbook
+    from openpyxl.utils import get_column_letter
+    data = request.get_json(force=True)
+    path = Path(data["path"]).expanduser().resolve()
+    if not path.is_file():
+        return jsonify({"error": f"檔案不存在: {path}"}), 400
+    try:
+        wb = load_workbook(str(path))
+    except Exception as e:
+        return jsonify({"error": f"無法讀取: {e}"}), 500
+    ws = wb.active
+    max_col = max(ws.max_column or 1, 12)
+    max_row = max(ws.max_row or 1, 20)
+    DEFAULT_W = 8.43
+    DEFAULT_H = 15.0
+
+    cols = []
+    for c in range(1, max_col + 4):
+        letter = get_column_letter(c)
+        w = ws.column_dimensions[letter].width
+        w = w if w is not None else DEFAULT_W
+        cols.append({"letter": letter, "w_px": w * 7 + 5})
+    rows = []
+    for r in range(1, max_row + 4):
+        h = ws.row_dimensions[r].height
+        h = h if h is not None else DEFAULT_H
+        rows.append({"r": r, "h_px": h * 4 / 3})
+
+    cells = []
+    for row in ws.iter_rows(min_row=1, max_row=max_row, max_col=max_col):
+        for cell in row:
+            if cell.value is None:
+                continue
+            cells.append({
+                "r": cell.row, "c": cell.column,
+                "text": str(cell.value),
+                "font_pt": float(cell.font.size or 11),
+                "bold": bool(cell.font.bold),
+                "h_align": cell.alignment.horizontal or "left",
+                "v_align": cell.alignment.vertical or "bottom",
+            })
+
+    # Borders (簡化：只要有設定就算有；不分四邊)
+    borders = []
+    for row in ws.iter_rows(min_row=1, max_row=max_row, max_col=max_col):
+        for cell in row:
+            b = cell.border
+            sides = {
+                "top": bool(b.top and b.top.style),
+                "right": bool(b.right and b.right.style),
+                "bottom": bool(b.bottom and b.bottom.style),
+                "left": bool(b.left and b.left.style),
+            }
+            if any(sides.values()):
+                borders.append({"r": cell.row, "c": cell.column, **sides})
+
+    return jsonify({
+        "sheet": ws.title,
+        "cols": cols,
+        "rows": rows,
+        "cells": cells,
+        "borders": borders,
+    })
+
+
 @app.get("/api/template/preview")
 def api_template_preview():
     from .template_render import CACHE_DIR
@@ -255,9 +329,8 @@ def api_template_preview():
 @app.post("/api/export")
 def api_export():
     data = request.get_json(force=True)
-    slide = data["slide"]
+    slide = data.get("slide", {"width_cm": 25.4, "height_cm": 14.29})
 
-    # 若指定 workspace，輸出寫進該 workspace 目錄（用 output.path 的 basename）
     ws = data.get("workspace") or data["output"].get("workspace")
     requested = data["output"]["path"]
     base = _ws_dir(ws) if ws else None
@@ -269,6 +342,28 @@ def api_export():
 
     template = data["output"].get("template")
     template_path = Path(template).expanduser().resolve() if template else None
+
+    # Excel 分支：副檔名 .xlsx
+    if out_path.suffix.lower() == ".xlsx":
+        xl_placements = [
+            CellPlacement(
+                path=Path(p["path"]) if p.get("path") else None,
+                row=int(p["row"]), col=int(p["col"]),
+                span_cols=int(p.get("span_cols", 1)),
+                span_rows=int(p.get("span_rows", 1)),
+                text=p.get("text"),
+                font_pt=float(p.get("font_pt", 12)),
+            )
+            for p in data.get("cells", [])
+        ]
+        if not xl_placements:
+            return jsonify({"error": "沒有可匯出的儲存格"}), 400
+        embed_in_cell = bool(data.get("embedInCell"))
+        write_xlsx(xl_placements, out_path, template_path, embed_in_cell=embed_in_cell)
+        resp = {"output": str(out_path)}
+        if base:
+            resp["download_url"] = f"/api/download/{ws}/{out_path.name}"
+        return jsonify(resp)
 
     def _to_pl(p):
         return Placement(

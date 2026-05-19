@@ -35,12 +35,64 @@
       },
       label: {
         enabled: true,
-        pattern: "{group}-{idx}",   // 從檔名抽 group 的規則
-        x: 2,                        // %（寬度自動 = origin.x - label.x）
+        pattern: "{group}-{idx}",
+        x: 2,
         font_pt: 18,
+      },
+      excel: {
+        startCell: "B5",
+        imgsPerRow: 4,
+        cellCols: 1,
+        cellRows: 1,
+        gapRows: 0,
+        snCol: "A",
+        embedInCell: false,     // 是否用「在儲存格內」(DISPIMG) 模式
       },
       output: { path: "./out.pptx", template: null },
     };
+
+    function parseCell(ref) {
+      const m = (ref || "").trim().match(/^([A-Za-z]+)(\d+)$/);
+      if (!m) return { col: 1, row: 1 };
+      const letters = m[1].toUpperCase();
+      let col = 0;
+      for (const ch of letters) col = col * 26 + (ch.charCodeAt(0) - 64);
+      return { col, row: parseInt(m[2], 10) };
+    }
+
+    // 計算 Excel 的儲存格 placements
+    function computeExcelCells(excel, label, orderedFiles) {
+      if (!orderedFiles || orderedFiles.length === 0) return [];
+      const start = parseCell(excel.startCell);
+      const snCol = excel.snCol ? parseCell(excel.snCol + "1").col : 0;
+      const stepCol = Math.max(1, excel.cellCols);
+      const stepRow = Math.max(1, excel.cellRows) + Math.max(0, excel.gapRows);
+      const perRow = Math.max(1, excel.imgsPerRow);
+      const cells = [];
+      for (let i = 0; i < orderedFiles.length; i += perRow) {
+        const row = orderedFiles.slice(i, i + perRow);
+        const rIdx = i / perRow;
+        const targetRow = start.row + rIdx * stepRow;
+        // 列標籤（SN）寫入 snCol
+        if (label && label.enabled && snCol > 0) {
+          const group = extractGroup(row[0].name || row[0].path.split("/").pop(), label.pattern);
+          cells.push({
+            row: targetRow, col: snCol, span_cols: 1, span_rows: excel.cellRows,
+            text: group, font_pt: label.font_pt,
+          });
+        }
+        row.forEach((f, ci) => {
+          cells.push({
+            path: f.path,
+            row: targetRow,
+            col: start.col + ci * stepCol,
+            span_cols: excel.cellCols,
+            span_rows: excel.cellRows,
+          });
+        });
+      }
+      return cells;
+    }
 
     // 從檔名抽 group：pattern 用 {group} 和 {idx} 兩個 placeholder
     function extractGroup(filename, pattern) {
@@ -197,6 +249,148 @@
       );
     }
 
+    function ExcelPreview({ grid, cfg, orderedFiles, selected }) {
+      if (!grid) {
+        return (
+          <div className="border rounded-lg bg-slate-50 p-8 text-center text-slate-500">
+            上傳 Excel 範本後顯示預覽
+          </div>
+        );
+      }
+      const HEADER_W = 32, HEADER_H = 22;
+      // 累計 px 位置
+      const cumX = [0];
+      grid.cols.forEach((c) => cumX.push(cumX[cumX.length - 1] + c.w_px));
+      const cumY = [0];
+      grid.rows.forEach((r) => cumY.push(cumY[cumY.length - 1] + r.h_px));
+      const totalW = cumX[cumX.length - 1];
+      const totalH = cumY[cumY.length - 1];
+
+      // 邊框查詢表
+      const borderMap = {};
+      (grid.borders || []).forEach((b) => {
+        borderMap[`${b.r},${b.c}`] = b;
+      });
+      const cellMap = {};
+      grid.cells.forEach((cell) => { cellMap[`${cell.r},${cell.c}`] = cell; });
+
+      // 我們的 placements
+      const placements = computeExcelCells(cfg.excel, cfg.label, orderedFiles);
+
+      const alignToFlex = { left: "flex-start", center: "center", right: "flex-end" };
+      const vAlignToFlex = { top: "flex-start", center: "center", middle: "center", bottom: "flex-end" };
+
+      return (
+        <div className="border rounded-lg overflow-auto bg-white" style={{ maxHeight: 520 }}>
+          <div style={{ position: "relative", width: totalW + HEADER_W, height: totalH + HEADER_H }}>
+            {/* 左上角空白 */}
+            <div style={{ position: "absolute", left: 0, top: 0, width: HEADER_W, height: HEADER_H,
+              background: "#f1f5f9", borderRight: "1px solid #cbd5e1", borderBottom: "1px solid #cbd5e1" }} />
+
+            {/* 欄字母 header */}
+            {grid.cols.map((c, i) => (
+              <div key={`col-${c.letter}`} style={{
+                position: "absolute", top: 0, left: HEADER_W + cumX[i],
+                width: c.w_px, height: HEADER_H,
+                background: "#f1f5f9", borderRight: "1px solid #cbd5e1", borderBottom: "1px solid #cbd5e1",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 11, color: "#475569",
+              }}>{c.letter}</div>
+            ))}
+
+            {/* 列號 header */}
+            {grid.rows.map((r, i) => (
+              <div key={`row-${r.r}`} style={{
+                position: "absolute", left: 0, top: HEADER_H + cumY[i],
+                width: HEADER_W, height: r.h_px,
+                background: "#f1f5f9", borderRight: "1px solid #cbd5e1", borderBottom: "1px solid #cbd5e1",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 11, color: "#475569",
+              }}>{r.r}</div>
+            ))}
+
+            {/* 儲存格背景 (淺灰 grid line) */}
+            {grid.rows.map((r, ri) =>
+              grid.cols.map((c, ci) => (
+                <div key={`cell-${r.r}-${c.letter}`} style={{
+                  position: "absolute",
+                  left: HEADER_W + cumX[ci], top: HEADER_H + cumY[ri],
+                  width: c.w_px, height: r.h_px,
+                  borderRight: "1px solid #f1f5f9",
+                  borderBottom: "1px solid #f1f5f9",
+                }} />
+              ))
+            )}
+
+            {/* 邊框 (從範本讀的) */}
+            {(grid.borders || []).map((b, i) => {
+              const ci = b.c - 1, ri = b.r - 1;
+              if (ci < 0 || ri < 0 || ci >= grid.cols.length || ri >= grid.rows.length) return null;
+              const cw = grid.cols[ci].w_px, rh = grid.rows[ri].h_px;
+              const x = HEADER_W + cumX[ci], y = HEADER_H + cumY[ri];
+              return (
+                <div key={`b-${i}`} style={{
+                  position: "absolute", left: x, top: y, width: cw, height: rh,
+                  borderTop: b.top ? "1px solid #334155" : "",
+                  borderRight: b.right ? "1px solid #334155" : "",
+                  borderBottom: b.bottom ? "1px solid #334155" : "",
+                  borderLeft: b.left ? "1px solid #334155" : "",
+                  pointerEvents: "none",
+                }} />
+              );
+            })}
+
+            {/* 範本中的文字 */}
+            {grid.cells.map((cell, i) => {
+              const ci = cell.c - 1, ri = cell.r - 1;
+              if (ci < 0 || ri < 0 || ci >= grid.cols.length || ri >= grid.rows.length) return null;
+              return (
+                <div key={`txt-${i}`} style={{
+                  position: "absolute",
+                  left: HEADER_W + cumX[ci], top: HEADER_H + cumY[ri],
+                  width: grid.cols[ci].w_px, height: grid.rows[ri].h_px,
+                  padding: "2px 4px",
+                  fontSize: cell.font_pt,
+                  fontWeight: cell.bold ? 700 : 400,
+                  display: "flex",
+                  alignItems: vAlignToFlex[cell.v_align] || "flex-end",
+                  justifyContent: alignToFlex[cell.h_align] || "flex-start",
+                  overflow: "hidden", whiteSpace: "nowrap",
+                  pointerEvents: "none",
+                }}>{cell.text}</div>
+              );
+            })}
+
+            {/* 我們新加的內容 (圖片 + SN 文字) */}
+            {placements.map((pl, i) => {
+              const ci = pl.col - 1, ri = pl.row - 1;
+              if (ci < 0 || ri < 0 || ci >= grid.cols.length || ri >= grid.rows.length) return null;
+              const w = (cumX[ci + pl.span_cols] || cumX[grid.cols.length]) - cumX[ci];
+              const h = (cumY[ri + pl.span_rows] || cumY[grid.rows.length]) - cumY[ri];
+              const x = HEADER_W + cumX[ci], y = HEADER_H + cumY[ri];
+              if (pl.text !== undefined && pl.text !== null) {
+                return (
+                  <div key={`my-${i}`} style={{
+                    position: "absolute", left: x, top: y, width: w, height: h,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: (pl.font_pt || 12), fontWeight: 700, color: "#0f172a",
+                    background: "rgba(16,185,129,0.06)",
+                    pointerEvents: "none",
+                  }}>{pl.text}</div>
+                );
+              }
+              return (
+                <img key={`my-${i}`}
+                  src={`/api/thumb?path=${encodeURIComponent(pl.path)}&size=400`}
+                  style={{ position: "absolute", left: x, top: y, width: w, height: h, objectFit: "contain" }}
+                  className={selected === pl.path ? "ring-2 ring-emerald-500" : ""} />
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
     function App() {
       const [cfg, setCfg] = useState(DEFAULTS);
       const [files, setFiles] = useState([]);          // 原始檔案清單（由後端掃描）
@@ -208,6 +402,8 @@
       const [tplPath, setTplPath] = useState("");
       const [tplName, setTplName] = useState("");
       const [tpl, setTpl] = useState(null);
+      const [mode, setMode] = useState("slides");
+      const [xlGrid, setXlGrid] = useState(null);
       const [ws, setWs] = useState("");
       const tplInputRef = useRef(null);
       const imgInputRef = useRef(null);
@@ -276,7 +472,28 @@
           if (!r.ok) throw new Error(j.error || "上傳失敗");
           setTplPath(j.path);
           setTplName(file.name);
-          await doLoadTemplate(j.path);
+          const newMode = j.mode || "slides";
+          setMode(newMode);
+          // 同步輸出副檔名
+          setCfg((c) => ({
+            ...c,
+            output: { ...c.output, path: (c.output.path.replace(/\.(pptx|key|xlsx)$/i, "")) +
+              (newMode === "excel" ? ".xlsx" : ".pptx") },
+          }));
+          if (newMode === "slides") {
+            await doLoadTemplate(j.path);
+          } else {
+            setTpl(null);
+            setCfg((c) => ({ ...c, output: { ...c.output, template: j.path } }));
+            const gr = await fetch("/api/template/excel-grid", {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ path: j.path }),
+            });
+            const gj = await gr.json();
+            if (!gr.ok) throw new Error(gj.error || "讀取 Excel 範本失敗");
+            setXlGrid(gj);
+            setStatus(`已載入 Excel 範本 (${gj.cols.length} 欄 × ${gj.rows.length} 列)`);
+          }
         } catch (e) { setStatus("錯誤: " + e.message); }
         finally { setBusy(false); }
       };
@@ -369,13 +586,25 @@
             setOrder(j.files.map((f) => f.path));
             arr = j.files;
           }
-          const pages = computePages(cfg.slide, cfg.grid, arr, cfg.label);
-          if (pages.length === 0) throw new Error("沒有可匯出的圖片");
-          setStatus(`匯出中… (${pages.length} 頁)`);
+          let body;
+          if (mode === "excel") {
+            const cells = computeExcelCells(cfg.excel, cfg.label, arr);
+            if (cells.length === 0) throw new Error("沒有可匯出的圖片");
+            setStatus(`匯出 Excel 中… (${cells.length} 格)`);
+            body = JSON.stringify({
+              cells, output: cfg.output, workspace: ws,
+              embedInCell: !!cfg.excel.embedInCell,
+            });
+          } else {
+            const pages = computePages(cfg.slide, cfg.grid, arr, cfg.label);
+            if (pages.length === 0) throw new Error("沒有可匯出的圖片");
+            setStatus(`匯出中… (${pages.length} 頁)`);
+            body = JSON.stringify({ slide: cfg.slide, pages, output: cfg.output, workspace: ws });
+          }
           const r = await fetch("/api/export", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ slide: cfg.slide, pages, output: cfg.output, workspace: ws }),
+            body,
           });
           const j = await r.json();
           if (!r.ok) throw new Error(j.error || "export failed");
@@ -428,7 +657,7 @@
             <div className="col-span-3 bg-white rounded-lg shadow flex flex-col min-h-0">
               <div className="p-3 space-y-3 overflow-y-auto flex-1">
                 <div>
-                  <label className="text-sm font-medium">範本投影片 (.pptx / .key)</label>
+                  <label className="text-sm font-medium">範本 (.pptx / .key / .xlsx)</label>
                   <div className="flex gap-1 mt-1">
                     <button onClick={() => tplInputRef.current?.click()}
                       className="flex-1 border rounded px-2 py-1 text-sm hover:bg-slate-100 text-left truncate">
@@ -439,7 +668,7 @@
                       預設
                     </button>
                     <input ref={tplInputRef} type="file"
-                      accept=".pptx,.key,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.apple.keynote,application/zip"
+                      accept=".pptx,.key,.xlsx,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.apple.keynote,application/zip"
                       className="hidden"
                       onChange={(e) => uploadTemplate(e.target.files?.[0])} />
                   </div>
@@ -460,15 +689,61 @@
                   </div>
                 </div>
 
-                <div className="border-t pt-3">
-                  <div className="text-sm font-semibold mb-2">每頁網格</div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <NumberInput label="欄 cols" step={1} value={cfg.grid.cols}
-                      onChange={(v) => setGrid("cols", Math.max(1, parseInt(v) || 1))} />
-                    <NumberInput label="列 rows" step={1} value={cfg.grid.rows}
-                      onChange={(v) => setGrid("rows", Math.max(1, parseInt(v) || 1))} />
+                {mode === "slides" && (
+                  <div className="border-t pt-3">
+                    <div className="text-sm font-semibold mb-2">每頁網格</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <NumberInput label="欄 cols" step={1} value={cfg.grid.cols}
+                        onChange={(v) => setGrid("cols", Math.max(1, parseInt(v) || 1))} />
+                      <NumberInput label="列 rows" step={1} value={cfg.grid.rows}
+                        onChange={(v) => setGrid("rows", Math.max(1, parseInt(v) || 1))} />
+                    </div>
                   </div>
-                </div>
+                )}
+
+                {mode === "excel" && (
+                  <div className="border-t pt-3">
+                    <div className="text-sm font-semibold mb-2">Excel 配置</div>
+                    <div className="space-y-2">
+                      <label className="flex flex-col text-xs text-slate-600">
+                        起始 cell
+                        <input value={cfg.excel.startCell}
+                          onChange={(e) => setCfg((c) => ({ ...c, excel: { ...c.excel, startCell: e.target.value } }))}
+                          className="border rounded px-2 py-1 text-sm mt-1 font-mono" placeholder="B5" />
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <NumberInput label="每列圖數" step={1} value={cfg.excel.imgsPerRow}
+                          onChange={(v) => setCfg((c) => ({ ...c, excel: { ...c.excel, imgsPerRow: Math.max(1, parseInt(v) || 1) } }))} />
+                        <NumberInput label="列間距 (空 row)" step={1} value={cfg.excel.gapRows}
+                          onChange={(v) => setCfg((c) => ({ ...c, excel: { ...c.excel, gapRows: Math.max(0, parseInt(v) || 0) } }))} />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <NumberInput label="每張圖跨欄" step={1} value={cfg.excel.cellCols}
+                          onChange={(v) => setCfg((c) => ({ ...c, excel: { ...c.excel, cellCols: Math.max(1, parseInt(v) || 1) } }))} />
+                        <NumberInput label="每張圖跨列" step={1} value={cfg.excel.cellRows}
+                          onChange={(v) => setCfg((c) => ({ ...c, excel: { ...c.excel, cellRows: Math.max(1, parseInt(v) || 1) } }))} />
+                      </div>
+                      <label className="flex flex-col text-xs text-slate-600">
+                        SN 寫入欄（留空=不寫）
+                        <input value={cfg.excel.snCol}
+                          onChange={(e) => setCfg((c) => ({ ...c, excel: { ...c.excel, snCol: e.target.value } }))}
+                          className="border rounded px-2 py-1 text-sm mt-1 font-mono" placeholder="A" />
+                      </label>
+                      <div className="text-[10px] text-slate-400">
+                        SN 字串從檔名 pattern「{cfg.label.pattern}」抽取
+                      </div>
+
+                      <label className="flex items-center gap-2 text-xs text-slate-700 mt-2 pt-2 border-t">
+                        <input type="checkbox" checked={cfg.excel.embedInCell}
+                          onChange={(e) => setCfg((c) => ({ ...c, excel: { ...c.excel, embedInCell: e.target.checked } }))} />
+                        <span>嵌入儲存格 (DISPIMG)</span>
+                      </label>
+                      <div className="text-[10px] text-slate-400">
+                        勾選後圖片變成儲存格內容（點 cell 即選取，不能拖拉）。需 Excel 365 / WPS Office 才顯示得了
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 <div className="border-t pt-3">
                   <label className="flex items-center gap-2 text-sm font-semibold">
@@ -500,13 +775,13 @@
                   <div className="flex items-center justify-between mb-1">
                     <label className="text-sm font-medium">輸出檔名</label>
                     <div className="flex text-xs border rounded overflow-hidden">
-                      {[".pptx", ".key"].map((ext) => {
+                      {(mode === "excel" ? [".xlsx"] : [".pptx", ".key"]).map((ext) => {
                         const active = cfg.output.path.toLowerCase().endsWith(ext);
                         return (
                           <button key={ext}
                             onClick={() => setCfg((c) => {
                               const cur = c.output.path || "out.pptx";
-                              const base = cur.replace(/\.(pptx|key)$/i, "").split("/").pop() || "out";
+                              const base = cur.replace(/\.(pptx|key|xlsx)$/i, "").split("/").pop() || "out";
                               return { ...c, output: { ...c.output, path: base + ext } };
                             })}
                             className={`px-2 py-0.5 ${active ? "bg-slate-700 text-white" : "hover:bg-slate-100"}`}>
@@ -526,7 +801,8 @@
               <div className="border-t bg-slate-50 p-3 rounded-b-lg space-y-2">
                 <button disabled={busy} onClick={doExport}
                   className="w-full bg-emerald-600 disabled:bg-slate-300 text-white rounded px-3 py-2 text-sm">
-                  匯出 {cfg.output.path.toLowerCase().endsWith(".key") ? ".key" : ".pptx"}
+                  匯出 {cfg.output.path.toLowerCase().endsWith(".key") ? ".key"
+                       : cfg.output.path.toLowerCase().endsWith(".xlsx") ? ".xlsx" : ".pptx"}
                 </button>
                 {status && <div className="text-xs text-slate-600 break-all">{status}</div>}
               </div>
@@ -609,7 +885,10 @@
                         </div>
                       </div>
 
-                      {/* 直接操作版面：垂直在左、水平在下、舞台置中 */}
+                      {mode === "excel" && (
+                        <ExcelPreview grid={xlGrid} cfg={cfg} orderedFiles={orderedFiles} selected={selected} />
+                      )}
+                      {mode === "slides" && (
                       <div className="flex gap-3 items-start justify-center">
                         {/* 垂直軸 stepper：Y 起點、垂直 gap */}
                         <div className="flex flex-col gap-5 pt-1">
@@ -685,6 +964,7 @@
                           </div>
                         </div>
                       </div>
+                      )}
                     </>
                   );
                 })()}

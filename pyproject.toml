@@ -5,6 +5,7 @@ description = "Batch-paste images from a folder into PowerPoint/Keynote slides i
 requires-python = ">=3.10"
 dependencies = [
     "python-pptx>=0.6.23",
+    "openpyxl>=3.1",
     "Pillow>=10.0.0",
     "PyYAML>=6.0",
     "click>=8.1",
