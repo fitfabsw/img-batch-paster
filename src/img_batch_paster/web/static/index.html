@@ -1022,8 +1022,9 @@
                         })}
                           </div>
 
-                          {/* 舞台下方：水平軸 stepper */}
-                          <div className="flex gap-x-5 gap-y-10 mt-3 justify-center flex-wrap">
+                          {/* 舞台下方：水平軸 stepper (max-width 鎖住，不讓 SN X 把父欄撐寬) */}
+                          <div className="flex gap-x-5 gap-y-10 mt-3 justify-center flex-wrap"
+                               style={{ maxWidth: STAGE_W }}>
                             <Stepper label="X 起" orient="h" value={cfg.grid.origin.x}
                               onChange={(v) => setGrid("origin.x", v)} />
                             <div className="relative">
