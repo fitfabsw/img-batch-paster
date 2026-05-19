@@ -24,6 +24,13 @@ def slide_size_cm(pptx_path: Path) -> tuple[float, float]:
     return (Emu(prs.slide_width).cm, Emu(prs.slide_height).cm)
 
 
+def has_soffice() -> bool:
+    if shutil.which("soffice"):
+        return True
+    return Path("/usr/local/bin/soffice").exists() or Path("/opt/homebrew/bin/soffice").exists() \
+        or Path("/Applications/LibreOffice.app/Contents/MacOS/soffice").exists()
+
+
 def render_first_slide(pptx_path: Path) -> Path:
     """Return path to a cached PNG for the first slide of pptx_path."""
     key = _cache_key(pptx_path)
@@ -31,8 +38,14 @@ def render_first_slide(pptx_path: Path) -> Path:
     if out_png.exists():
         return out_png
 
-    soffice = shutil.which("soffice") or "/usr/local/bin/soffice"
-    if not Path(soffice).exists():
+    soffice = (
+        shutil.which("soffice")
+        or ("/usr/local/bin/soffice" if Path("/usr/local/bin/soffice").exists() else None)
+        or ("/opt/homebrew/bin/soffice" if Path("/opt/homebrew/bin/soffice").exists() else None)
+        or ("/Applications/LibreOffice.app/Contents/MacOS/soffice"
+            if Path("/Applications/LibreOffice.app/Contents/MacOS/soffice").exists() else None)
+    )
+    if not soffice or not Path(soffice).exists():
         raise RuntimeError("找不到 soffice (LibreOffice)，無法渲染範本預覽")
 
     with tempfile.TemporaryDirectory() as tmp:

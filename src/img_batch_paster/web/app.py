@@ -256,14 +256,20 @@ def api_template_load():
         return jsonify({"error": f"檔案不存在: {path}"}), 400
     try:
         w_cm, h_cm = slide_size_cm(path)
-        png = render_first_slide(path)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    # 渲染預覽 (需要 LibreOffice)；失敗就無背景，但仍回傳尺寸供 layout 使用
+    preview_url = None
+    try:
+        png = render_first_slide(path)
+        preview_url = f"/api/template/preview?key={png.stem}"
+    except Exception:
+        pass
     return jsonify({
         "path": str(path),
         "width_cm": w_cm,
         "height_cm": h_cm,
-        "preview_url": f"/api/template/preview?key={png.stem}",
+        "preview_url": preview_url,
     })
 
 

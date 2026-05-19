@@ -978,10 +978,10 @@
 
                         {/* 舞台 + 下方水平 stepper */}
                         <div>
-                          <div className={`${tpl ? "" : "stage"} border relative overflow-hidden`}
+                          <div className={`${tpl && tpl.preview_url ? "" : "stage"} border relative overflow-hidden`}
                             style={{
                               width: STAGE_W, height: stageH,
-                              backgroundImage: tpl ? `url(${tpl.preview_url})` : undefined,
+                              backgroundImage: tpl && tpl.preview_url ? `url(${tpl.preview_url})` : undefined,
                               backgroundSize: "100% 100%", backgroundRepeat: "no-repeat",
                             }}>
                             {busy && (
