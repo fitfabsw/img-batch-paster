@@ -4,10 +4,10 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>img-batch-paster</title>
-  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="/static/vendor/react.development.js"></script>
+  <script src="/static/vendor/react-dom.development.js"></script>
+  <script src="/static/vendor/babel.min.js"></script>
+  <script src="/static/vendor/tailwindcss.js"></script>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; }
     .stage { background: repeating-conic-gradient(#f3f4f6 0 25%, #ffffff 0 50%) 50% / 20px 20px; }
@@ -282,7 +282,7 @@
       const vAlignToFlex = { top: "flex-start", center: "center", middle: "center", bottom: "flex-end" };
 
       return (
-        <div className="border rounded-lg overflow-auto bg-white" style={{ maxHeight: 520 }}>
+        <div className="border rounded-lg bg-white">
           <div style={{ position: "relative", width: totalW + HEADER_W, height: totalH + HEADER_H }}>
             {/* 左上角空白 */}
             <div style={{ position: "absolute", left: 0, top: 0, width: HEADER_W, height: HEADER_H,
@@ -405,6 +405,25 @@
       const [mode, setMode] = useState("slides");
       const [xlGrid, setXlGrid] = useState(null);
       const [ws, setWs] = useState("");
+      const [zoom, setZoom] = useState(1);
+      const stageWrapRef = useRef(null);
+
+      // 切換 mode 或載入新內容時自動 fit
+      useEffect(() => {
+        const el = stageWrapRef.current;
+        if (!el) return;
+        const containerW = el.clientWidth - 16;
+        if (containerW <= 0) return;
+        let contentW = 0;
+        if (mode === "excel" && xlGrid) {
+          contentW = xlGrid.cols.reduce((a, c) => a + c.w_px, 0) + 40;
+        } else if (mode === "slides") {
+          contentW = 720;  // STAGE_W + 兩側 stepper
+        }
+        if (contentW > 0) {
+          setZoom(Math.min(2, Math.max(0.3, containerW / contentW)));
+        }
+      }, [mode, xlGrid, tplPath]);
       const tplInputRef = useRef(null);
       const imgInputRef = useRef(null);
 
@@ -884,23 +903,53 @@
                   const total = Math.max(1, pages.length);
                   const pi = Math.min(currentPage, total - 1);
                   const pagePls = pages[pi] || [];
+                  const zoomFit = () => {
+                    const el = stageWrapRef.current;
+                    if (!el) return;
+                    // 取得容器可用寬度
+                    const containerW = el.clientWidth - 16;
+                    let contentW = STAGE_W;
+                    if (mode === "excel" && xlGrid) {
+                      const cumX = xlGrid.cols.reduce((a, c) => a + c.w_px, 0);
+                      contentW = cumX + 32;
+                    }
+                    setZoom(Math.min(2, Math.max(0.1, containerW / contentW)));
+                  };
                   return (
                     <>
-                      <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
                         <div className="text-sm text-slate-500">
-                          預覽（1 cm ≈ {scale.toFixed(1)} px）
+                          預覽
                           <span className="ml-3 text-[10px] text-slate-400">Shift＝粗調 · Alt＝微調</span>
                         </div>
                         <div className="flex items-center gap-2 text-sm">
-                          <button onClick={() => setCurrentPage((p) => Math.max(0, p - 1))}
-                            disabled={pi === 0}
-                            className="border rounded px-2 py-0.5 disabled:opacity-30 hover:bg-slate-100">◀</button>
-                          <span className="tabular-nums">第 <b>{pi + 1}</b> / {pages.length || 1} 頁</span>
-                          <button onClick={() => setCurrentPage((p) => Math.min(total - 1, p + 1))}
-                            disabled={pi >= total - 1}
-                            className="border rounded px-2 py-0.5 disabled:opacity-30 hover:bg-slate-100">▶</button>
+                          {/* zoom 控制 */}
+                          <div className="flex items-center gap-0 border rounded overflow-hidden">
+                            <button onClick={() => setZoom((z) => Math.max(0.1, Math.round((z - 0.1) * 100) / 100))}
+                              className="px-2 py-0.5 hover:bg-slate-100" title="縮小">−</button>
+                            <button onClick={() => setZoom(1)}
+                              className="px-2 py-0.5 hover:bg-slate-100 tabular-nums text-xs" title="100%">{Math.round(zoom * 100)}%</button>
+                            <button onClick={() => setZoom((z) => Math.min(3, Math.round((z + 0.1) * 100) / 100))}
+                              className="px-2 py-0.5 hover:bg-slate-100" title="放大">+</button>
+                            <button onClick={zoomFit}
+                              className="px-2 py-0.5 hover:bg-slate-100 text-xs border-l" title="符合寬度">⤢</button>
+                          </div>
+                          {/* 頁面導覽 */}
+                          {mode === "slides" && (
+                            <>
+                              <button onClick={() => setCurrentPage((p) => Math.max(0, p - 1))}
+                                disabled={pi === 0}
+                                className="border rounded px-2 py-0.5 disabled:opacity-30 hover:bg-slate-100">◀</button>
+                              <span className="tabular-nums">第 <b>{pi + 1}</b> / {pages.length || 1} 頁</span>
+                              <button onClick={() => setCurrentPage((p) => Math.min(total - 1, p + 1))}
+                                disabled={pi >= total - 1}
+                                className="border rounded px-2 py-0.5 disabled:opacity-30 hover:bg-slate-100">▶</button>
+                            </>
+                          )}
                         </div>
                       </div>
+                      <div ref={stageWrapRef} style={{ overflow: "auto" }}>
+                       <div style={{ zoom: zoom, MozTransform: `scale(${zoom})`, MozTransformOrigin: "top left" }}>
 
                       {mode === "excel" && (
                         <ExcelPreview grid={xlGrid} cfg={cfg} orderedFiles={orderedFiles} selected={selected} />
@@ -982,6 +1031,8 @@
                         </div>
                       </div>
                       )}
+                       </div>
+                      </div>
                     </>
                   );
                 })()}
