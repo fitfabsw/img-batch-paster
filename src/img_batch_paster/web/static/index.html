@@ -666,11 +666,16 @@
                           </div>
 
                           {/* 舞台下方：水平軸 stepper */}
-                          <div className="flex gap-5 mt-3 justify-center flex-wrap">
+                          <div className="flex gap-x-5 gap-y-10 mt-3 justify-center flex-wrap">
                             <Stepper label="X 起" orient="h" value={cfg.grid.origin.x}
                               onChange={(v) => setGrid("origin.x", v)} />
-                            <Stepper label="圖寬" orient="h" value={cfg.grid.width}
-                              onChange={(v) => setGrid("width", v)} />
+                            <div className="relative">
+                              <Stepper label="尺寸" orient="h" value={cfg.grid.width}
+                                onChange={(v) => setGrid("width", v)} />
+                              <div className="absolute left-0 right-0 top-full text-[10px] text-slate-400 text-center mt-1 pointer-events-none">
+                                按比例縮放
+                              </div>
+                            </div>
                             <Stepper label="間距X" orient="h" value={cfg.grid.gap.x}
                               onChange={(v) => setGrid("gap.x", v)} />
                             {cfg.label.enabled && (
