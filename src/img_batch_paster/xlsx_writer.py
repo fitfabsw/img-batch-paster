@@ -75,6 +75,20 @@ def _placement_pixel_size(ws, p: CellPlacement, mdw: float = 7.0) -> tuple[float
     return w, h
 
 
+def _stretch_resize(img_path: Path, target_w: float, target_h: float, tmp_dir: Path) -> Path:
+    """非等比拉伸到 target 大小。"""
+    target_w, target_h = max(1, int(round(target_w))), max(1, int(round(target_h)))
+    with PILImage.open(img_path) as im:
+        if im.mode == "P":
+            im = im.convert("RGB")
+        im = im.resize((target_w, target_h), PILImage.LANCZOS)
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        out = tmp_dir / f"_fill_{img_path.stem}_{target_w}x{target_h}{img_path.suffix or '.png'}"
+        save_im = im if (out.suffix.lower() == ".png" or im.mode != "RGBA") else im.convert("RGB")
+        save_im.save(out)
+        return out
+
+
 def _cover_crop(img_path: Path, target_w: float, target_h: float, tmp_dir: Path) -> Path:
     """等比放大圖片直到至少有一邊貼齊 cell 大小，超出的部分 center-crop 掉。"""
     target_w, target_h = max(1, int(round(target_w))), max(1, int(round(target_h)))
@@ -114,7 +128,7 @@ def write_xlsx(
     / resized / selected, mimicking cell-embedded behavior visually.
     """
     if embed_in_cell:
-        return _write_xlsx_in_cell(placements, out_path, template, sheet_name)
+        return _write_xlsx_in_cell(placements, out_path, template, sheet_name, img_fit=img_fit)
 
     if template and Path(template).is_file():
         wb = load_workbook(str(template))
@@ -240,6 +254,7 @@ def _write_xlsx_in_cell(
     out_path: Path,
     template: Path | None,
     sheet_name: str | None,
+    img_fit: str = "contain",
 ) -> Path:
     """Embed images as cell content using Microsoft Excel 365 RichValue schema.
 
@@ -267,6 +282,7 @@ def _write_xlsx_in_cell(
 
     image_records: list[tuple[Path, str]] = []          # (src_path, media_name)
     image_cells: list[tuple[str, int, int, int]] = []   # (col_letter, row, rv_index_0based, vm_1based)
+    mdw = _default_mdw(wb)
 
     for p in placements:
         if p.text is not None:
@@ -277,9 +293,17 @@ def _write_xlsx_in_cell(
             continue
         if p.path is None or not Path(p.path).is_file():
             continue
-        ext = Path(p.path).suffix.lower() or ".png"
+        # 依 img_fit 預處理圖片：Excel embed 模式預設 contain，所以 cover/fill 都要 PIL 先處理
+        src_path = Path(p.path)
+        if img_fit in ("cover", "fill"):
+            tw, th = _placement_pixel_size(ws, p, mdw)
+            tmp_dir = out_path.parent / "_crops"
+            src_path = (_cover_crop if img_fit == "cover" else _stretch_resize)(
+                src_path, tw, th, tmp_dir
+            )
+        ext = src_path.suffix.lower() or ".png"
         media_name = f"image_rv{len(image_records) + 1}{ext}"
-        image_records.append((Path(p.path), media_name))
+        image_records.append((src_path, media_name))
         image_cells.append((
             get_column_letter(p.col), p.row,
             len(image_records) - 1,
