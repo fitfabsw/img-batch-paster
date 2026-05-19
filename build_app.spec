@@ -73,7 +73,7 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name="img-batch-paster.app",
-    icon=None,
+    icon="assets/icon.icns",
     bundle_identifier="com.zealzel.imgbatchpaster",
     info_plist={
         "CFBundleShortVersionString": "1.0.0",
