@@ -64,19 +64,39 @@ def _duplicate_slide(prs, source_slide):
 
 @dataclass
 class Placement:
-    path: Path
+    path: Path | None
     x_cm: float
     y_cm: float
     w_cm: float
     h_cm: float
+    text: str | None = None       # 若設了 text，就會插入文字方塊而不是圖片
+    font_pt: float = 18.0
+    bold: bool = True
+    align: str = "center"         # "left" | "center" | "right"
 
 
 def _add_placements_to_slide(slide, placements: list[Placement]) -> None:
+    from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
+    from pptx.util import Pt
+    align_map = {"left": PP_ALIGN.LEFT, "center": PP_ALIGN.CENTER, "right": PP_ALIGN.RIGHT}
+
     for pl in placements:
-        slide.shapes.add_picture(
-            str(pl.path), Cm(pl.x_cm), Cm(pl.y_cm),
-            width=Cm(pl.w_cm), height=Cm(pl.h_cm),
-        )
+        if pl.text is not None:
+            tb = slide.shapes.add_textbox(Cm(pl.x_cm), Cm(pl.y_cm), Cm(pl.w_cm), Cm(pl.h_cm))
+            tf = tb.text_frame
+            tf.word_wrap = True
+            tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+            p = tf.paragraphs[0]
+            p.alignment = align_map.get(pl.align, PP_ALIGN.CENTER)
+            run = p.add_run()
+            run.text = pl.text
+            run.font.size = Pt(pl.font_pt)
+            run.font.bold = pl.bold
+        else:
+            slide.shapes.add_picture(
+                str(pl.path), Cm(pl.x_cm), Cm(pl.y_cm),
+                width=Cm(pl.w_cm), height=Cm(pl.h_cm),
+            )
 
 
 def write_pages(

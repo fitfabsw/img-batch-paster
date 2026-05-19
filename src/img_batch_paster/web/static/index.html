@@ -28,13 +28,31 @@
         width: 25,
         gap:   { x: 2, y: 3 },
         cols: 3,
-        rows: 3,   // 每頁列數
+        rows: 3,
+      },
+      label: {
+        enabled: true,
+        pattern: "{group}-{idx}",   // 從檔名抽 group 的規則
+        x: 2,                        // %（寬度自動 = origin.x - label.x）
+        font_pt: 18,
       },
       output: { path: "./out.pptx", template: null },
     };
 
+    // 從檔名抽 group：pattern 用 {group} 和 {idx} 兩個 placeholder
+    function extractGroup(filename, pattern) {
+      const stem = filename.replace(/\.[^./]+$/, "");
+      const escaped = pattern.replace(/[.+?^$()|\[\]\\]/g, "\\$&")
+        .replace("{group}", "(.+?)").replace("{idx}", ".+?");
+      try {
+        const m = stem.match(new RegExp("^" + escaped + "$"));
+        if (m && m[1]) return m[1];
+      } catch (e) {}
+      return stem;  // fallback：整個檔名
+    }
+
     // 把檔案依「每頁 cols × rows」切成多頁；每頁從 origin 開始重新計算
-    function computePages(slide, grid, orderedFiles) {
+    function computePages(slide, grid, orderedFiles, label) {
       if (!orderedFiles || orderedFiles.length === 0) return [];
       const W = slide.width_cm, H = slide.height_cm;
       const ox = W * grid.origin.x / 100;
@@ -56,6 +74,22 @@
           const anchor = row[0];
           const aspect = anchor.h && anchor.w ? anchor.h / anchor.w : 0.75;
           const row_h = w * aspect;
+          // 列標籤：抽 group from first file's name；寬度 = 「label.x → origin.x」這段
+          if (label && label.enabled) {
+            const group = extractGroup(anchor.name || anchor.path.split("/").pop(), label.pattern);
+            const lx_cm = W * label.x / 100;
+            const lw_cm = Math.max(0.5, ox - lx_cm);
+            placements.push({
+              text: group,
+              x_cm: lx_cm,
+              y_cm: cur_y,
+              w_cm: lw_cm,
+              h_cm: row_h,
+              font_pt: label.font_pt,
+              align: "center",
+              bold: true,
+            });
+          }
           row.forEach((f, ci) => {
             placements.push({
               path: f.path,
@@ -257,7 +291,7 @@
             setOrder(j.files.map((f) => f.path));
             arr = j.files;
           }
-          const pages = computePages(cfg.slide, cfg.grid, arr);
+          const pages = computePages(cfg.slide, cfg.grid, arr, cfg.label);
           if (pages.length === 0) throw new Error("沒有可匯出的圖片");
           setStatus(`匯出中… (${pages.length} 頁)`);
           const r = await fetch("/api/export", {
@@ -301,7 +335,7 @@
       const STAGE_W = 720;
       const scale = STAGE_W / cfg.slide.width_cm;
       const stageH = cfg.slide.height_cm * scale;
-      const pages = computePages(cfg.slide, cfg.grid, orderedFiles);
+      const pages = computePages(cfg.slide, cfg.grid, orderedFiles, cfg.label);
       const imgW_cm = cfg.slide.width_cm * cfg.grid.width / 100;
       const firstAnchor = orderedFiles[0];
       const previewH_cm = firstAnchor && firstAnchor.w ? imgW_cm * (firstAnchor.h / firstAnchor.w) : null;
@@ -395,6 +429,36 @@
                     <NumberInput label="列 rows" step={1} value={cfg.grid.rows}
                       onChange={(v) => setGrid("rows", Math.max(1, parseInt(v) || 1))} />
                   </div>
+                </div>
+
+                <div className="border-t pt-3">
+                  <label className="flex items-center gap-2 text-sm font-semibold">
+                    <input type="checkbox" checked={cfg.label.enabled}
+                      onChange={(e) => setCfg((c) => ({ ...c, label: { ...c.label, enabled: e.target.checked } }))} />
+                    列標籤（從檔名抽出 SN）
+                  </label>
+                  {cfg.label.enabled && (
+                    <div className="mt-2 space-y-2">
+                      <div>
+                        <label className="text-xs text-slate-600">檔名 pattern</label>
+                        <input value={cfg.label.pattern}
+                          onChange={(e) => setCfg((c) => ({ ...c, label: { ...c.label, pattern: e.target.value } }))}
+                          className="mt-1 w-full border rounded px-2 py-1 text-sm font-mono" />
+                        <div className="text-[10px] text-slate-400 mt-1">
+                          例：<code>{"{group}-{idx}"}</code> 套用 <code>2EG-A.jpg</code> → <b>2EG</b>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <NumberInput label="X 位置" suffix="%" value={cfg.label.x}
+                          onChange={(v) => setCfg((c) => ({ ...c, label: { ...c.label, x: v } }))} />
+                        <NumberInput label="字體" suffix="pt" step={1} value={cfg.label.font_pt}
+                          onChange={(v) => setCfg((c) => ({ ...c, label: { ...c.label, font_pt: v } }))} />
+                      </div>
+                      <div className="text-[10px] text-slate-400">
+                        標籤寬度自動 = 「X 位置」到「第一張圖左緣」的空間
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="border-t pt-3">
@@ -514,18 +578,34 @@
                           backgroundImage: tpl ? `url(${tpl.preview_url})` : undefined,
                           backgroundSize: "100% 100%", backgroundRepeat: "no-repeat",
                         }}>
-                        {pagePls.map((pl, i) => (
-                          <img key={i}
-                            src={`/api/thumb?path=${encodeURIComponent(pl.path)}&size=400`}
-                            style={{
-                              position: "absolute",
-                              left: pl.x_cm * scale,
-                              top: pl.y_cm * scale,
-                              width: pl.w_cm * scale,
-                              height: pl.h_cm * scale,
-                            }}
-                            className={selected === pl.path ? "ring-2 ring-emerald-500" : "border border-slate-300"} />
-                        ))}
+                        {pagePls.map((pl, i) => {
+                          const style = {
+                            position: "absolute",
+                            left: pl.x_cm * scale,
+                            top: pl.y_cm * scale,
+                            width: pl.w_cm * scale,
+                            height: pl.h_cm * scale,
+                          };
+                          if (pl.text !== undefined && pl.text !== null) {
+                            return (
+                              <div key={i} style={{
+                                ...style,
+                                display: "flex", alignItems: "center", justifyContent: "center",
+                                fontSize: (pl.font_pt || 18) * scale / 28.35,
+                                fontWeight: pl.bold ? 700 : 400,
+                                color: "#111",
+                              }}>
+                                {pl.text}
+                              </div>
+                            );
+                          }
+                          return (
+                            <img key={i}
+                              src={`/api/thumb?path=${encodeURIComponent(pl.path)}&size=400`}
+                              style={style}
+                              className={selected === pl.path ? "ring-2 ring-emerald-500" : "border border-slate-300"} />
+                          );
+                        })}
                       </div>
                     </>
                   );

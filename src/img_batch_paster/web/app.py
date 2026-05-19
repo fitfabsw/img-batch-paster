@@ -251,9 +251,13 @@ def api_export():
 
     def _to_pl(p):
         return Placement(
-            path=Path(p["path"]),
+            path=Path(p["path"]) if p.get("path") else None,
             x_cm=float(p["x_cm"]), y_cm=float(p["y_cm"]),
             w_cm=float(p["w_cm"]), h_cm=float(p["h_cm"]),
+            text=p.get("text"),
+            font_pt=float(p.get("font_pt", 18)),
+            bold=bool(p.get("bold", True)),
+            align=p.get("align", "center"),
         )
 
     if "pages" in data:
