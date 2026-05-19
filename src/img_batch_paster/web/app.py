@@ -78,6 +78,25 @@ def api_thumb():
     return send_file(buf, mimetype=f"image/{fmt.lower()}")
 
 
+@app.get("/api/version")
+def api_version():
+    import subprocess
+    from .. import __version__
+    project_root = Path(__file__).resolve().parents[3]
+    def _git(*args):
+        try:
+            return subprocess.check_output(
+                ["git", *args], cwd=project_root, stderr=subprocess.DEVNULL, text=True
+            ).strip()
+        except Exception:
+            return ""
+    return jsonify({
+        "version": __version__,
+        "commit": _git("rev-parse", "--short", "HEAD") or "?",
+        "date": _git("log", "-1", "--format=%cs") or "?",
+    })
+
+
 @app.post("/api/workspace")
 def api_workspace():
     """Create a fresh per-browser workspace under /tmp/img-batch-paster-uploads/."""
