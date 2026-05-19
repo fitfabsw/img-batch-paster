@@ -46,7 +46,8 @@
         cellRows: 1,
         gapRows: 0,
         snCol: "A",
-        embedInCell: false,     // 是否用「在儲存格內」(DISPIMG) 模式
+        embedInCell: false,
+        imgFit: "cover",   // cover (裁切填滿) | contain (完整留白) | fill (拉伸)
       },
       output: { path: "./out.pptx", template: null },
     };
@@ -374,7 +375,6 @@
                     position: "absolute", left: x, top: y, width: w, height: h,
                     display: "flex", alignItems: "center", justifyContent: "center",
                     fontSize: (pl.font_pt || 12), fontWeight: 700, color: "#0f172a",
-                    background: "rgba(16,185,129,0.06)",
                     pointerEvents: "none",
                   }}>{pl.text}</div>
                 );
@@ -382,7 +382,7 @@
               return (
                 <img key={`my-${i}`}
                   src={`/api/thumb?path=${encodeURIComponent(pl.path)}&size=400`}
-                  style={{ position: "absolute", left: x, top: y, width: w, height: h, objectFit: "contain" }}
+                  style={{ position: "absolute", left: x, top: y, width: w, height: h, objectFit: cfg.excel?.imgFit || "cover" }}
                   className={selected === pl.path ? "ring-2 ring-emerald-500" : ""} />
               );
             })}
@@ -594,6 +594,7 @@
             body = JSON.stringify({
               cells, output: cfg.output, workspace: ws,
               embedInCell: !!cfg.excel.embedInCell,
+              imgFit: cfg.excel.imgFit || "cover",
             });
           } else {
             const pages = computePages(cfg.slide, cfg.grid, arr, cfg.label);
@@ -733,6 +734,22 @@
                         SN 字串從檔名 pattern「{cfg.label.pattern}」抽取
                       </div>
 
+                      <div className="mt-2 pt-2 border-t">
+                        <div className="text-xs text-slate-600 mb-1">圖片填法</div>
+                        <div className="flex text-xs border rounded overflow-hidden">
+                          {[
+                            { v: "cover", label: "裁切填滿" },
+                            { v: "contain", label: "完整留白" },
+                            { v: "fill", label: "拉伸" },
+                          ].map((opt) => (
+                            <button key={opt.v}
+                              onClick={() => setCfg((c) => ({ ...c, excel: { ...c.excel, imgFit: opt.v } }))}
+                              className={`flex-1 px-2 py-1 ${cfg.excel.imgFit === opt.v ? "bg-slate-700 text-white" : "hover:bg-slate-100"}`}>
+                              {opt.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                       <label className="flex items-center gap-2 text-xs text-slate-700 mt-2 pt-2 border-t">
                         <input type="checkbox" checked={cfg.excel.embedInCell}
                           onChange={(e) => setCfg((c) => ({ ...c, excel: { ...c.excel, embedInCell: e.target.checked } }))} />

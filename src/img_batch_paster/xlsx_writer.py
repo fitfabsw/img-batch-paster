@@ -7,8 +7,10 @@ from pathlib import Path
 from PIL import Image as PILImage
 from openpyxl import Workbook, load_workbook
 from openpyxl.drawing.image import Image as XLImage
-from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, TwoCellAnchor
+from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor, TwoCellAnchor
+from openpyxl.drawing.xdr import XDRPositiveSize2D
 from openpyxl.utils import column_index_from_string, get_column_letter
+from openpyxl.utils.units import pixels_to_EMU
 
 
 @dataclass
@@ -22,30 +24,54 @@ class CellPlacement:
     font_pt: float = 12.0
 
 
-# Excel 像素換算 (Microsoft 公式)
-# column: px ≈ width * 7 + 5  (W=8.43 → 64px)
-# row:    px ≈ height * 4/3   (H=15 → 20px)
-def excel_col_to_px(w: float) -> float:
-    return w * 7 + 5
+# Excel 像素換算
+# column: px ≈ width * MDW + 5   MDW (Max Digit Width) 隨字體變
+# row:    px ≈ height * 4/3      (H=15 → 20px)
+def excel_col_to_px(w: float, mdw: float = 7.0) -> float:
+    return w * mdw + 5
 
 def excel_row_to_px(h: float) -> float:
     return h * 4 / 3
 
 
-def _cell_pixel_size(ws, col: int, row: int) -> tuple[float, float]:
-    col_letter = get_column_letter(col)
-    cw = ws.column_dimensions[col_letter].width
-    rh = ws.row_dimensions[row].height
-    if cw is None:
-        cw = ws.sheet_format.defaultColWidth or 8.43
-    if rh is None:
-        rh = ws.sheet_format.defaultRowHeight or 15.0
-    return excel_col_to_px(cw), excel_row_to_px(rh)
+def _default_mdw(wb) -> float:
+    """根據範本預設字體大小估算 MDW。
+    Calibri/新細明體 11 → 7；12 → ~8；14 → ~9。粗略線性。
+    """
+    try:
+        sz = float(wb._fonts[0].sz or 11)
+    except Exception:
+        sz = 11.0
+    if sz <= 11:
+        return 7.0
+    # 每多 1 pt 字大約多 ~0.7 px MDW
+    return 7.0 + (sz - 11) * 0.85
 
 
-def _placement_pixel_size(ws, p: CellPlacement) -> tuple[float, float]:
-    w = sum(_cell_pixel_size(ws, p.col + i, p.row)[0] for i in range(p.span_cols))
-    h = sum(_cell_pixel_size(ws, p.col, p.row + j)[1] for j in range(p.span_rows))
+def _col_width(ws, col_idx: int) -> float:
+    """範本可能用 <col min=A max=B width=W> 範圍宣告；要走全部 column_dimensions 才能正確取到。"""
+    for cd in ws.column_dimensions.values():
+        if cd.min is None or cd.max is None:
+            continue
+        if cd.min <= col_idx <= cd.max and cd.width is not None:
+            return cd.width
+    return ws.sheet_format.defaultColWidth or 8.43
+
+
+def _row_height(ws, row_idx: int) -> float:
+    rd = ws.row_dimensions.get(row_idx)
+    if rd is not None and rd.height is not None:
+        return rd.height
+    return ws.sheet_format.defaultRowHeight or 15.0
+
+
+def _cell_pixel_size(ws, col: int, row: int, mdw: float = 7.0) -> tuple[float, float]:
+    return excel_col_to_px(_col_width(ws, col), mdw), excel_row_to_px(_row_height(ws, row))
+
+
+def _placement_pixel_size(ws, p: CellPlacement, mdw: float = 7.0) -> tuple[float, float]:
+    w = sum(_cell_pixel_size(ws, p.col + i, p.row, mdw)[0] for i in range(p.span_cols))
+    h = sum(_cell_pixel_size(ws, p.col, p.row + j, mdw)[1] for j in range(p.span_rows))
     return w, h
 
 
@@ -80,6 +106,7 @@ def write_xlsx(
     sheet_name: str | None = None,
     embed_in_cell: bool = False,
     lock_images: bool = True,
+    img_fit: str = "cover",
 ) -> Path:
     """Embed images either as floating drawings (default) or as cell content (DISPIMG).
 
@@ -96,6 +123,8 @@ def write_xlsx(
         wb = Workbook()
         ws = wb.active
 
+    mdw = _default_mdw(wb)
+
     for p in placements:
         cell = ws.cell(row=p.row, column=p.col)
         if p.text is not None:
@@ -107,20 +136,49 @@ def write_xlsx(
         if p.path is None or not Path(p.path).is_file():
             continue
 
-        # 等比縮放至完全容納於 cell (contain)；不裁切、不拉伸；可能有單側留白
-        max_w, max_h = _placement_pixel_size(ws, p)
-        with PILImage.open(p.path) as im:
-            iw, ih = im.size
-        aspect = ih / iw if iw else 1.0
-        fit_w = max_w
-        fit_h = fit_w * aspect
-        if fit_h > max_h and max_h > 0:
-            fit_h = max_h
-            fit_w = fit_h / aspect if aspect else max_w
-        img = XLImage(str(p.path))
-        img.width = int(round(fit_w))
-        img.height = int(round(fit_h))
-        ws.add_image(img, f"{get_column_letter(p.col)}{p.row}")
+        target_w, target_h = _placement_pixel_size(ws, p, mdw)
+
+        if img_fit == "fill":
+            # TwoCellAnchor 拉伸到 cell 範圍 (會變形)
+            img = XLImage(str(p.path))
+            img.anchor = TwoCellAnchor(
+                _from=AnchorMarker(col=p.col - 1, colOff=0, row=p.row - 1, rowOff=0),
+                to=AnchorMarker(col=p.col - 1 + p.span_cols, colOff=0,
+                                row=p.row - 1 + p.span_rows, rowOff=0),
+                editAs="oneCell",
+            )
+            ws._images.append(img)
+        elif img_fit == "contain":
+            # 保長寬比、完整放入 cell；置中 (上下/左右白邊均分)
+            with PILImage.open(p.path) as im:
+                iw, ih = im.size
+            aspect = ih / iw if iw else 1.0
+            fit_w = target_w
+            fit_h = fit_w * aspect
+            if fit_h > target_h and target_h > 0:
+                fit_h = target_h
+                fit_w = fit_h / aspect if aspect else target_w
+            col_off_px = max(0.0, (target_w - fit_w) / 2)
+            row_off_px = max(0.0, (target_h - fit_h) / 2)
+            img = XLImage(str(p.path))
+            img.anchor = OneCellAnchor(
+                _from=AnchorMarker(
+                    col=p.col - 1, colOff=int(round(pixels_to_EMU(col_off_px))),
+                    row=p.row - 1, rowOff=int(round(pixels_to_EMU(row_off_px))),
+                ),
+                ext=XDRPositiveSize2D(
+                    cx=int(round(pixels_to_EMU(fit_w))),
+                    cy=int(round(pixels_to_EMU(fit_h))),
+                ),
+            )
+            ws._images.append(img)
+        else:
+            # cover (default)：保長寬比、center-crop、剛好填滿 cell
+            cropped = _cover_crop(Path(p.path), target_w, target_h, out_path.parent / "_crops")
+            img = XLImage(str(cropped))
+            img.width = int(round(target_w))
+            img.height = int(round(target_h))
+            ws.add_image(img, f"{get_column_letter(p.col)}{p.row}")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(str(out_path))

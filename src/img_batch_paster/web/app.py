@@ -267,16 +267,30 @@ def api_template_excel_grid():
     DEFAULT_W = 8.43
     DEFAULT_H = 15.0
 
+    # 收集 range-based 欄寬：openpyxl 可能用 <col min=A max=B width=W> 一次涵蓋多欄
+    col_widths: dict[int, float] = {}
+    for cd in ws.column_dimensions.values():
+        if cd.min is None or cd.max is None or cd.width is None:
+            continue
+        for i in range(cd.min, cd.max + 1):
+            col_widths[i] = cd.width
+
+    # 偵測預設字體大小調整 MDW (Max Digit Width)
+    try:
+        sz = float(wb._fonts[0].sz or 11)
+    except Exception:
+        sz = 11.0
+    mdw = 7.0 if sz <= 11 else 7.0 + (sz - 11) * 0.85
+
     cols = []
     for c in range(1, max_col + 4):
         letter = get_column_letter(c)
-        w = ws.column_dimensions[letter].width
-        w = w if w is not None else DEFAULT_W
-        cols.append({"letter": letter, "w_px": w * 7 + 5})
+        w = col_widths.get(c, DEFAULT_W)
+        cols.append({"letter": letter, "w_px": w * mdw + 5})
     rows = []
     for r in range(1, max_row + 4):
-        h = ws.row_dimensions[r].height
-        h = h if h is not None else DEFAULT_H
+        rd = ws.row_dimensions.get(r)
+        h = rd.height if rd is not None and rd.height is not None else DEFAULT_H
         rows.append({"r": r, "h_px": h * 4 / 3})
 
     cells = []
@@ -359,7 +373,9 @@ def api_export():
         if not xl_placements:
             return jsonify({"error": "沒有可匯出的儲存格"}), 400
         embed_in_cell = bool(data.get("embedInCell"))
-        write_xlsx(xl_placements, out_path, template_path, embed_in_cell=embed_in_cell)
+        img_fit = data.get("imgFit", "cover")
+        write_xlsx(xl_placements, out_path, template_path,
+                   embed_in_cell=embed_in_cell, img_fit=img_fit)
         resp = {"output": str(out_path)}
         if base:
             resp["download_url"] = f"/api/download/{ws}/{out_path.name}"
