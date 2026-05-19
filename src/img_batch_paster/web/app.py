@@ -12,7 +12,7 @@ from PIL import Image
 
 from ..grouper import scan_folder
 from ..pptx_writer import Placement, write_pages, write_placements
-from ..keynote_export import convert_pptx_to_key
+from ..keynote_export import convert_key_to_pptx, convert_pptx_to_key
 from .template_render import render_first_slide, slide_size_cm
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -87,6 +87,7 @@ def api_workspace():
 
 @app.post("/api/upload/template")
 def api_upload_template():
+    import sys as _sys
     ws = request.form.get("workspace", "")
     base = _ws_dir(ws)
     if not base:
@@ -94,9 +95,29 @@ def api_upload_template():
     f = request.files.get("file")
     if not f or not f.filename:
         return jsonify({"error": "no file"}), 400
-    dest = base / "template.pptx"
-    f.save(str(dest))
-    return jsonify({"path": str(dest)})
+
+    ext = Path(f.filename).suffix.lower()
+    dest_pptx = base / "template.pptx"
+
+    if ext == ".pptx":
+        f.save(str(dest_pptx))
+        return jsonify({"path": str(dest_pptx)})
+
+    if ext == ".key":
+        if _sys.platform != "darwin":
+            return jsonify({"error": ".key 範本僅在 macOS server 可轉檔；請改傳 .pptx"}), 501
+        tmp_key = base / "uploaded.key"
+        f.save(str(tmp_key))
+        try:
+            convert_key_to_pptx(tmp_key, dest_pptx)
+        except Exception as e:
+            return jsonify({"error": f"Keynote → pptx 轉檔失敗: {e}"}), 500
+        finally:
+            if tmp_key.exists():
+                tmp_key.unlink()
+        return jsonify({"path": str(dest_pptx)})
+
+    return jsonify({"error": f"不支援的副檔名: {ext}（請用 .pptx 或 .key）"}), 400
 
 
 DEFAULT_TEMPLATE = Path(__file__).resolve().parent.parent / "templates" / "default.pptx"
