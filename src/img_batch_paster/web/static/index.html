@@ -461,29 +461,13 @@
                 </div>
 
                 <div className="border-t pt-3">
-                  <div className="text-sm font-semibold mb-1">投影片尺寸</div>
-                  <div className="text-xs text-slate-500">
-                    <b>{cfg.slide.width_cm.toFixed(2)} × {cfg.slide.height_cm.toFixed(2)} cm</b>
-                  </div>
-                  <div className="text-[10px] text-slate-400 mt-1">由範本自動帶入</div>
-                </div>
-
-                <div className="border-t pt-3">
-                  <div className="text-sm font-semibold mb-2">版面摘要</div>
-                  <div className="text-xs text-slate-500 mb-2">
-                    圖寬 = <b>{imgW_cm.toFixed(2)} cm</b>
-                    {previewH_cm && <> · 圖高 ≈ <b>{previewH_cm.toFixed(2)} cm</b></>}
-                    <br />
-                    每頁 {cfg.grid.cols} 欄 × {cfg.grid.rows} 列 = {perPage} 張 / 共 <b>{pages.length}</b> 頁
-                  </div>
-                  <div className="text-[11px] uppercase tracking-wide text-slate-400 mt-3 mb-1">每頁網格</div>
+                  <div className="text-sm font-semibold mb-2">每頁網格</div>
                   <div className="grid grid-cols-2 gap-2">
                     <NumberInput label="欄 cols" step={1} value={cfg.grid.cols}
                       onChange={(v) => setGrid("cols", Math.max(1, parseInt(v) || 1))} />
                     <NumberInput label="列 rows" step={1} value={cfg.grid.rows}
                       onChange={(v) => setGrid("rows", Math.max(1, parseInt(v) || 1))} />
                   </div>
-                  <div className="text-[10px] text-slate-400 mt-2">位置 / 大小 / 間距請用預覽四周的箭頭調整</div>
                 </div>
 
                 <div className="border-t pt-3">
