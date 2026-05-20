@@ -310,18 +310,7 @@
               }}>{r.r}</div>
             ))}
 
-            {/* 儲存格背景 (淺灰 grid line) */}
-            {grid.rows.map((r, ri) =>
-              grid.cols.map((c, ci) => (
-                <div key={`cell-${r.r}-${c.letter}`} style={{
-                  position: "absolute",
-                  left: HEADER_W + cumX[ci], top: HEADER_H + cumY[ri],
-                  width: c.w_px, height: r.h_px,
-                  borderRight: "1px solid #f1f5f9",
-                  borderBottom: "1px solid #f1f5f9",
-                }} />
-              ))
-            )}
+            {/* (移除無 content 的 cell 分隔線；範本既有的 border 由下方獨立渲染) */}
 
             {/* 邊框 (從範本讀的) */}
             {(grid.borders || []).map((b, i) => {
