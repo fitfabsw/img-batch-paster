@@ -93,7 +93,7 @@ def api_version():
     return jsonify({
         "version": __version__,
         "commit": _git("rev-parse", "--short", "HEAD") or "?",
-        "date": _git("log", "-1", "--format=%cs") or "?",
+        "date": _git("log", "-1", "--format=%cd", "--date=format:%Y-%m-%d %H:%M") or "?",
     })
 
 
