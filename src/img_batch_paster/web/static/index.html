@@ -36,6 +36,9 @@
       label: {
         enabled: true,
         pattern: "{group}-{idx}",
+        delim: "-",                // 分段點選用的分隔符
+        roles: ["sn", "idx"],      // 各段角色：sn | idx | skip
+        rawMode: false,            // true=直接編輯 pattern, false=分段點選
         x: 2,
         width: 12,        // SN box 固定寬度 (% of slide width)，與圖片 X 解耦
         font_pt: 18,
@@ -131,25 +134,44 @@
       return cells;
     }
 
-    // 從檔名抽 group：pattern 用 {group} 和 {idx} 兩個 placeholder
+    // pattern → regex 字串：先轉義字面字元，再展開 placeholder ({group}/{idx}/{skip})
+    function patternToRegex(pattern, groupCapture = "(.+?)", idxCapture = "(.+?)") {
+      // 用佔位符暫存避免被字面 escape 影響
+      const G = "G", I = "I", S = "S";
+      let p = pattern.replace(/\{group\}/g, G).replace(/\{idx\}/g, I).replace(/\{skip\}/g, S);
+      p = p.replace(/[.+?^$()|\[\]\\]/g, "\\$&");
+      p = p.replace(new RegExp(G, "g"), groupCapture)
+           .replace(new RegExp(I, "g"), idxCapture)
+           .replace(new RegExp(S, "g"), ".+?");
+      return p;
+    }
+
+    // 從檔名抽 group：pattern 用 {group} / {idx} / {skip} 佔位符
     function extractGroup(filename, pattern) {
       const stem = filename.replace(/\.[^./]+$/, "");
-      const escaped = pattern.replace(/[.+?^$()|\[\]\\]/g, "\\$&")
-        .replace("{group}", "(.+?)").replace("{idx}", ".+?");
       try {
-        const m = stem.match(new RegExp("^" + escaped + "$"));
+        const m = stem.match(new RegExp("^" + patternToRegex(pattern, "(.+?)", ".+?") + "$"));
         if (m && m[1]) return m[1];
       } catch (e) {}
-      return stem;  // fallback：整個檔名
+      return stem;
+    }
+
+    // 嚴格版：match 不到回傳 null（給 UI 統計用）
+    function tryExtract(filename, pattern) {
+      if (!pattern || !pattern.includes("{group}")) return null;
+      const stem = filename.replace(/\.[^./]+$/, "");
+      try {
+        const m = stem.match(new RegExp("^" + patternToRegex(pattern) + "$"));
+        if (!m) return null;
+        return { group: m[1] || "", idx: m[2] || null };
+      } catch (e) { return null; }
     }
 
     // 同時抽 group + idx
     function extractGroupIdx(filename, pattern) {
       const stem = filename.replace(/\.[^./]+$/, "");
-      const escaped = pattern.replace(/[.+?^$()|\[\]\\]/g, "\\$&")
-        .replace("{group}", "(.+?)").replace("{idx}", "(.+?)");
       try {
-        const m = stem.match(new RegExp("^" + escaped + "$"));
+        const m = stem.match(new RegExp("^" + patternToRegex(pattern) + "$"));
         if (m) return { group: m[1] || stem, idx: m[2] || null };
       } catch (e) {}
       return { group: stem, idx: null };
@@ -242,6 +264,207 @@
         pages.push(placements);
       }
       return pages;
+    }
+
+    // 分段點選的 SN 設定 UI：分隔符 + 各段角色 chip + 即時抽取預覽 + 命中統計
+    function SnPatternPicker({ cfgLabel, autoAlign, setCfg, firstFile, allFiles }) {
+      const DELIMS = [
+        { v: "-", label: "-" },
+        { v: "_", label: "_" },
+        { v: ".", label: "." },
+        { v: " ", label: "空白" },
+      ];
+
+      const delim = cfgLabel.delim || "-";
+      const firstStem = firstFile ? (firstFile.name || "").replace(/\.[^./]+$/, "") : "";
+      const segs = firstStem ? firstStem.split(delim) : [];
+      // roles 對齊長度；缺值補 skip
+      const roles = (cfgLabel.roles || []).slice(0, segs.length);
+      while (roles.length < segs.length) roles.push("skip");
+
+      const snIdx = roles.indexOf("sn");
+      const idxIdx = roles.indexOf("idx");
+
+      // 沒勾「依檔名對位」時，idx 角色視為 skip（既不出現在 pattern、也不擋 SN 選取）
+      const effRole = (i) => {
+        const r = roles[i] || "skip";
+        if (r === "idx" && !autoAlign) return "skip";
+        return r;
+      };
+
+      const buildPattern = (rs) =>
+        segs.map((_, i) => {
+          let r = rs[i] || "skip";
+          if (r === "idx" && !autoAlign) r = "skip";
+          return r === "sn" ? "{group}" : r === "idx" ? "{idx}" : "{skip}";
+        }).join(delim);
+
+      const updateLabel = (patch) =>
+        setCfg((c) => ({ ...c, label: { ...c.label, ...patch } }));
+
+      // 檔案 / 分隔符 變動時自動同步 pattern + roles 長度
+      useEffect(() => {
+        if (cfgLabel.rawMode) return;
+        if (!segs.length) return;
+        const targetPattern = buildPattern(roles);
+        const rolesChanged = (cfgLabel.roles || []).length !== roles.length;
+        if (targetPattern !== cfgLabel.pattern || rolesChanged) {
+          updateLabel({ pattern: targetPattern, roles });
+        }
+      }, [firstStem, delim, cfgLabel.rawMode, autoAlign]);
+
+      // SN 列：點 chip = 設為 SN；點已選的 = 取消；該段已是 idx (且對位啟用中) 則禁用
+      const toggleSn = (i) => {
+        if (effRole(i) === "idx") return;
+        const newRoles = roles.map((r) => (r === "sn" ? "skip" : r));
+        if (roles[i] !== "sn") newRoles[i] = "sn";
+        updateLabel({ roles: newRoles, pattern: buildPattern(newRoles), rawMode: false });
+      };
+
+      // idx 列：點 chip = 設為 idx；點已選的 = 取消；該段已是 SN 則禁用
+      const toggleIdx = (i) => {
+        if (effRole(i) === "sn") return;
+        const newRoles = roles.map((r) => (r === "idx" ? "skip" : r));
+        if (roles[i] !== "idx") newRoles[i] = "idx";
+        updateLabel({ roles: newRoles, pattern: buildPattern(newRoles), rawMode: false });
+      };
+
+      const onDelimChange = (d) => {
+        const newSegs = firstStem ? firstStem.split(d) : [];
+        // 預設第 1 段 = sn，第 2 段 = idx
+        const newRoles = newSegs.map((_, i) => (i === 0 ? "sn" : i === 1 ? "idx" : "skip"));
+        const pattern = newSegs.map((_, i) =>
+          newRoles[i] === "sn" ? "{group}" : newRoles[i] === "idx" ? "{idx}" : "{skip}"
+        ).join(d);
+        updateLabel({ delim: d, roles: newRoles, pattern, rawMode: false });
+      };
+
+      const hasSn = snIdx >= 0;
+      const preview = firstFile && hasSn ? tryExtract(firstFile.name, cfgLabel.pattern) : null;
+
+      let okCount = 0;
+      if (hasSn && allFiles && allFiles.length) {
+        for (const f of allFiles) if (tryExtract(f.name, cfgLabel.pattern)) okCount++;
+      }
+      const total = (allFiles || []).length;
+
+      const CHIP_CLS = {
+        sn:   { sel: "bg-emerald-500 border-emerald-600 text-white ring-2 ring-emerald-200",
+                idle: "bg-white border-slate-300 text-slate-700 hover:bg-emerald-50" },
+        idx:  { sel: "bg-sky-500 border-sky-600 text-white ring-2 ring-sky-200",
+                idle: "bg-white border-slate-300 text-slate-700 hover:bg-sky-50" },
+      };
+      const DISABLED_CLS = "bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed line-through";
+
+      const ChipRow = ({ selectedIdx, onPick, kind }) => (
+        <div className="flex flex-wrap gap-1">
+          {segs.map((s, i) => {
+            const isSel = selectedIdx === i;
+            // 該段被另一角色佔走 → disable
+            const eff = effRole(i);
+            const takenBy = eff === "sn" && kind === "idx" ? "SN"
+                          : eff === "idx" && kind === "sn" ? "對位"
+                          : null;
+            const cls = takenBy
+              ? DISABLED_CLS
+              : (isSel ? CHIP_CLS[kind].sel : CHIP_CLS[kind].idle);
+            return (
+              <button key={i}
+                disabled={!!takenBy}
+                title={takenBy ? `此段已被「${takenBy}」選用` : ""}
+                onClick={() => onPick(i)}
+                className={`px-3 py-1.5 rounded border text-xs font-mono ${cls}`}>
+                {s || <span className="opacity-50">(空)</span>}
+              </button>
+            );
+          })}
+        </div>
+      );
+
+      return (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-600">分隔符</span>
+            <div className="flex border rounded overflow-hidden text-xs">
+              {DELIMS.map((d) => (
+                <button key={d.v}
+                  onClick={() => onDelimChange(d.v)}
+                  className={`px-2 py-0.5 ${delim === d.v ? "bg-slate-700 text-white" : "hover:bg-slate-100"}`}>
+                  {d.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {!firstFile ? (
+            <div className="text-xs text-slate-400 border rounded p-2 bg-slate-50">
+              請先上傳圖片，再點選哪一段是 SN
+            </div>
+          ) : (
+            <>
+              <div>
+                <div className="text-xs text-slate-700 mb-1">
+                  <b>SN 取哪一段？</b>
+                  <span className="text-[10px] text-slate-400 ml-1">範例 <span className="font-mono">{firstFile.name}</span></span>
+                </div>
+                <ChipRow selectedIdx={snIdx} onPick={toggleSn} kind="sn" />
+
+                {hasSn ? (
+                  <div className="text-xs mt-2 p-2 border rounded bg-emerald-50">
+                    抽出 SN：<b className="font-mono text-emerald-800">{preview ? preview.group : "(無法抽出)"}</b>
+                    <div className="text-[10px] text-slate-500 mt-0.5">
+                      {okCount === total
+                        ? `全部 ${total} 個檔案皆可抽出 ✓`
+                        : `${okCount} / ${total} 個檔案可抽出${okCount < total ? "（其餘以原檔名顯示）" : ""}`}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-xs mt-2 p-2 border border-amber-300 rounded bg-amber-50 text-amber-800">
+                    ⚠ 尚未選 SN — 請點選上方任一段
+                  </div>
+                )}
+              </div>
+
+              <div className="pt-2 border-t">
+                <label className="flex items-center gap-2 text-xs text-slate-700">
+                  <input type="checkbox" checked={autoAlign}
+                    onChange={(e) => setCfg((c) => ({ ...c, autoAlign: e.target.checked }))} />
+                  <b>依檔名對位</b>
+                  <span className="text-slate-400">（缺照片留空、不遞補）</span>
+                </label>
+                {autoAlign && (
+                  <div className="mt-2">
+                    <div className="text-xs text-slate-700 mb-1">對位用哪一段？</div>
+                    <ChipRow selectedIdx={idxIdx} onPick={toggleIdx} kind="idx" />
+                    {idxIdx >= 0 ? (
+                      <div className="text-[10px] text-slate-500 mt-1">
+                        該段內容 (例如 <span className="font-mono">A/B/C</span> 或 <span className="font-mono">1/2/3</span>) 將對應到每列的欄位
+                      </div>
+                    ) : (
+                      <div className="text-[10px] text-amber-700 mt-1">
+                        ⚠ 啟用對位但未選欄位段 — 對位將無效
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
+          <details>
+            <summary className="text-[10px] text-slate-500 cursor-pointer hover:text-slate-700">
+              ▸ 進階：直接編輯 pattern
+            </summary>
+            <input value={cfgLabel.pattern}
+              onChange={(e) => updateLabel({ pattern: e.target.value, rawMode: true })}
+              className="mt-1 w-full border rounded px-2 py-1 text-xs font-mono" />
+            <div className="text-[10px] text-slate-400 mt-1">
+              佔位符：<code>{"{group}"}</code> · <code>{"{idx}"}</code> · <code>{"{skip}"}</code>（略過該段）；
+              其他字元為字面值。改回上面分隔符即重新同步。
+            </div>
+          </details>
+        </div>
+      );
     }
 
     function NumberInput({ label, value, onChange, step = 0.5, suffix }) {
@@ -1048,15 +1271,13 @@
                   </label>
                   {cfg.label.enabled && (
                     <div className="mt-2 space-y-2">
-                      <div>
-                        <label className="text-xs text-slate-600">檔名 pattern</label>
-                        <input value={cfg.label.pattern}
-                          onChange={(e) => setCfg((c) => ({ ...c, label: { ...c.label, pattern: e.target.value } }))}
-                          className="mt-1 w-full border rounded px-2 py-1 text-sm font-mono" />
-                        <div className="text-[10px] text-slate-400 mt-1">
-                          例：<code>{"{group}-{idx}"}</code> 套用 <code>2EG-A.jpg</code> → <b>2EG</b>
-                        </div>
-                      </div>
+                      <SnPatternPicker
+                        cfgLabel={cfg.label}
+                        autoAlign={cfg.autoAlign}
+                        setCfg={setCfg}
+                        firstFile={orderedFiles[0]}
+                        allFiles={orderedFiles}
+                      />
                       <NumberInput label="字體" suffix="pt" step={1} value={cfg.label.font_pt}
                         onChange={(v) => setCfg((c) => ({ ...c, label: { ...c.label, font_pt: v } }))} />
                       <div className="text-[10px] text-slate-400">
@@ -1081,14 +1302,6 @@
                       )}
                     </div>
                   )}
-                  <label className="flex items-center gap-2 text-xs text-slate-700 mt-3 pt-2 border-t">
-                    <input type="checkbox" checked={cfg.autoAlign}
-                      onChange={(e) => setCfg((c) => ({ ...c, autoAlign: e.target.checked }))} />
-                    <span>依檔名 idx 對位（缺照片留空、不遞補）</span>
-                  </label>
-                  <div className="text-[10px] text-slate-400">
-                    依 pattern 的 idx (A/B/C 或 1/2/3) 對應到欄位；某 SN 缺某張，該欄留空
-                  </div>
                 </div>
 
                 <div className="border-t pt-3">
