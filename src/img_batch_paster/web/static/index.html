@@ -1478,21 +1478,11 @@
                           onChange={(e) => setCfg((c) => ({ ...c, excel: { ...c.excel, startCell: e.target.value } }))}
                           className="border rounded px-2 py-1 text-sm mt-1 font-mono" placeholder="B5" />
                       </label>
-                      <div className="grid grid-cols-2 gap-2">
-                        <NumberInput label="每列圖數" step={1}
-                          value={cfg.autoAlign ? Math.max(1, autoIdxList.length) : cfg.excel.imgsPerRow}
-                          disabled={cfg.autoAlign}
-                          hint={cfg.autoAlign ? `對位模式自動 = ${autoIdxList.length || 0} 欄` : undefined}
-                          onChange={(v) => setCfg((c) => ({ ...c, excel: { ...c.excel, imgsPerRow: Math.max(1, parseInt(v) || 1) } }))} />
-                        <NumberInput label="列間距 (空 row)" step={1} value={cfg.excel.gapRows}
-                          onChange={(v) => setCfg((c) => ({ ...c, excel: { ...c.excel, gapRows: Math.max(0, parseInt(v) || 0) } }))} />
-                      </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <NumberInput label="每張圖跨欄" step={1} value={cfg.excel.cellCols}
-                          onChange={(v) => setCfg((c) => ({ ...c, excel: { ...c.excel, cellCols: Math.max(1, parseInt(v) || 1) } }))} />
-                        <NumberInput label="每張圖跨列" step={1} value={cfg.excel.cellRows}
-                          onChange={(v) => setCfg((c) => ({ ...c, excel: { ...c.excel, cellRows: Math.max(1, parseInt(v) || 1) } }))} />
-                      </div>
+                      <NumberInput label="每列圖數" step={1}
+                        value={cfg.autoAlign ? Math.max(1, autoIdxList.length) : cfg.excel.imgsPerRow}
+                        disabled={cfg.autoAlign}
+                        hint={cfg.autoAlign ? `對位模式自動 = ${autoIdxList.length || 0} 欄` : undefined}
+                        onChange={(v) => setCfg((c) => ({ ...c, excel: { ...c.excel, imgsPerRow: Math.max(1, parseInt(v) || 1) } }))} />
                       <label className="flex flex-col text-xs text-slate-600">
                         SN 寫入欄（留空=不寫）
                         <input value={cfg.excel.snCol}
