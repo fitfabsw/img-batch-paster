@@ -37,8 +37,11 @@
         enabled: true,
         pattern: "{group}-{idx}",
         x: 2,
+        width: 12,        // SN box 固定寬度 (% of slide width)，與圖片 X 解耦
         font_pt: 18,
       },
+      autoAlign: false,   // 依檔名 group+idx 對位 (缺的照片留空)
+      slidesSn: { inCell: false, col: 1, rowStart: 2 },  // PPT/Keynote SN 寫入表格 cell (1-based)
       excel: {
         startCell: "B5",
         imgsPerRow: 4,
@@ -52,6 +55,40 @@
       output: { path: "./out.pptx", template: null },
     };
 
+    // 從 drop 事件取出所有檔案（支援拖資料夾，遞迴讀目錄）
+    async function filesFromDrop(dataTransfer) {
+      const items = dataTransfer.items;
+      if (!items || !items.length) {
+        return Array.from(dataTransfer.files || []);
+      }
+      const entries = [];
+      for (const item of items) {
+        const entry = item.webkitGetAsEntry && item.webkitGetAsEntry();
+        if (entry) entries.push(entry);
+      }
+      if (!entries.length) return Array.from(dataTransfer.files || []);
+      const files = [];
+      const readEntry = (entry) => new Promise((resolve) => {
+        if (entry.isFile) {
+          entry.file((f) => { files.push(f); resolve(); }, () => resolve());
+        } else if (entry.isDirectory) {
+          const reader = entry.createReader();
+          const readBatch = () => {
+            reader.readEntries(async (batch) => {
+              if (!batch.length) { resolve(); return; }
+              for (const e of batch) await readEntry(e);
+              readBatch();
+            }, () => resolve());
+          };
+          readBatch();
+        } else {
+          resolve();
+        }
+      });
+      for (const entry of entries) await readEntry(entry);
+      return files;
+    }
+
     function parseCell(ref) {
       const m = (ref || "").trim().match(/^([A-Za-z]+)(\d+)$/);
       if (!m) return { col: 1, row: 1 };
@@ -62,27 +99,25 @@
     }
 
     // 計算 Excel 的儲存格 placements
-    function computeExcelCells(excel, label, orderedFiles) {
+    function computeExcelCells(excel, label, orderedFiles, autoAlign) {
       if (!orderedFiles || orderedFiles.length === 0) return [];
       const start = parseCell(excel.startCell);
       const snCol = excel.snCol ? parseCell(excel.snCol + "1").col : 0;
       const stepCol = Math.max(1, excel.cellCols);
       const stepRow = Math.max(1, excel.cellRows) + Math.max(0, excel.gapRows);
       const perRow = Math.max(1, excel.imgsPerRow);
+      const rows = buildRows(orderedFiles, label.pattern, perRow, autoAlign);
       const cells = [];
-      for (let i = 0; i < orderedFiles.length; i += perRow) {
-        const row = orderedFiles.slice(i, i + perRow);
-        const rIdx = i / perRow;
+      rows.forEach(({ group, cells: rowCells }, rIdx) => {
         const targetRow = start.row + rIdx * stepRow;
-        // 列標籤（SN）寫入 snCol
         if (label && label.enabled && snCol > 0) {
-          const group = extractGroup(row[0].name || row[0].path.split("/").pop(), label.pattern);
           cells.push({
             row: targetRow, col: snCol, span_cols: 1, span_rows: excel.cellRows,
             text: group, font_pt: label.font_pt,
           });
         }
-        row.forEach((f, ci) => {
+        rowCells.forEach((f, ci) => {
+          if (!f) return;  // 缺的照片留空
           cells.push({
             path: f.path,
             row: targetRow,
@@ -91,7 +126,7 @@
             span_rows: excel.cellRows,
           });
         });
-      }
+      });
       return cells;
     }
 
@@ -107,8 +142,63 @@
       return stem;  // fallback：整個檔名
     }
 
-    // 把檔案依「每頁 cols × rows」切成多頁；每頁從 origin 開始重新計算
-    function computePages(slide, grid, orderedFiles, label) {
+    // 同時抽 group + idx
+    function extractGroupIdx(filename, pattern) {
+      const stem = filename.replace(/\.[^./]+$/, "");
+      const escaped = pattern.replace(/[.+?^$()|\[\]\\]/g, "\\$&")
+        .replace("{group}", "(.+?)").replace("{idx}", "(.+?)");
+      try {
+        const m = stem.match(new RegExp("^" + escaped + "$"));
+        if (m) return { group: m[1] || stem, idx: m[2] || null };
+      } catch (e) {}
+      return { group: stem, idx: null };
+    }
+
+    // idx → 欄位 index (0-based)。A/B/C→0/1/2，或 1/2/3→0/1/2
+    function idxToCol(idx) {
+      if (idx == null) return null;
+      const s = String(idx).trim();
+      if (/^[A-Za-z]$/.test(s)) return s.toUpperCase().charCodeAt(0) - 65;
+      const n = parseInt(s, 10);
+      return isNaN(n) ? null : n - 1;
+    }
+
+    // 依檔名 group+idx 把檔案排成 rows[group] = [col0, col1, ...]，缺的留 null
+    function groupBySnIdx(orderedFiles, pattern, cols) {
+      const groups = [];        // 保留首見順序
+      const map = {};           // group -> array(cols) of file|null
+      for (const f of orderedFiles) {
+        const { group, idx } = extractGroupIdx(f.name || f.path.split("/").pop(), pattern);
+        if (!(group in map)) { map[group] = new Array(cols).fill(null); groups.push(group); }
+        let col = idxToCol(idx);
+        if (col == null || col < 0 || col >= cols) {
+          // idx 無法解析 → 放到該 group 第一個空位
+          col = map[group].findIndex((x) => x === null);
+          if (col < 0) col = 0;
+        }
+        map[group][col] = f;
+      }
+      return groups.map((g) => ({ group: g, cells: map[g] }));
+    }
+
+    // 建立 rows：每個 = { group, cells: [file|null × cols] }
+    // autoAlign=true 依檔名 group+idx 對位 (缺的留空)；false 則順序填滿
+    function buildRows(orderedFiles, pattern, cols, autoAlign) {
+      if (autoAlign) return groupBySnIdx(orderedFiles, pattern, cols);
+      const rows = [];
+      for (let i = 0; i < orderedFiles.length; i += cols) {
+        const slice = orderedFiles.slice(i, i + cols);
+        const cells = new Array(cols).fill(null);
+        slice.forEach((f, ci) => { cells[ci] = f; });
+        const a = slice.find((f) => f);
+        const group = a ? extractGroup(a.name || a.path.split("/").pop(), pattern) : "";
+        rows.push({ group, cells });
+      }
+      return rows;
+    }
+
+    // 把 rows 依「每頁 rows」切成多頁；每頁從 origin 重新計算
+    function computePages(slide, grid, orderedFiles, label, autoAlign) {
       if (!orderedFiles || orderedFiles.length === 0) return [];
       const W = slide.width_cm, H = slide.height_cm;
       const ox = W * grid.origin.x / 100;
@@ -117,41 +207,33 @@
       const gx = W * grid.gap.x / 100;
       const gy = H * grid.gap.y / 100;
       const cols = Math.max(1, grid.cols);
-      const rows = Math.max(1, grid.rows);
-      const perPage = cols * rows;
+      const rowsPerPage = Math.max(1, grid.rows);
 
+      const allRows = buildRows(orderedFiles, label.pattern, cols, autoAlign);
       const pages = [];
-      for (let p = 0; p < orderedFiles.length; p += perPage) {
-        const pageFiles = orderedFiles.slice(p, p + perPage);
+      for (let p = 0; p < allRows.length; p += rowsPerPage) {
+        const pageRows = allRows.slice(p, p + rowsPerPage);
         const placements = [];
         let cur_y = oy;
-        for (let i = 0; i < pageFiles.length; i += cols) {
-          const row = pageFiles.slice(i, i + cols);
-          const anchor = row[0];
-          const aspect = anchor.h && anchor.w ? anchor.h / anchor.w : 0.75;
+        let rowIdxInPage = 0;
+        for (const { group, cells } of pageRows) {
+          const anchor = cells.find((c) => c);
+          const aspect = anchor && anchor.h && anchor.w ? anchor.h / anchor.w : 0.75;
           const row_h = w * aspect;
-          // 列標籤：抽 group from first file's name；寬度 = 「label.x → origin.x」這段
           if (label && label.enabled) {
-            const group = extractGroup(anchor.name || anchor.path.split("/").pop(), label.pattern);
             const lx_cm = W * label.x / 100;
-            const lw_cm = Math.max(0.5, ox - lx_cm);
+            const lw_cm = W * (label.width || 12) / 100;
             placements.push({
-              text: group,
-              x_cm: lx_cm,
-              y_cm: cur_y,
-              w_cm: lw_cm,
-              h_cm: row_h,
-              font_pt: label.font_pt,
-              align: "center",
-              bold: true,
+              text: group, x_cm: lx_cm, y_cm: cur_y, w_cm: lw_cm, h_cm: row_h,
+              font_pt: label.font_pt, align: "center", bold: true,
+              row_idx: rowIdxInPage,
             });
           }
-          row.forEach((f, ci) => {
+          rowIdxInPage++;
+          cells.forEach((f, ci) => {
+            if (!f) return;  // 缺的照片留空，不遞補
             placements.push({
-              path: f.path,
-              x_cm: ox + ci * (w + gx),
-              y_cm: cur_y,
-              w_cm: w, h_cm: row_h,
+              path: f.path, x_cm: ox + ci * (w + gx), y_cm: cur_y, w_cm: w, h_cm: row_h,
             });
           });
           cur_y += row_h + gy;
@@ -276,7 +358,7 @@
       grid.cells.forEach((cell) => { cellMap[`${cell.r},${cell.c}`] = cell; });
 
       // 我們的 placements
-      const placements = computeExcelCells(cfg.excel, cfg.label, orderedFiles);
+      const placements = computeExcelCells(cfg.excel, cfg.label, orderedFiles, cfg.autoAlign);
 
       const alignToFlex = { left: "flex-start", center: "center", right: "flex-end" };
       const vAlignToFlex = { top: "flex-start", center: "center", middle: "center", bottom: "flex-end" };
@@ -368,10 +450,17 @@
                   }}>{pl.text}</div>
                 );
               }
+              const fit = cfg.excel?.imgFit || "cover";
+              const inset = fit === "contain" ? 0.05 : 0;  // 四邊留白
               return (
                 <img key={`my-${i}`}
                   src={`/api/thumb?path=${encodeURIComponent(pl.path)}&size=400`}
-                  style={{ position: "absolute", left: x, top: y, width: w, height: h, objectFit: cfg.excel?.imgFit || "cover" }}
+                  style={{
+                    position: "absolute",
+                    left: x + w * inset, top: y + h * inset,
+                    width: w * (1 - 2 * inset), height: h * (1 - 2 * inset),
+                    objectFit: fit,
+                  }}
                   className={selected === pl.path ? "ring-2 ring-emerald-500" : ""} />
               );
             })}
@@ -384,7 +473,14 @@
       const [cfg, setCfg] = useState(DEFAULTS);
       const [files, setFiles] = useState([]);          // 原始檔案清單（由後端掃描）
       const [order, setOrder] = useState([]);          // 使用者調整後的順序 (paths array)
-      const [selected, setSelected] = useState(null);  // 目前選中的 path
+      const [selected, setSelected] = useState(null);  // 預覽 highlight (最後點的)
+      const [selectedPaths, setSelectedPaths] = useState([]);  // 多選
+      const anchorRef = useRef(0);                     // shift 範圍錨點
+      const dragFromRef = useRef(null);                // 拖曳來源 path
+      const [dragOverIdx, setDragOverIdx] = useState(null);  // 拖曳插入位置指示
+      const listRef = useRef(null);                    // 檔案清單捲動容器
+      const scrollDirRef = useRef(0);
+      const scrollRafRef = useRef(null);
       const [currentPage, setCurrentPage] = useState(0);
       const [status, setStatus] = useState("");
       const [busy, setBusy] = useState(false);
@@ -393,6 +489,8 @@
       const [tpl, setTpl] = useState(null);
       const [mode, setMode] = useState("slides");
       const [xlGrid, setXlGrid] = useState(null);
+      const [dragTpl, setDragTpl] = useState(false);
+      const [dragImg, setDragImg] = useState(false);
       const [ws, setWs] = useState("");
       const [zoom, setZoom] = useState(1);
       const stageWrapRef = useRef(null);
@@ -545,6 +643,21 @@
         finally { setBusy(false); }
       };
 
+      // drag-drop handlers
+      const onDropTemplate = async (e) => {
+        e.preventDefault(); setDragTpl(false);
+        const fs = await filesFromDrop(e.dataTransfer);
+        const tpl = fs.find((f) => /\.(pptx|key|xlsx)$/i.test(f.name)) || fs[0];
+        if (tpl) uploadTemplate(tpl);
+      };
+      const onDropImages = async (e) => {
+        e.preventDefault(); setDragImg(false);
+        const fs = await filesFromDrop(e.dataTransfer);
+        const imgs = fs.filter((f) => /\.(png|jpe?g)$/i.test(f.name));
+        if (imgs.length) uploadImages(imgs);
+        else setStatus("拖入的內容沒有圖片檔 (png/jpg)");
+      };
+
       const doScanFolder = async (folder) => {
         const r = await fetch("/api/scan", {
           method: "POST",
@@ -618,7 +731,7 @@
           }
           let body;
           if (mode === "excel") {
-            const cells = computeExcelCells(cfg.excel, cfg.label, arr);
+            const cells = computeExcelCells(cfg.excel, cfg.label, arr, cfg.autoAlign);
             if (cells.length === 0) throw new Error("沒有可匯出的圖片");
             setStatus(`匯出 Excel 中… (${cells.length} 格)`);
             body = JSON.stringify({
@@ -627,10 +740,15 @@
               imgFit: cfg.excel.imgFit || "cover",
             });
           } else {
-            const pages = computePages(cfg.slide, cfg.grid, arr, cfg.label);
+            const pages = computePages(cfg.slide, cfg.grid, arr, cfg.label, cfg.autoAlign);
             if (pages.length === 0) throw new Error("沒有可匯出的圖片");
             setStatus(`匯出中… (${pages.length} 頁)`);
-            body = JSON.stringify({ slide: cfg.slide, pages, output: cfg.output, workspace: ws });
+            body = JSON.stringify({
+              slide: cfg.slide, pages, output: cfg.output, workspace: ws,
+              snInCell: cfg.label.enabled && cfg.slidesSn.inCell,
+              snCol: Math.max(0, (cfg.slidesSn.col || 1) - 1),
+              snRowStart: Math.max(0, (cfg.slidesSn.rowStart || 2) - 1),
+            });
           }
           const r = await fetch("/api/export", {
             method: "POST",
@@ -653,27 +771,134 @@
         finally { setBusy(false); }
       };
 
-      // --- 排序操作 ---
-      const moveBy = (path, delta) => {
+      // --- 選取 ---
+      const selPathsOrFallback = () =>
+        selectedPaths.length ? selectedPaths : (selected ? [selected] : []);
+
+      const onItemClick = (e, path, idx) => {
+        if (e.shiftKey && anchorRef.current != null) {
+          const a = anchorRef.current, b = idx;
+          const [lo, hi] = a < b ? [a, b] : [b, a];
+          setSelectedPaths(orderedFiles.slice(lo, hi + 1).map((f) => f.path));
+        } else if (e.metaKey || e.ctrlKey) {
+          setSelectedPaths((prev) =>
+            prev.includes(path) ? prev.filter((p) => p !== path) : [...prev, path]);
+          anchorRef.current = idx;
+        } else {
+          setSelectedPaths([path]);
+          anchorRef.current = idx;
+          setCurrentPage(Math.floor(idx / Math.max(1, cfg.grid.cols * cfg.grid.rows)));
+        }
+        setSelected(path);
+      };
+
+      // --- 排序 / 刪除 ---
+      const moveSelected = (delta) => {
+        const sel = new Set(selPathsOrFallback());
+        if (!sel.size) return;
         setOrder((o) => {
-          const idx = o.indexOf(path);
-          if (idx < 0) return o;
-          const tgt = idx + delta;
-          if (tgt < 0 || tgt >= o.length) return o;
           const next = [...o];
-          [next[idx], next[tgt]] = [next[tgt], next[idx]];
+          const idxs = next.map((p, i) => (sel.has(p) ? i : -1)).filter((i) => i >= 0);
+          const seq = delta < 0 ? idxs : [...idxs].reverse();
+          for (const i of seq) {
+            const t = i + delta;
+            if (t < 0 || t >= next.length || sel.has(next[t])) continue;
+            [next[i], next[t]] = [next[t], next[i]];
+          }
           return next;
         });
       };
-      const moveTop    = (path) => setOrder((o) => [path, ...o.filter((p) => p !== path)]);
-      const moveBottom = (path) => setOrder((o) => [...o.filter((p) => p !== path), path]);
-      const resetSort  = () => setOrder([...files].sort((a, b) => a.name.localeCompare(b.name)).map((f) => f.path));
+      const moveTop = () => {
+        const sel = new Set(selPathsOrFallback());
+        if (!sel.size) return;
+        setOrder((o) => [...o.filter((p) => sel.has(p)), ...o.filter((p) => !sel.has(p))]);
+      };
+      const moveBottom = () => {
+        const sel = new Set(selPathsOrFallback());
+        if (!sel.size) return;
+        setOrder((o) => [...o.filter((p) => !sel.has(p)), ...o.filter((p) => sel.has(p))]);
+      };
+      const deleteSelected = () => {
+        const sel = new Set(selPathsOrFallback());
+        if (!sel.size) return;
+        setOrder((o) => o.filter((p) => !sel.has(p)));
+        setFiles((fs) => fs.filter((f) => !sel.has(f.path)));
+        setSelectedPaths([]);
+        setSelected(null);
+      };
+      const resetSort = () => {
+        setOrder([...files].sort((a, b) => a.name.localeCompare(b.name)).map((f) => f.path));
+        setSelectedPaths([]);
+      };
+
+      // --- 拖曳重排 ---
+      // 拖曳到清單上/下緣自動捲動
+      const startAutoScroll = () => {
+        if (scrollRafRef.current) return;
+        const step = () => {
+          const el = listRef.current;
+          if (el && scrollDirRef.current !== 0) el.scrollTop += scrollDirRef.current * 10;
+          scrollRafRef.current = requestAnimationFrame(step);
+        };
+        scrollRafRef.current = requestAnimationFrame(step);
+      };
+      const stopAutoScroll = () => {
+        if (scrollRafRef.current) { cancelAnimationFrame(scrollRafRef.current); scrollRafRef.current = null; }
+        scrollDirRef.current = 0;
+      };
+      const onListDragOver = (e) => {
+        const el = listRef.current;
+        if (!el) return;
+        const rect = el.getBoundingClientRect();
+        const EDGE = 48;
+        if (e.clientY < rect.top + EDGE) scrollDirRef.current = -1;
+        else if (e.clientY > rect.bottom - EDGE) scrollDirRef.current = 1;
+        else scrollDirRef.current = 0;
+        if (scrollDirRef.current !== 0) startAutoScroll();
+        else stopAutoScroll();
+      };
+
+      const onItemDragStart = (e, path) => {
+        const inSel = selectedPaths.includes(path);
+        if (!inSel) { setSelectedPaths([path]); setSelected(path); }
+        dragFromRef.current = path;
+        e.dataTransfer.effectAllowed = "move";
+        // 多選時顯示「移動 N 個檔案」的拖曳殘影
+        const count = inSel ? selectedPaths.length : 1;
+        if (count > 1) {
+          const ghost = document.createElement("div");
+          ghost.textContent = `移動 ${count} 個檔案`;
+          ghost.style.cssText =
+            "position:absolute;top:-1000px;left:-1000px;padding:6px 12px;" +
+            "background:#059669;color:#fff;border-radius:8px;font-size:13px;" +
+            "font-weight:600;box-shadow:0 4px 12px rgba(0,0,0,.25);white-space:nowrap;";
+          document.body.appendChild(ghost);
+          e.dataTransfer.setDragImage(ghost, 12, 12);
+          setTimeout(() => { try { document.body.removeChild(ghost); } catch (_) {} }, 0);
+        }
+      };
+      const onItemDrop = (e, targetPath) => {
+        e.preventDefault();
+        const from = dragFromRef.current;
+        setDragOverIdx(null);
+        if (!from) return;
+        const movingSet = new Set(selectedPaths.includes(from) ? selectedPaths : [from]);
+        setOrder((o) => {
+          const movingOrdered = o.filter((p) => movingSet.has(p));
+          const without = o.filter((p) => !movingSet.has(p));
+          let at = without.indexOf(targetPath);
+          if (at < 0) at = without.length;
+          return [...without.slice(0, at), ...movingOrdered, ...without.slice(at)];
+        });
+        dragFromRef.current = null;
+        stopAutoScroll();
+      };
 
       // --- 預覽 ---
       const STAGE_W = 640;
       const scale = STAGE_W / cfg.slide.width_cm;
       const stageH = cfg.slide.height_cm * scale;
-      const pages = computePages(cfg.slide, cfg.grid, orderedFiles, cfg.label);
+      const pages = computePages(cfg.slide, cfg.grid, orderedFiles, cfg.label, cfg.autoAlign);
       const imgW_cm = cfg.slide.width_cm * cfg.grid.width / 100;
       const firstAnchor = orderedFiles[0];
       const previewH_cm = firstAnchor && firstAnchor.w ? imgW_cm * (firstAnchor.h / firstAnchor.w) : null;
@@ -696,10 +921,13 @@
               <div className="p-3 space-y-3 overflow-y-auto flex-1">
                 <div>
                   <label className="text-sm font-medium">範本 (.pptx / .key / .xlsx)</label>
-                  <div className="flex gap-1 mt-1">
+                  <div className="flex gap-1 mt-1"
+                    onDragOver={(e) => { e.preventDefault(); setDragTpl(true); }}
+                    onDragLeave={() => setDragTpl(false)}
+                    onDrop={onDropTemplate}>
                     <button onClick={() => tplInputRef.current?.click()}
-                      className="flex-1 border rounded px-2 py-1 text-sm hover:bg-slate-100 text-left truncate">
-                      📤 {tplName || (tplPath ? tplPath.split("/").pop() : "上傳範本…")}
+                      className={`flex-1 border rounded px-2 py-1 text-sm text-left truncate ${dragTpl ? "border-emerald-500 bg-emerald-50" : "hover:bg-slate-100"}`}>
+                      📤 {tplName || (tplPath ? tplPath.split("/").pop() : (dragTpl ? "放開以上傳…" : "上傳 / 拖入範本…"))}
                     </button>
                     <button onClick={useDefaultTemplate} title="使用預設範本"
                       className="border rounded px-2 py-1 text-xs hover:bg-slate-100">
@@ -710,15 +938,18 @@
                       className="hidden"
                       onChange={(e) => uploadTemplate(e.target.files?.[0])} />
                   </div>
-                  <div className="text-[10px] text-slate-400 mt-1">.key 需 server 在 macOS（Keynote 轉檔約 10-30 秒）</div>
+                  <div className="text-[10px] text-slate-400 mt-1">可拖拉檔案；.key 需 server 在 macOS（Keynote 轉檔約 10-30 秒）</div>
                 </div>
 
                 <div>
                   <label className="text-sm font-medium">圖片資料夾</label>
-                  <div className="flex gap-1 mt-1">
+                  <div className="flex gap-1 mt-1"
+                    onDragOver={(e) => { e.preventDefault(); setDragImg(true); }}
+                    onDragLeave={() => setDragImg(false)}
+                    onDrop={onDropImages}>
                     <button onClick={() => imgInputRef.current?.click()}
-                      className="flex-1 border rounded px-2 py-1 text-sm hover:bg-slate-100 text-left truncate">
-                      📤 {files.length > 0 ? `已上傳 ${files.length} 張` : "上傳圖片資料夾…"}
+                      className={`flex-1 border rounded px-2 py-1 text-sm text-left truncate ${dragImg ? "border-emerald-500 bg-emerald-50" : "hover:bg-slate-100"}`}>
+                      📤 {files.length > 0 ? `已上傳 ${files.length} 張` : (dragImg ? "放開以上傳…" : "上傳 / 拖入圖片資料夾…")}
                     </button>
                     <input ref={imgInputRef} type="file" multiple
                       webkitdirectory="" directory=""
@@ -819,10 +1050,35 @@
                       <NumberInput label="字體" suffix="pt" step={1} value={cfg.label.font_pt}
                         onChange={(v) => setCfg((c) => ({ ...c, label: { ...c.label, font_pt: v } }))} />
                       <div className="text-[10px] text-slate-400">
-                        X 位置請用預覽下方的「SN X」stepper；標籤寬度自動 = SN X → 第一張圖左緣
+                        X 位置請用預覽下方的「SN X」stepper（與圖片 X 獨立，不連動）
                       </div>
+                      {mode === "slides" && (
+                        <div className="pt-2 border-t">
+                          <label className="flex items-center gap-2 text-xs text-slate-700">
+                            <input type="checkbox" checked={cfg.slidesSn.inCell}
+                              onChange={(e) => setCfg((c) => ({ ...c, slidesSn: { ...c.slidesSn, inCell: e.target.checked } }))} />
+                            <span>SN 寫入表格儲存格（非浮動文字）</span>
+                          </label>
+                          {cfg.slidesSn.inCell && (
+                            <div className="grid grid-cols-2 gap-2 mt-2">
+                              <NumberInput label="SN 第幾欄" step={1} value={cfg.slidesSn.col}
+                                onChange={(v) => setCfg((c) => ({ ...c, slidesSn: { ...c.slidesSn, col: Math.max(1, parseInt(v) || 1) } }))} />
+                              <NumberInput label="從第幾列起" step={1} value={cfg.slidesSn.rowStart}
+                                onChange={(v) => setCfg((c) => ({ ...c, slidesSn: { ...c.slidesSn, rowStart: Math.max(1, parseInt(v) || 1) } }))} />
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
+                  <label className="flex items-center gap-2 text-xs text-slate-700 mt-3 pt-2 border-t">
+                    <input type="checkbox" checked={cfg.autoAlign}
+                      onChange={(e) => setCfg((c) => ({ ...c, autoAlign: e.target.checked }))} />
+                    <span>依檔名 idx 對位（缺照片留空、不遞補）</span>
+                  </label>
+                  <div className="text-[10px] text-slate-400">
+                    依 pattern 的 idx (A/B/C 或 1/2/3) 對應到欄位；某 SN 缺某張，該欄留空
+                  </div>
                 </div>
 
                 <div className="border-t pt-3">
@@ -867,6 +1123,9 @@
               <div className="p-3 border-b flex items-center justify-between">
                 <div className="text-sm font-semibold">
                   檔案 <span className="text-slate-400 font-normal">({orderedFiles.length})</span>
+                  {selectedPaths.length > 0 && (
+                    <span className="text-emerald-600 font-normal ml-1">· 選 {selectedPaths.length}</span>
+                  )}
                 </div>
                 <button onClick={resetSort} disabled={files.length === 0}
                   title="依檔名 A→Z 排序"
@@ -874,42 +1133,63 @@
                   A→Z
                 </button>
               </div>
-              <div className="flex-1 overflow-y-auto p-2 space-y-1">
+              <div ref={listRef} className="flex-1 overflow-y-auto p-2 space-y-1"
+                onClick={(e) => { if (e.target === e.currentTarget) { setSelectedPaths([]); setSelected(null); } }}
+                onDragOver={onListDragOver}
+                onDragEnd={() => { setDragOverIdx(null); stopAutoScroll(); }}
+                onDragLeave={(e) => { if (e.target === e.currentTarget) { setDragOverIdx(null); stopAutoScroll(); } }}>
+
                 {orderedFiles.length === 0 && (
                   <div className="text-xs text-slate-400 text-center py-8">
-                    指定資料夾後按「掃描」
+                    上傳圖片資料夾後顯示
                   </div>
                 )}
-                {orderedFiles.map((f, idx) => (
-                  <div key={f.path}
-                    onClick={() => {
-                      setSelected(f.path);
-                      setCurrentPage(Math.floor(idx / Math.max(1, cfg.grid.cols * cfg.grid.rows)));
-                    }}
-                    className={`flex items-center gap-2 rounded p-1 cursor-pointer ${
-                      selected === f.path ? "bg-emerald-50 ring-1 ring-emerald-300" : "hover:bg-slate-50"
-                    }`}>
-                    <div className="text-xs text-slate-400 w-6 text-right tabular-nums">{idx + 1}</div>
-                    <img src={`/api/thumb?path=${encodeURIComponent(f.path)}&size=80`}
-                      className="w-10 h-10 object-cover border rounded" />
-                    <div className="flex-1 min-w-0 text-xs truncate" title={f.name}>{f.name}</div>
-                    <div className="flex flex-col">
-                      <button onClick={(e) => { e.stopPropagation(); moveBy(f.path, -1); }}
-                        disabled={idx === 0}
-                        className="text-[10px] leading-none px-1 disabled:opacity-30 hover:bg-slate-200 rounded">▲</button>
-                      <button onClick={(e) => { e.stopPropagation(); moveBy(f.path, +1); }}
-                        disabled={idx === orderedFiles.length - 1}
-                        className="text-[10px] leading-none px-1 disabled:opacity-30 hover:bg-slate-200 rounded">▼</button>
+                {orderedFiles.map((f, idx) => {
+                  const isSel = selectedPaths.includes(f.path);
+                  return (
+                    <div key={f.path}
+                      draggable
+                      onDragStart={(e) => onItemDragStart(e, f.path)}
+                      onDragOver={(e) => { e.preventDefault(); if (dragOverIdx !== idx) setDragOverIdx(idx); }}
+                      onDrop={(e) => onItemDrop(e, f.path)}
+                      onClick={(e) => onItemClick(e, f.path, idx)}
+                      style={{ boxShadow: dragOverIdx === idx ? "inset 0 2px 0 0 #059669" : "" }}
+                      className={`flex items-center gap-2 rounded p-1 cursor-pointer select-none ${
+                        isSel ? "bg-emerald-100 ring-1 ring-emerald-400" : "hover:bg-slate-50"
+                      }`}>
+                      <div className="text-xs text-slate-400 w-6 text-right tabular-nums">{idx + 1}</div>
+                      <img src={`/api/thumb?path=${encodeURIComponent(f.path)}&size=80`}
+                        className="w-10 h-10 object-cover border rounded pointer-events-none" />
+                      <div className="flex-1 min-w-0 text-xs truncate" title={f.name}>{f.name}</div>
+                      <div className="text-slate-300 text-xs pr-1" title="拖曳排序">⋮⋮</div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
+                {/* 拖到最底：放在清單末端的 drop zone */}
+                <div
+                  onDragOver={(e) => { e.preventDefault(); setDragOverIdx(orderedFiles.length); }}
+                  onDrop={(e) => onItemDrop(e, null)}
+                  style={{ height: 12, boxShadow: dragOverIdx === orderedFiles.length ? "inset 0 2px 0 0 #059669" : "" }} />
               </div>
-              {selected && (
-                <div className="border-t p-2 flex gap-1 text-xs">
-                  <button onClick={() => moveTop(selected)}
-                    className="flex-1 border rounded py-1 hover:bg-slate-100">置頂</button>
-                  <button onClick={() => moveBottom(selected)}
-                    className="flex-1 border rounded py-1 hover:bg-slate-100">置底</button>
+              {orderedFiles.length > 0 && (
+                <div className="border-t p-2 space-y-1">
+                  <div className="flex gap-1 text-xs">
+                    <button onClick={() => moveSelected(-1)} disabled={!selPathsOrFallback().length}
+                      className="flex-1 border rounded py-1 hover:bg-slate-100 disabled:opacity-40">▲ 上移</button>
+                    <button onClick={() => moveSelected(1)} disabled={!selPathsOrFallback().length}
+                      className="flex-1 border rounded py-1 hover:bg-slate-100 disabled:opacity-40">▼ 下移</button>
+                    <button onClick={moveTop} disabled={!selPathsOrFallback().length}
+                      className="flex-1 border rounded py-1 hover:bg-slate-100 disabled:opacity-40">置頂</button>
+                    <button onClick={moveBottom} disabled={!selPathsOrFallback().length}
+                      className="flex-1 border rounded py-1 hover:bg-slate-100 disabled:opacity-40">置底</button>
+                  </div>
+                  <button onClick={deleteSelected} disabled={!selPathsOrFallback().length}
+                    className="w-full border border-red-300 text-red-600 rounded py-1 text-xs hover:bg-red-50 disabled:opacity-40">
+                    刪除選取 ({selPathsOrFallback().length})
+                  </button>
+                  <div className="text-[10px] text-slate-400 text-center">
+                    Shift＝範圍選取 · ⌘/Ctrl＝多選 · 拖曳＝排序
+                  </div>
                 </div>
               )}
             </div>

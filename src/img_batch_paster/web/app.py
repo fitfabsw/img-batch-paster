@@ -415,6 +415,7 @@ def api_export():
             font_pt=float(p.get("font_pt", 18)),
             bold=bool(p.get("bold", True)),
             align=p.get("align", "center"),
+            row_idx=p.get("row_idx"),
         )
 
     if "pages" in data:
@@ -425,12 +426,17 @@ def api_export():
     if not pages or all(len(p) == 0 for p in pages):
         return jsonify({"error": "沒有可匯出的圖片"}), 400
 
+    sn_in_cell = bool(data.get("snInCell"))
+    sn_col = int(data.get("snCol", 0))
+    sn_row_start = int(data.get("snRowStart", 1))
+
     # 副檔名 .key → 先輸出 .pptx，再經由 Keynote 轉成 .key
     want_key = out_path.suffix.lower() == ".key"
     pptx_out = out_path.with_suffix(".pptx") if want_key else out_path
     write_pages(
         float(slide["width_cm"]), float(slide["height_cm"]),
         pages, pptx_out, template_path,
+        sn_in_cell=sn_in_cell, sn_col=sn_col, sn_row_start=sn_row_start,
     )
 
     if want_key:

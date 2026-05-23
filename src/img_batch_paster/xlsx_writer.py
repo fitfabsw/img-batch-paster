@@ -34,6 +34,10 @@ def excel_row_to_px(h: float) -> float:
     return h * 4 / 3
 
 
+# contain 模式四邊留白比例 (每邊佔 cell 的 5%)
+_CONTAIN_INSET = 0.05
+
+
 def _default_mdw(wb) -> float:
     """根據範本預設字體大小估算 MDW。
     Calibri/新細明體 11 → 7；12 → ~8；14 → ~9。粗略線性。
@@ -163,15 +167,17 @@ def write_xlsx(
             )
             ws._images.append(img)
         elif img_fit == "contain":
-            # 保長寬比、完整放入 cell；置中 (上下/左右白邊均分)
+            # 保長寬比、放入 cell 並四邊留白置中
             with PILImage.open(p.path) as im:
                 iw, ih = im.size
             aspect = ih / iw if iw else 1.0
-            fit_w = target_w
+            avail_w = target_w * (1 - 2 * _CONTAIN_INSET)
+            avail_h = target_h * (1 - 2 * _CONTAIN_INSET)
+            fit_w = avail_w
             fit_h = fit_w * aspect
-            if fit_h > target_h and target_h > 0:
-                fit_h = target_h
-                fit_w = fit_h / aspect if aspect else target_w
+            if fit_h > avail_h and avail_h > 0:
+                fit_h = avail_h
+                fit_w = fit_h / aspect if aspect else avail_w
             col_off_px = max(0.0, (target_w - fit_w) / 2)
             row_off_px = max(0.0, (target_h - fit_h) / 2)
             img = XLImage(str(p.path))
