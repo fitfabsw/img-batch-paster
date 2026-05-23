@@ -14,7 +14,7 @@ from ..grouper import scan_folder
 from ..pptx_writer import Placement, write_pages, write_placements
 from ..xlsx_writer import CellPlacement, write_xlsx
 from ..keynote_export import convert_key_to_pptx, convert_pptx_to_key
-from .template_render import render_first_slide, slide_size_cm
+from .template_render import render_first_slide, slide_size_cm, prewarm_libreoffice
 
 STATIC_DIR = Path(__file__).parent / "static"
 UPLOAD_DIR = Path(tempfile.gettempdir()) / "img-batch-paster-uploads"
@@ -463,6 +463,8 @@ def api_export():
 @click.option("--desktop", is_flag=True, help="以 pywebview 桌面視窗開啟")
 def run(host: str, port: int, desktop: bool) -> None:
     """啟動 Web 預覽伺服器。"""
+    # 背景暖機 LibreOffice profile，讓使用者第一次上傳範本時不用等冷啟動
+    prewarm_libreoffice(DEFAULT_TEMPLATE)
     if desktop:
         try:
             import webview  # type: ignore

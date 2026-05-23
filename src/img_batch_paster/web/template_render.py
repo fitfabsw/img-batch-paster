@@ -5,6 +5,7 @@ import hashlib
 import shutil
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
 from pptx import Presentation
@@ -12,6 +13,11 @@ from pptx.util import Emu
 
 CACHE_DIR = Path(tempfile.gettempdir()) / "img-batch-paster-cache"
 CACHE_DIR.mkdir(exist_ok=True)
+
+# LibreOffice 持久 user profile：第一次冷啟仍慢，但後續呼叫快很多
+_LO_PROFILE = Path(tempfile.gettempdir()) / "img-batch-paster-lo-profile"
+_warm_started = False
+_warm_lock = threading.Lock()
 
 
 def _cache_key(path: Path) -> str:
@@ -51,7 +57,10 @@ def render_first_slide(pptx_path: Path) -> Path:
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         result = subprocess.run(
-            [soffice, "--headless", "--convert-to", "png", "--outdir", str(tmp_path), str(pptx_path)],
+            [soffice, "--headless", "--convert-to", "png",
+             "--outdir", str(tmp_path),
+             f"-env:UserInstallation=file://{_LO_PROFILE}",
+             str(pptx_path)],
             capture_output=True, text=True, timeout=120,
         )
         if result.returncode != 0:
@@ -61,3 +70,22 @@ def render_first_slide(pptx_path: Path) -> Path:
             raise RuntimeError("soffice 未產出 PNG")
         shutil.move(str(produced[0]), out_png)
     return out_png
+
+
+def prewarm_libreoffice(default_pptx: Path) -> None:
+    """背景啟動 LibreOffice 把 profile 暖起來 — 用戶第一次上傳就不會等冷啟動。"""
+    global _warm_started
+    with _warm_lock:
+        if _warm_started:
+            return
+        _warm_started = True
+    if not has_soffice() or not default_pptx.is_file():
+        return
+
+    def _run():
+        try:
+            render_first_slide(default_pptx)
+        except Exception:
+            pass
+
+    threading.Thread(target=_run, daemon=True).start()
