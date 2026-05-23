@@ -686,7 +686,7 @@
                     width: w * (1 - 2 * inset), height: h * (1 - 2 * inset),
                     objectFit: fit,
                   }}
-                  className={selected === pl.path ? "ring-2 ring-emerald-500" : ""} />
+                  className={selected === pl.path ? "ring-4 ring-emerald-500 shadow-[0_0_18px_4px_rgba(16,185,129,0.7)] z-10" : ""} />
               );
             })}
           </div>
@@ -772,6 +772,38 @@
         const map = new Map(files.map((f) => [f.path, f]));
         return order.map((p) => map.get(p)).filter(Boolean);
       }, [files, order]);
+
+      // 鍵盤上下方向鍵切換選取（焦點不在輸入框時才生效）
+      useEffect(() => {
+        const onKey = (e) => {
+          if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+          const t = e.target;
+          const tag = t && t.tagName;
+          if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (t && t.isContentEditable)) return;
+          if (!orderedFiles.length) return;
+          const curIdx = selected ? orderedFiles.findIndex((f) => f.path === selected) : -1;
+          const delta = e.key === "ArrowDown" ? 1 : -1;
+          let nxt = curIdx < 0 ? 0 : curIdx + delta;
+          if (nxt < 0) nxt = 0;
+          if (nxt >= orderedFiles.length) nxt = orderedFiles.length - 1;
+          if (nxt === curIdx) return;
+          e.preventDefault();
+          const target = orderedFiles[nxt];
+          setSelected(target.path);
+          setSelectedPaths([target.path]);
+          anchorRef.current = nxt;
+          setCurrentPage(Math.floor(nxt / Math.max(1, cfg.grid.cols * cfg.grid.rows)));
+          // 自動捲動讓選中項目可見
+          requestAnimationFrame(() => {
+            const el = listRef.current;
+            if (!el) return;
+            const item = el.querySelector(`[data-idx="${nxt}"]`);
+            if (item && item.scrollIntoView) item.scrollIntoView({ block: "nearest" });
+          });
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+      }, [orderedFiles, selected, cfg.grid.cols, cfg.grid.rows]);
 
       const setGrid = (path, value) => {
         setCfg((c) => {
@@ -1371,6 +1403,7 @@
                   const isSel = selectedPaths.includes(f.path);
                   return (
                     <div key={f.path}
+                      data-idx={idx}
                       draggable
                       onDragStart={(e) => onItemDragStart(e, f.path)}
                       onDragOver={(e) => { e.preventDefault(); if (dragOverIdx !== idx) setDragOverIdx(idx); }}
@@ -1527,7 +1560,7 @@
                             <img key={i}
                               src={`/api/thumb?path=${encodeURIComponent(pl.path)}&size=400`}
                               style={style}
-                              className={selected === pl.path ? "ring-2 ring-emerald-500" : "border border-slate-300"} />
+                              className={selected === pl.path ? "ring-4 ring-emerald-500 shadow-[0_0_18px_4px_rgba(16,185,129,0.7)] z-10 relative" : "border border-slate-300"} />
                           );
                         })}
                           </div>
