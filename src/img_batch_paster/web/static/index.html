@@ -425,29 +425,21 @@
                 )}
               </div>
 
-              <div className="pt-2 border-t">
-                <label className="flex items-center gap-2 text-xs text-slate-700">
-                  <input type="checkbox" checked={autoAlign}
-                    onChange={(e) => setCfg((c) => ({ ...c, autoAlign: e.target.checked }))} />
-                  <b>依檔名對位</b>
-                  <span className="text-slate-400">（缺照片留空、不遞補）</span>
-                </label>
-                {autoAlign && (
-                  <div className="mt-2">
-                    <div className="text-xs text-slate-700 mb-1">對位用哪一段？</div>
-                    <ChipRow selectedIdx={idxIdx} onPick={toggleIdx} kind="idx" />
-                    {idxIdx >= 0 ? (
-                      <div className="text-[10px] text-slate-500 mt-1">
-                        該段內容 (例如 <span className="font-mono">A/B/C</span> 或 <span className="font-mono">1/2/3</span>) 將對應到每列的欄位
-                      </div>
-                    ) : (
-                      <div className="text-[10px] text-amber-700 mt-1">
-                        ⚠ 啟用對位但未選欄位段 — 對位將無效
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
+              {autoAlign && (
+                <div className="pt-2 border-t bg-sky-50 -mx-1 px-2 py-2 rounded">
+                  <div className="text-xs text-sky-800 mb-1 font-semibold">🎯 對位用哪一段？</div>
+                  <ChipRow selectedIdx={idxIdx} onPick={toggleIdx} kind="idx" />
+                  {idxIdx >= 0 ? (
+                    <div className="text-[10px] text-slate-600 mt-1">
+                      該段內容 (<span className="font-mono">A/B/C</span> 或 <span className="font-mono">1/2/3</span>) 將對應到每列的欄位
+                    </div>
+                  ) : (
+                    <div className="text-[10px] text-amber-700 mt-1">
+                      ⚠ 對位模式已啟用但未選欄位段 — 對位將無效
+                    </div>
+                  )}
+                </div>
+              )}
             </>
           )}
 
@@ -1152,6 +1144,50 @@
         stopAutoScroll();
       };
 
+      // --- 對位模式：以 SN 群組為單位拖曳重排 ---
+      const onCardDragStart = (e, group) => {
+        dragFromRef.current = `__group:${group}`;
+        e.dataTransfer.effectAllowed = "move";
+        const ghost = document.createElement("div");
+        ghost.textContent = `移動 SN「${group}」`;
+        ghost.style.cssText =
+          "position:absolute;top:-1000px;left:-1000px;padding:6px 12px;" +
+          "background:#0284c7;color:#fff;border-radius:8px;font-size:13px;" +
+          "font-weight:600;box-shadow:0 4px 12px rgba(0,0,0,.25);white-space:nowrap;";
+        document.body.appendChild(ghost);
+        e.dataTransfer.setDragImage(ghost, 12, 12);
+        setTimeout(() => { try { document.body.removeChild(ghost); } catch (_) {} }, 0);
+      };
+      const onCardDrop = (e, targetGroup) => {
+        e.preventDefault();
+        const from = dragFromRef.current;
+        setDragOverIdx(null);
+        dragFromRef.current = null;
+        stopAutoScroll();
+        if (!from || !from.startsWith("__group:")) return;
+        const fromGroup = from.slice(8);
+        if (fromGroup === targetGroup) return;
+        const pattern = cfg.label.pattern;
+        const fileMap = new Map(files.map((f) => [f.path, f]));
+        setOrder((o) => {
+          const map = new Map();
+          const groupOrder = [];
+          for (const p of o) {
+            const f = fileMap.get(p);
+            if (!f) continue;
+            const g = extractGroupIdx(f.name, pattern).group;
+            if (!map.has(g)) { map.set(g, []); groupOrder.push(g); }
+            map.get(g).push(p);
+          }
+          const fi = groupOrder.indexOf(fromGroup);
+          if (fi < 0) return o;
+          groupOrder.splice(fi, 1);
+          const ti = targetGroup == null ? groupOrder.length : groupOrder.indexOf(targetGroup);
+          groupOrder.splice(ti < 0 ? groupOrder.length : ti, 0, fromGroup);
+          return groupOrder.flatMap((g) => map.get(g));
+        });
+      };
+
       // --- 預覽 ---
       const STAGE_W = 640;
       const scale = STAGE_W / cfg.slide.width_cm;
@@ -1374,7 +1410,35 @@
             </div>
 
             {/* 中欄：檔案清單 */}
-            <div className="col-span-3 bg-white rounded-lg shadow flex flex-col min-h-0">
+            <div className={`col-span-3 rounded-lg shadow flex flex-col min-h-0 transition-colors ${cfg.autoAlign ? "bg-sky-50 ring-2 ring-sky-300" : "bg-white"}`}>
+              {/* 排列方式：頂層模式切換 */}
+              <div className="p-2 border-b">
+                <div className="text-[10px] text-slate-500 mb-1 font-semibold">排列方式</div>
+                <div className="grid grid-cols-2 gap-1">
+                  <button onClick={() => setCfg((c) => ({ ...c, autoAlign: false }))}
+                    className={`px-2 py-1.5 rounded border text-xs flex items-center justify-center gap-1 ${
+                      !cfg.autoAlign
+                        ? "bg-slate-700 text-white border-slate-700 shadow"
+                        : "bg-white text-slate-600 border-slate-300 hover:bg-slate-50"
+                    }`}>
+                    📝 順序填入
+                  </button>
+                  <button onClick={() => setCfg((c) => ({ ...c, autoAlign: true }))}
+                    className={`px-2 py-1.5 rounded border text-xs flex items-center justify-center gap-1 ${
+                      cfg.autoAlign
+                        ? "bg-sky-600 text-white border-sky-700 shadow"
+                        : "bg-white text-slate-600 border-slate-300 hover:bg-sky-50"
+                    }`}>
+                    🎯 依檔名對位
+                  </button>
+                </div>
+                <div className="text-[10px] text-slate-500 mt-1">
+                  {cfg.autoAlign
+                    ? "圖片位置由檔名決定，缺照片留空。拖曳/排序對欄位無效"
+                    : "照清單順序依序填入格子；可拖曳排序"}
+                </div>
+              </div>
+
               <div className="p-3 border-b flex items-center justify-between">
                 <div className="text-sm font-semibold">
                   檔案 <span className="text-slate-400 font-normal">({orderedFiles.length})</span>
@@ -1388,7 +1452,7 @@
                   A→Z
                 </button>
               </div>
-              <div ref={listRef} className="flex-1 overflow-y-auto p-2 space-y-1"
+              <div ref={listRef} className={`flex-1 overflow-y-auto p-2 ${cfg.autoAlign ? "space-y-2" : "space-y-1"}`}
                 onClick={(e) => { if (e.target === e.currentTarget) { setSelectedPaths([]); setSelected(null); } }}
                 onDragOver={onListDragOver}
                 onDragEnd={() => { setDragOverIdx(null); stopAutoScroll(); }}
@@ -1399,7 +1463,54 @@
                     上傳圖片資料夾後顯示
                   </div>
                 )}
-                {orderedFiles.map((f, idx) => {
+                {cfg.autoAlign && orderedFiles.length > 0 ? (() => {
+                  const cols = mode === "excel"
+                    ? Math.max(1, cfg.excel.imgsPerRow)
+                    : Math.max(1, cfg.grid.cols);
+                  const rows = buildRows(orderedFiles, cfg.label.pattern, cols, true);
+                  return rows.map((row, rIdx) => (
+                    <div key={row.group}
+                      draggable
+                      onDragStart={(e) => onCardDragStart(e, row.group)}
+                      onDragOver={(e) => { e.preventDefault(); if (dragOverIdx !== rIdx) setDragOverIdx(rIdx); }}
+                      onDrop={(e) => onCardDrop(e, row.group)}
+                      style={{ boxShadow: dragOverIdx === rIdx ? "inset 0 2px 0 0 #0284c7" : "" }}
+                      className="border border-sky-200 rounded bg-white p-2 cursor-grab active:cursor-grabbing">
+                      <div className="flex items-center gap-1 mb-1.5">
+                        <span className="text-slate-400">⠿</span>
+                        <span className="text-xs font-semibold text-sky-800">{row.group || <span className="text-amber-600">未分組</span>}</span>
+                        <span className="text-[10px] text-slate-400 ml-auto">第 {rIdx + 1} 列</span>
+                      </div>
+                      <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
+                        {row.cells.map((f, ci) => {
+                          const colLabel = String.fromCharCode(65 + ci);
+                          if (!f) {
+                            return (
+                              <div key={ci} className="aspect-square border-2 border-dashed border-slate-300 bg-slate-50 rounded flex flex-col items-center justify-center text-slate-400">
+                                <div className="text-[10px]">{colLabel}</div>
+                                <div className="text-[10px]">空</div>
+                              </div>
+                            );
+                          }
+                          const isSel = selectedPaths.includes(f.path);
+                          return (
+                            <div key={ci}
+                              onClick={(e) => onItemClick(e, f.path, orderedFiles.indexOf(f))}
+                              draggable={false}
+                              title={f.name}
+                              className={`aspect-square rounded overflow-hidden border cursor-pointer relative ${
+                                isSel ? "ring-2 ring-emerald-500 border-emerald-500" : "border-slate-200 hover:border-slate-400"
+                              }`}>
+                              <img src={`/api/thumb?path=${encodeURIComponent(f.path)}&size=120`}
+                                className="w-full h-full object-cover pointer-events-none" />
+                              <div className="absolute bottom-0 left-0 right-0 text-[9px] text-center bg-black/50 text-white py-0.5">{colLabel}</div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ));
+                })() : orderedFiles.map((f, idx) => {
                   const isSel = selectedPaths.includes(f.path);
                   return (
                     <div key={f.path}
@@ -1423,28 +1534,32 @@
                 })}
                 {/* 拖到最底：放在清單末端的 drop zone */}
                 <div
-                  onDragOver={(e) => { e.preventDefault(); setDragOverIdx(orderedFiles.length); }}
-                  onDrop={(e) => onItemDrop(e, null)}
-                  style={{ height: 12, boxShadow: dragOverIdx === orderedFiles.length ? "inset 0 2px 0 0 #059669" : "" }} />
+                  onDragOver={(e) => { e.preventDefault(); setDragOverIdx(9999); }}
+                  onDrop={(e) => cfg.autoAlign ? onCardDrop(e, null) : onItemDrop(e, null)}
+                  style={{ height: 12, boxShadow: dragOverIdx === 9999 ? `inset 0 2px 0 0 ${cfg.autoAlign ? "#0284c7" : "#059669"}` : "" }} />
               </div>
               {orderedFiles.length > 0 && (
                 <div className="border-t p-2 space-y-1">
-                  <div className="flex gap-1 text-xs">
-                    <button onClick={() => moveSelected(-1)} disabled={!selPathsOrFallback().length}
-                      className="flex-1 border rounded py-1 hover:bg-slate-100 disabled:opacity-40">▲ 上移</button>
-                    <button onClick={() => moveSelected(1)} disabled={!selPathsOrFallback().length}
-                      className="flex-1 border rounded py-1 hover:bg-slate-100 disabled:opacity-40">▼ 下移</button>
-                    <button onClick={moveTop} disabled={!selPathsOrFallback().length}
-                      className="flex-1 border rounded py-1 hover:bg-slate-100 disabled:opacity-40">置頂</button>
-                    <button onClick={moveBottom} disabled={!selPathsOrFallback().length}
-                      className="flex-1 border rounded py-1 hover:bg-slate-100 disabled:opacity-40">置底</button>
-                  </div>
+                  {!cfg.autoAlign && (
+                    <div className="flex gap-1 text-xs">
+                      <button onClick={() => moveSelected(-1)} disabled={!selPathsOrFallback().length}
+                        className="flex-1 border rounded py-1 hover:bg-slate-100 disabled:opacity-40">▲ 上移</button>
+                      <button onClick={() => moveSelected(1)} disabled={!selPathsOrFallback().length}
+                        className="flex-1 border rounded py-1 hover:bg-slate-100 disabled:opacity-40">▼ 下移</button>
+                      <button onClick={moveTop} disabled={!selPathsOrFallback().length}
+                        className="flex-1 border rounded py-1 hover:bg-slate-100 disabled:opacity-40">置頂</button>
+                      <button onClick={moveBottom} disabled={!selPathsOrFallback().length}
+                        className="flex-1 border rounded py-1 hover:bg-slate-100 disabled:opacity-40">置底</button>
+                    </div>
+                  )}
                   <button onClick={deleteSelected} disabled={!selPathsOrFallback().length}
                     className="w-full border border-red-300 text-red-600 rounded py-1 text-xs hover:bg-red-50 disabled:opacity-40">
                     刪除選取 ({selPathsOrFallback().length})
                   </button>
                   <div className="text-[10px] text-slate-400 text-center">
-                    Shift＝範圍選取 · ⌘/Ctrl＝多選 · 拖曳＝排序
+                    {cfg.autoAlign
+                      ? "拖曳 SN 卡片＝改列順序 · 點圖＝選取"
+                      : "Shift＝範圍選取 · ⌘/Ctrl＝多選 · 拖曳＝排序"}
                   </div>
                 </div>
               )}
@@ -1473,9 +1588,12 @@
                   return (
                     <>
                       <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
-                        <div className="text-sm text-slate-500">
+                        <div className="text-sm text-slate-500 flex items-center gap-2">
                           預覽
-                          <span className="ml-3 text-[10px] text-slate-400">Shift＝粗調 · Alt＝微調</span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded border ${cfg.autoAlign ? "bg-sky-100 text-sky-700 border-sky-300" : "bg-slate-100 text-slate-600 border-slate-300"}`}>
+                            {cfg.autoAlign ? "🎯 依檔名對位" : "📝 順序填入"}
+                          </span>
+                          <span className="ml-1 text-[10px] text-slate-400">Shift＝粗調 · Alt＝微調</span>
                         </div>
                         <div className="flex items-center gap-2 text-sm">
                           {/* zoom 控制 */}
