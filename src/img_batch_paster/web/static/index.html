@@ -39,6 +39,8 @@
         delim: "-",                // 分段點選用的分隔符
         roles: ["sn", "idx"],      // 各段角色：sn | idx | skip
         rawMode: false,            // true=直接編輯 pattern, false=分段點選
+        idxSort: "auto",           // 對位模式欄位排序：auto | alpha | num | custom
+        idxOrder: [],              // custom 時使用者自訂順序
         x: 2,
         width: 12,        // SN box 固定寬度 (% of slide width)，與圖片 X 解耦
         font_pt: 18,
@@ -110,7 +112,10 @@
       const stepCol = Math.max(1, excel.cellCols);
       const stepRow = Math.max(1, excel.cellRows) + Math.max(0, excel.gapRows);
       const perRow = Math.max(1, excel.imgsPerRow);
-      const rows = buildRows(orderedFiles, label.pattern, perRow, autoAlign);
+      const colsArg = autoAlign
+        ? detectIdxList(orderedFiles, label.pattern, label.idxSort || "auto", label.idxOrder || [])
+        : perRow;
+      const rows = buildRows(orderedFiles, label.pattern, colsArg, autoAlign);
       const cells = [];
       rows.forEach(({ group, cells: rowCells }, rIdx) => {
         const targetRow = start.row + rIdx * stepRow;
@@ -177,25 +182,48 @@
       return { group: stem, idx: null };
     }
 
-    // idx → 欄位 index (0-based)。A/B/C→0/1/2，或 1/2/3→0/1/2
-    function idxToCol(idx) {
-      if (idx == null) return null;
-      const s = String(idx).trim();
-      if (/^[A-Za-z]$/.test(s)) return s.toUpperCase().charCodeAt(0) - 65;
-      const n = parseInt(s, 10);
-      return isNaN(n) ? null : n - 1;
+    // 從所有檔名抽 idx → 去重 → 依 sort 規則排序
+    function detectIdxList(orderedFiles, pattern, sort, customOrder) {
+      const seenOrder = [];
+      const seen = new Set();
+      for (const f of orderedFiles || []) {
+        const { idx } = extractGroupIdx(f.name || f.path.split("/").pop(), pattern);
+        if (idx == null) continue;
+        const s = String(idx);
+        if (!seen.has(s)) { seen.add(s); seenOrder.push(s); }
+      }
+      if (sort === "custom") {
+        // custom：完全由使用者定義（可含檔名沒出現的 idx → 該欄全部留空）
+        return Array.isArray(customOrder) ? [...customOrder] : [];
+      }
+      if (sort === "alpha") return [...seenOrder].sort((a, b) => a.localeCompare(b));
+      if (sort === "num") {
+        return [...seenOrder].sort((a, b) => {
+          const na = parseFloat(a), nb = parseFloat(b);
+          if (isNaN(na) || isNaN(nb)) return a.localeCompare(b);
+          return na - nb;
+        });
+      }
+      // auto: 全字母 → alpha；全數字 → num；混合 → 首見順序
+      const allNum = seenOrder.every((x) => !isNaN(parseFloat(x)));
+      const allAlpha = seenOrder.every((x) => /^[A-Za-z]+$/.test(x));
+      if (allNum) return [...seenOrder].sort((a, b) => parseFloat(a) - parseFloat(b));
+      if (allAlpha) return [...seenOrder].sort((a, b) => a.localeCompare(b));
+      return seenOrder;
     }
 
     // 依檔名 group+idx 把檔案排成 rows[group] = [col0, col1, ...]，缺的留 null
-    function groupBySnIdx(orderedFiles, pattern, cols) {
-      const groups = [];        // 保留首見順序
-      const map = {};           // group -> array(cols) of file|null
+    // idxList: 欄位定義（字串陣列），cols = idxList.length
+    function groupBySnIdx(orderedFiles, pattern, idxList) {
+      const cols = idxList.length;
+      const idxToColMap = new Map(idxList.map((s, i) => [s, i]));
+      const groups = [];
+      const map = {};
       for (const f of orderedFiles) {
         const { group, idx } = extractGroupIdx(f.name || f.path.split("/").pop(), pattern);
         if (!(group in map)) { map[group] = new Array(cols).fill(null); groups.push(group); }
-        let col = idxToCol(idx);
-        if (col == null || col < 0 || col >= cols) {
-          // idx 無法解析 → 放到該 group 第一個空位
+        let col = idx != null ? idxToColMap.get(String(idx)) : undefined;
+        if (col == null) {
           col = map[group].findIndex((x) => x === null);
           if (col < 0) col = 0;
         }
@@ -205,9 +233,13 @@
     }
 
     // 建立 rows：每個 = { group, cells: [file|null × cols] }
-    // autoAlign=true 依檔名 group+idx 對位 (缺的留空)；false 則順序填滿
-    function buildRows(orderedFiles, pattern, cols, autoAlign) {
-      if (autoAlign) return groupBySnIdx(orderedFiles, pattern, cols);
+    // autoAlign=true 用 idxList 對位；false 用 cols 順序填滿
+    function buildRows(orderedFiles, pattern, colsOrIdxList, autoAlign) {
+      if (autoAlign) {
+        const idxList = Array.isArray(colsOrIdxList) ? colsOrIdxList : [];
+        return groupBySnIdx(orderedFiles, pattern, idxList);
+      }
+      const cols = typeof colsOrIdxList === "number" ? colsOrIdxList : (colsOrIdxList?.length || 1);
       const rows = [];
       for (let i = 0; i < orderedFiles.length; i += cols) {
         const slice = orderedFiles.slice(i, i + cols);
@@ -231,8 +263,11 @@
       const gy = H * grid.gap.y / 100;
       const cols = Math.max(1, grid.cols);
       const rowsPerPage = Math.max(1, grid.rows);
+      const colsArg = autoAlign
+        ? detectIdxList(orderedFiles, label.pattern, label.idxSort || "auto", label.idxOrder || [])
+        : cols;
 
-      const allRows = buildRows(orderedFiles, label.pattern, cols, autoAlign);
+      const allRows = buildRows(orderedFiles, label.pattern, colsArg, autoAlign);
       const pages = [];
       for (let p = 0; p < allRows.length; p += rowsPerPage) {
         const pageRows = allRows.slice(p, p + rowsPerPage);
@@ -264,6 +299,153 @@
         pages.push(placements);
       }
       return pages;
+    }
+
+    // 對位模式的欄位編輯器：自動偵測 idx 集合 + 排序選項 + 自訂欄位
+    function IdxColumnsEditor({ label, allFiles, updateLabel }) {
+      const sort = label.idxSort || "auto";
+      const customMode = sort === "custom";
+      const idxList = useMemo(
+        () => detectIdxList(allFiles || [], label.pattern, sort, label.idxOrder || []),
+        [allFiles, label.pattern, sort, label.idxOrder]
+      );
+      // 從檔名偵測到的實際 idx 集合（給自訂模式檢查 unmapped/empty 用）
+      const fromFiles = useMemo(
+        () => detectIdxList(allFiles || [], label.pattern, "auto", []),
+        [allFiles, label.pattern]
+      );
+      const dragRef = useRef(null);
+      const [hoverIdx, setHoverIdx] = useState(-1);
+      const [newChip, setNewChip] = useState("");
+
+      const setSort = (s) => {
+        if (s === "custom") {
+          updateLabel({ idxSort: "custom", idxOrder: idxList.length ? [...idxList] : [...fromFiles] });
+        } else {
+          updateLabel({ idxSort: s, idxOrder: [] });
+        }
+      };
+
+      const onChipDragStart = (i) => { dragRef.current = i; };
+      const onChipDrop = (toIdx) => {
+        const from = dragRef.current;
+        dragRef.current = null;
+        setHoverIdx(-1);
+        if (from == null || from === toIdx) return;
+        const next = [...idxList];
+        const [moved] = next.splice(from, 1);
+        next.splice(toIdx, 0, moved);
+        updateLabel({ idxSort: "custom", idxOrder: next });
+      };
+
+      const removeChip = (i) => {
+        const next = idxList.filter((_, j) => j !== i);
+        updateLabel({ idxSort: "custom", idxOrder: next });
+      };
+
+      const addChip = () => {
+        const v = newChip.trim();
+        if (!v) return;
+        if (idxList.includes(v)) { setNewChip(""); return; }
+        updateLabel({ idxSort: "custom", idxOrder: [...idxList, v] });
+        setNewChip("");
+      };
+
+      const loadFromFiles = () => {
+        updateLabel({ idxSort: "custom", idxOrder: [...fromFiles] });
+      };
+
+      const SORTS = [
+        { v: "auto",   label: "自動" },
+        { v: "custom", label: "自訂" },
+      ];
+
+      // 自訂模式下的異常檢查
+      const unmapped = customMode ? fromFiles.filter((x) => !idxList.includes(x)) : [];
+
+      return (
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <div className="text-xs text-sky-800 font-semibold">
+              {customMode ? `自訂 ${idxList.length} 欄` : `偵測到 ${idxList.length} 欄`}
+            </div>
+            <div className="flex border rounded overflow-hidden text-[10px]">
+              {SORTS.map((s) => (
+                <button key={s.v} onClick={() => setSort(s.v)}
+                  className={`px-1.5 py-0.5 ${sort === s.v ? "bg-sky-600 text-white" : "bg-white hover:bg-sky-100"}`}>
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {idxList.length === 0 && !customMode ? (
+            <div className="text-[10px] text-amber-700 p-2 bg-amber-50 rounded">
+              ⚠ 從現有檔名中找不到 idx 段內容 — 請確認上方分段選取
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-1 items-center">
+              {idxList.map((s, i) => {
+                const isEmpty = customMode && !fromFiles.includes(s);
+                return (
+                  <div key={s + i}
+                    draggable
+                    onDragStart={() => onChipDragStart(i)}
+                    onDragOver={(e) => { e.preventDefault(); if (hoverIdx !== i) setHoverIdx(i); }}
+                    onDrop={() => onChipDrop(i)}
+                    onDragEnd={() => setHoverIdx(-1)}
+                    title={isEmpty ? "此欄沒有對應檔名（將全部留空）" : "可拖曳改變順序"}
+                    className={`flex items-center gap-1 px-2 py-0.5 rounded border text-xs font-mono cursor-grab active:cursor-grabbing ${
+                      isEmpty ? "bg-slate-50 border-dashed border-slate-400 text-slate-500"
+                              : "bg-white border-sky-300 text-sky-800"
+                    } ${hoverIdx === i ? "ring-2 ring-sky-400" : ""}`}>
+                    {s}
+                    {customMode && (
+                      <button onClick={() => removeChip(i)}
+                        className="text-slate-400 hover:text-red-600 text-[10px] leading-none"
+                        title="移除此欄">✕</button>
+                    )}
+                  </div>
+                );
+              })}
+              {customMode && (
+                <div className="flex items-center gap-1">
+                  <input
+                    value={newChip}
+                    onChange={(e) => setNewChip(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addChip(); } }}
+                    placeholder="新增欄位名…"
+                    className="border rounded px-1.5 py-0.5 text-xs font-mono w-24" />
+                  <button onClick={addChip}
+                    disabled={!newChip.trim()}
+                    className="text-[10px] px-1.5 py-0.5 rounded border bg-sky-100 hover:bg-sky-200 text-sky-800 disabled:opacity-40">
+                    + 新增
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+          {customMode && (
+            <div className="space-y-0.5 mt-1">
+              {unmapped.length > 0 && (
+                <div className="text-[10px] text-amber-700">
+                  ⚠ 檔名中有 {unmapped.length} 個 idx 不在自訂欄位中（將自動塞到剩餘空位）：
+                  <span className="font-mono">{unmapped.join(", ")}</span>
+                </div>
+              )}
+              <div className="flex gap-2 text-[10px]">
+                <button onClick={loadFromFiles}
+                  className="text-sky-700 hover:underline">↻ 從檔名重新載入</button>
+                <span className="text-slate-500">拖曳排序 · 點 ✕ 移除 · Enter 新增</span>
+              </div>
+            </div>
+          )}
+          {!customMode && (
+            <div className="text-[10px] text-slate-500 mt-1">
+              欄數 = 偵測值；切「自訂」可定義欄位（含檔名沒出現的）
+            </div>
+          )}
+        </div>
+      );
     }
 
     // 分段點選的 SN 設定 UI：分隔符 + 各段角色 chip + 即時抽取預覽 + 命中統計
@@ -426,17 +608,26 @@
               </div>
 
               {autoAlign && (
-                <div className="pt-2 border-t bg-sky-50 -mx-1 px-2 py-2 rounded">
-                  <div className="text-xs text-sky-800 mb-1 font-semibold">🎯 對位用哪一段？</div>
-                  <ChipRow selectedIdx={idxIdx} onPick={toggleIdx} kind="idx" />
-                  {idxIdx >= 0 ? (
-                    <div className="text-[10px] text-slate-600 mt-1">
-                      該段內容 (<span className="font-mono">A/B/C</span> 或 <span className="font-mono">1/2/3</span>) 將對應到每列的欄位
-                    </div>
-                  ) : (
-                    <div className="text-[10px] text-amber-700 mt-1">
-                      ⚠ 對位模式已啟用但未選欄位段 — 對位將無效
-                    </div>
+                <div className="pt-2 border-t bg-sky-50 -mx-1 px-2 py-2 rounded space-y-2">
+                  <div>
+                    <div className="text-xs text-sky-800 mb-1 font-semibold">🎯 對位用哪一段？</div>
+                    <ChipRow selectedIdx={idxIdx} onPick={toggleIdx} kind="idx" />
+                    {idxIdx >= 0 ? (
+                      <div className="text-[10px] text-slate-600 mt-1">
+                        該段內容將自動展開成欄位（見下方）
+                      </div>
+                    ) : (
+                      <div className="text-[10px] text-amber-700 mt-1">
+                        ⚠ 對位模式已啟用但未選欄位段 — 對位將無效
+                      </div>
+                    )}
+                  </div>
+                  {idxIdx >= 0 && (
+                    <IdxColumnsEditor
+                      label={cfgLabel}
+                      allFiles={allFiles}
+                      updateLabel={updateLabel}
+                    />
                   )}
                 </div>
               )}
@@ -459,16 +650,18 @@
       );
     }
 
-    function NumberInput({ label, value, onChange, step = 0.5, suffix }) {
+    function NumberInput({ label, value, onChange, step = 0.5, suffix, disabled, hint }) {
       return (
-        <label className="flex flex-col text-xs text-slate-600">
+        <label className={`flex flex-col text-xs ${disabled ? "text-slate-400" : "text-slate-600"}`}>
           <span className="mb-1">{label}</span>
           <div className="relative">
-            <input type="number" step={step} value={value}
+            <input type="number" step={step} value={value} disabled={disabled}
               onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
-              className="border rounded px-2 py-1 text-sm w-full pr-7" />
+              title={hint}
+              className={`border rounded px-2 py-1 text-sm w-full pr-7 ${disabled ? "bg-slate-100 cursor-not-allowed" : ""}`} />
             {suffix && <span className="absolute right-2 top-1.5 text-[10px] text-slate-400">{suffix}</span>}
           </div>
+          {hint && disabled && <span className="text-[10px] text-sky-700 mt-0.5">{hint}</span>}
         </label>
       );
     }
@@ -764,6 +957,14 @@
         const map = new Map(files.map((f) => [f.path, f]));
         return order.map((p) => map.get(p)).filter(Boolean);
       }, [files, order]);
+
+      // 對位模式下，欄數由檔名 idx 自動決定（給輸入框顯示提示用）
+      const autoIdxList = useMemo(
+        () => cfg.autoAlign
+          ? detectIdxList(orderedFiles, cfg.label.pattern, cfg.label.idxSort || "auto", cfg.label.idxOrder || [])
+          : [],
+        [cfg.autoAlign, orderedFiles, cfg.label.pattern, cfg.label.idxSort, cfg.label.idxOrder]
+      );
 
       // 鍵盤上下方向鍵切換選取（焦點不在輸入框時才生效）
       useEffect(() => {
@@ -1256,7 +1457,10 @@
                   <div className="border-t pt-3">
                     <div className="text-sm font-semibold mb-2">每頁網格</div>
                     <div className="grid grid-cols-2 gap-2">
-                      <NumberInput label="欄 cols" step={1} value={cfg.grid.cols}
+                      <NumberInput label="欄 cols" step={1}
+                        value={cfg.autoAlign ? Math.max(1, autoIdxList.length) : cfg.grid.cols}
+                        disabled={cfg.autoAlign}
+                        hint={cfg.autoAlign ? `對位模式自動 = ${autoIdxList.length || 0} 欄` : undefined}
                         onChange={(v) => setGrid("cols", Math.max(1, parseInt(v) || 1))} />
                       <NumberInput label="列 rows" step={1} value={cfg.grid.rows}
                         onChange={(v) => setGrid("rows", Math.max(1, parseInt(v) || 1))} />
@@ -1275,7 +1479,10 @@
                           className="border rounded px-2 py-1 text-sm mt-1 font-mono" placeholder="B5" />
                       </label>
                       <div className="grid grid-cols-2 gap-2">
-                        <NumberInput label="每列圖數" step={1} value={cfg.excel.imgsPerRow}
+                        <NumberInput label="每列圖數" step={1}
+                          value={cfg.autoAlign ? Math.max(1, autoIdxList.length) : cfg.excel.imgsPerRow}
+                          disabled={cfg.autoAlign}
+                          hint={cfg.autoAlign ? `對位模式自動 = ${autoIdxList.length || 0} 欄` : undefined}
                           onChange={(v) => setCfg((c) => ({ ...c, excel: { ...c.excel, imgsPerRow: Math.max(1, parseInt(v) || 1) } }))} />
                         <NumberInput label="列間距 (空 row)" step={1} value={cfg.excel.gapRows}
                           onChange={(v) => setCfg((c) => ({ ...c, excel: { ...c.excel, gapRows: Math.max(0, parseInt(v) || 0) } }))} />
@@ -1464,10 +1671,9 @@
                   </div>
                 )}
                 {cfg.autoAlign && orderedFiles.length > 0 ? (() => {
-                  const cols = mode === "excel"
-                    ? Math.max(1, cfg.excel.imgsPerRow)
-                    : Math.max(1, cfg.grid.cols);
-                  const rows = buildRows(orderedFiles, cfg.label.pattern, cols, true);
+                  const idxList = detectIdxList(orderedFiles, cfg.label.pattern, cfg.label.idxSort || "auto", cfg.label.idxOrder || []);
+                  const cols = Math.max(1, idxList.length);
+                  const rows = buildRows(orderedFiles, cfg.label.pattern, idxList, true);
                   return rows.map((row, rIdx) => (
                     <div key={row.group}
                       draggable
@@ -1483,11 +1689,11 @@
                       </div>
                       <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
                         {row.cells.map((f, ci) => {
-                          const colLabel = String.fromCharCode(65 + ci);
+                          const colLabel = idxList[ci] || String(ci + 1);
                           if (!f) {
                             return (
                               <div key={ci} className="aspect-square border-2 border-dashed border-slate-300 bg-slate-50 rounded flex flex-col items-center justify-center text-slate-400">
-                                <div className="text-[10px]">{colLabel}</div>
+                                <div className="text-[10px] font-mono">{colLabel}</div>
                                 <div className="text-[10px]">空</div>
                               </div>
                             );
@@ -1503,7 +1709,7 @@
                               }`}>
                               <img src={`/api/thumb?path=${encodeURIComponent(f.path)}&size=120`}
                                 className="w-full h-full object-cover pointer-events-none" />
-                              <div className="absolute bottom-0 left-0 right-0 text-[9px] text-center bg-black/50 text-white py-0.5">{colLabel}</div>
+                              <div className="absolute bottom-0 left-0 right-0 text-[9px] text-center bg-black/50 text-white py-0.5 font-mono">{colLabel}</div>
                             </div>
                           );
                         })}
