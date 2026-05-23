@@ -93,6 +93,34 @@ def _stretch_resize(img_path: Path, target_w: float, target_h: float, tmp_dir: P
         return out
 
 
+def _pad_contain(img_path: Path, inset: float, tmp_dir: Path) -> Path:
+    """在圖片四周加不透明白色留白：原始圖佔最終畫布的 (1 - 2*inset) 比例。"""
+    with PILImage.open(img_path) as im:
+        # 一律轉成 RGB 並用不透明白底，避免 Excel 把透明區當 cell 背景
+        if im.mode != "RGB":
+            if im.mode == "P":
+                im = im.convert("RGBA" if "transparency" in im.info else "RGB")
+            if im.mode == "RGBA":
+                bg = PILImage.new("RGB", im.size, (255, 255, 255))
+                bg.paste(im, mask=im.split()[-1])
+                im = bg
+            else:
+                im = im.convert("RGB")
+        iw, ih = im.size
+        denom = max(0.1, 1.0 - 2.0 * inset)
+        cw = max(iw + 2, int(round(iw / denom)))
+        ch = max(ih + 2, int(round(ih / denom)))
+        canvas = PILImage.new("RGB", (cw, ch), (255, 255, 255))
+        ox = (cw - iw) // 2
+        oy = (ch - ih) // 2
+        canvas.paste(im, (ox, oy))
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        # 用 PNG 確保品質；ext 統一 .png 以便 _inject_richvalue 處理
+        out = tmp_dir / f"_pad_{img_path.stem}_{int(inset*1000)}.png"
+        canvas.save(out, "PNG")
+        return out
+
+
 def _cover_crop(img_path: Path, target_w: float, target_h: float, tmp_dir: Path) -> Path:
     """等比放大圖片直到至少有一邊貼齊 cell 大小，超出的部分 center-crop 掉。"""
     target_w, target_h = max(1, int(round(target_w))), max(1, int(round(target_h)))
@@ -133,7 +161,8 @@ def write_xlsx(
     / resized / selected, mimicking cell-embedded behavior visually.
     """
     if embed_in_cell:
-        return _write_xlsx_in_cell(placements, out_path, template, sheet_name, img_fit=img_fit)
+        return _write_xlsx_in_cell(placements, out_path, template, sheet_name,
+                                   img_fit=img_fit, contain_inset=contain_inset)
 
     if template and Path(template).is_file():
         wb = load_workbook(str(template))
@@ -263,6 +292,7 @@ def _write_xlsx_in_cell(
     template: Path | None,
     sheet_name: str | None,
     img_fit: str = "contain",
+    contain_inset: float = _DEFAULT_CONTAIN_INSET,
 ) -> Path:
     """Embed images as cell content using Microsoft Excel 365 RichValue schema.
 
@@ -309,6 +339,11 @@ def _write_xlsx_in_cell(
             src_path = (_cover_crop if img_fit == "cover" else _stretch_resize)(
                 src_path, tw, th, tmp_dir
             )
+        elif img_fit == "contain":
+            inset = max(0.0, min(0.45, contain_inset))
+            if inset > 0:
+                tmp_dir = out_path.parent / "_crops"
+                src_path = _pad_contain(src_path, inset, tmp_dir)
         ext = src_path.suffix.lower() or ".png"
         media_name = f"image_rv{len(image_records) + 1}{ext}"
         image_records.append((src_path, media_name))
