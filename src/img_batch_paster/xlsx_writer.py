@@ -34,8 +34,8 @@ def excel_row_to_px(h: float) -> float:
     return h * 4 / 3
 
 
-# contain 模式四邊留白比例 (每邊佔 cell 的 5%)
-_CONTAIN_INSET = 0.05
+# contain 模式四邊留白比例預設值 (每邊佔 cell 的 5%)；可由呼叫端覆寫
+_DEFAULT_CONTAIN_INSET = 0.05
 
 
 def _default_mdw(wb) -> float:
@@ -125,6 +125,7 @@ def write_xlsx(
     embed_in_cell: bool = False,
     lock_images: bool = True,
     img_fit: str = "cover",
+    contain_inset: float = _DEFAULT_CONTAIN_INSET,
 ) -> Path:
     """Embed images either as floating drawings (default) or as cell content (DISPIMG).
 
@@ -171,8 +172,9 @@ def write_xlsx(
             with PILImage.open(p.path) as im:
                 iw, ih = im.size
             aspect = ih / iw if iw else 1.0
-            avail_w = target_w * (1 - 2 * _CONTAIN_INSET)
-            avail_h = target_h * (1 - 2 * _CONTAIN_INSET)
+            inset = max(0.0, min(0.45, contain_inset))
+            avail_w = target_w * (1 - 2 * inset)
+            avail_h = target_h * (1 - 2 * inset)
             fit_w = avail_w
             fit_h = fit_w * aspect
             if fit_h > avail_h and avail_h > 0:

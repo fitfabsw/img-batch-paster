@@ -399,8 +399,10 @@ def api_export():
             return jsonify({"error": "沒有可匯出的儲存格"}), 400
         embed_in_cell = bool(data.get("embedInCell"))
         img_fit = data.get("imgFit", "cover")
+        contain_inset = float(data.get("containInset", 0.05))
         write_xlsx(xl_placements, out_path, template_path,
-                   embed_in_cell=embed_in_cell, img_fit=img_fit)
+                   embed_in_cell=embed_in_cell, img_fit=img_fit,
+                   contain_inset=contain_inset)
         resp = {"output": str(out_path)}
         if base:
             resp["download_url"] = f"/api/download/{ws}/{out_path.name}"

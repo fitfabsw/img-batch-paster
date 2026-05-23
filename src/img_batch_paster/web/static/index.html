@@ -51,6 +51,7 @@
         snCol: "A",
         embedInCell: false,
         imgFit: "cover",   // cover (裁切填滿) | contain (完整留白) | fill (拉伸)
+        containInset: 5,   // contain 模式四邊留白百分比 (%)
       },
       output: { path: "./out.pptx", template: null },
     };
@@ -451,7 +452,8 @@
                 );
               }
               const fit = cfg.excel?.imgFit || "cover";
-              const inset = fit === "contain" ? 0.05 : 0;  // 四邊留白
+              const insetPct = Math.max(0, Math.min(45, cfg.excel?.containInset ?? 5));
+              const inset = fit === "contain" ? insetPct / 100 : 0;  // 四邊留白
               return (
                 <img key={`my-${i}`}
                   src={`/api/thumb?path=${encodeURIComponent(pl.path)}&size=400`}
@@ -738,6 +740,7 @@
               cells, output: cfg.output, workspace: ws,
               embedInCell: !!cfg.excel.embedInCell,
               imgFit: cfg.excel.imgFit || "cover",
+              containInset: Math.max(0, Math.min(45, cfg.excel.containInset ?? 5)) / 100,
             });
           } else {
             const pages = computePages(cfg.slide, cfg.grid, arr, cfg.label, cfg.autoAlign);
@@ -1017,6 +1020,13 @@
                             </button>
                           ))}
                         </div>
+                        {cfg.excel.imgFit === "contain" && (
+                          <div className="mt-2">
+                            <NumberInput label="留白" suffix="%" step={1} value={cfg.excel.containInset ?? 5}
+                              onChange={(v) => setCfg((c) => ({ ...c, excel: { ...c.excel, containInset: Math.max(0, Math.min(45, parseFloat(v) || 0)) } }))} />
+                            <div className="text-[10px] text-slate-400 mt-1">contain 模式下每邊留白佔 cell 寬高的百分比</div>
+                          </div>
+                        )}
                       </div>
                       <label className="flex items-center gap-2 text-xs text-slate-700 mt-2 pt-2 border-t">
                         <input type="checkbox" checked={cfg.excel.embedInCell}
