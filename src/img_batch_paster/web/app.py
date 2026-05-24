@@ -70,6 +70,16 @@ def api_thumb():
         return "not found", 404
     size = int(request.args.get("size", 240))
     img = Image.open(p)
+    # optional crop=l,t,r,b in 0..1
+    crop_q = request.args.get("crop")
+    if crop_q:
+        try:
+            l, t, r, b = (max(0.0, min(1.0, float(x))) for x in crop_q.split(","))
+            if r > l and b > t and not (l == 0 and t == 0 and r == 1 and b == 1):
+                w, h = img.size
+                img = img.crop((int(l * w), int(t * h), int(r * w), int(b * h)))
+        except Exception:
+            pass
     img.thumbnail((size, size))
     buf = io.BytesIO()
     fmt = "PNG" if img.mode in ("RGBA", "P") else "JPEG"
@@ -400,9 +410,10 @@ def api_export():
         embed_in_cell = bool(data.get("embedInCell"))
         img_fit = data.get("imgFit", "cover")
         contain_inset = float(data.get("containInset", 0.05))
+        crop = data.get("crop")
         write_xlsx(xl_placements, out_path, template_path,
                    embed_in_cell=embed_in_cell, img_fit=img_fit,
-                   contain_inset=contain_inset)
+                   contain_inset=contain_inset, crop=crop)
         resp = {"output": str(out_path)}
         if base:
             resp["download_url"] = f"/api/download/{ws}/{out_path.name}"
@@ -431,6 +442,7 @@ def api_export():
     sn_in_cell = bool(data.get("snInCell"))
     sn_col = int(data.get("snCol", 0))
     sn_row_start = int(data.get("snRowStart", 1))
+    crop = data.get("crop")
 
     # 副檔名 .key → 先輸出 .pptx，再經由 Keynote 轉成 .key
     want_key = out_path.suffix.lower() == ".key"
@@ -439,6 +451,7 @@ def api_export():
         float(slide["width_cm"]), float(slide["height_cm"]),
         pages, pptx_out, template_path,
         sn_in_cell=sn_in_cell, sn_col=sn_col, sn_row_start=sn_row_start,
+        crop=crop,
     )
 
     if want_key:

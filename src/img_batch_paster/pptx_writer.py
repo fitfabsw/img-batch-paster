@@ -111,9 +111,12 @@ def _write_sn_into_table(slide, placements, sn_col: int, sn_row_start: int) -> b
 
 def _add_placements_to_slide(slide, placements: list[Placement],
                              sn_in_cell: bool = False,
-                             sn_col: int = 0, sn_row_start: int = 1) -> None:
+                             sn_col: int = 0, sn_row_start: int = 1,
+                             crop: dict | None = None,
+                             tmp_dir: Path | None = None) -> None:
     from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
     from pptx.util import Pt
+    from .xlsx_writer import _apply_crop
     align_map = {"left": PP_ALIGN.LEFT, "center": PP_ALIGN.CENTER, "right": PP_ALIGN.RIGHT}
 
     # SN 寫入表格 cell（成功的話這些 text placement 就不再以文字方塊處理）
@@ -136,8 +139,9 @@ def _add_placements_to_slide(slide, placements: list[Placement],
             run.font.size = Pt(pl.font_pt)
             run.font.bold = pl.bold
         else:
+            src = _apply_crop(pl.path, crop, tmp_dir) if (crop and tmp_dir) else pl.path
             slide.shapes.add_picture(
-                str(pl.path), Cm(pl.x_cm), Cm(pl.y_cm),
+                str(src), Cm(pl.x_cm), Cm(pl.y_cm),
                 width=Cm(pl.w_cm), height=Cm(pl.h_cm),
             )
 
@@ -151,6 +155,7 @@ def write_pages(
     sn_in_cell: bool = False,
     sn_col: int = 0,
     sn_row_start: int = 1,
+    crop: dict | None = None,
 ) -> Path:
     """Write a multi-page pptx. Each page = a list of Placements.
 
@@ -174,7 +179,8 @@ def write_pages(
         for _ in range(len(pages) - 1):
             page_slides.append(_duplicate_slide(prs, base))
         for slide, page_pls in zip(page_slides, pages):
-            _add_placements_to_slide(slide, page_pls, sn_in_cell, sn_col, sn_row_start)
+            _add_placements_to_slide(slide, page_pls, sn_in_cell, sn_col, sn_row_start,
+                                     crop=crop, tmp_dir=out_path.parent / "_crops")
     else:
         prs = Presentation()
         prs.slide_width = Cm(slide_w_cm)
@@ -182,7 +188,8 @@ def write_pages(
         blank = prs.slide_layouts[6] if len(prs.slide_layouts) > 6 else prs.slide_layouts[-1]
         for page_pls in pages:
             slide = prs.slides.add_slide(blank)
-            _add_placements_to_slide(slide, page_pls, sn_in_cell, sn_col, sn_row_start)
+            _add_placements_to_slide(slide, page_pls, sn_in_cell, sn_col, sn_row_start,
+                                     crop=crop, tmp_dir=out_path.parent / "_crops")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     prs.save(str(out_path))

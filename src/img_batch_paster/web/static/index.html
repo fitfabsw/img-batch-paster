@@ -46,6 +46,7 @@
         font_pt: 18,
       },
       autoAlign: false,   // 依檔名 group+idx 對位 (缺的照片留空)
+      crop: { enabled: false, left: 0, top: 0, right: 1, bottom: 1 },  // 0..1 相對裁剪
       slidesSn: { inCell: false, col: 1, rowStart: 2 },  // PPT/Keynote SN 寫入表格 cell (1-based)
       excel: {
         startCell: "B5",
@@ -650,6 +651,146 @@
       );
     }
 
+    // 視覺化裁剪 modal：拖一個矩形、回傳相對比例
+    function CropEditor({ file, initial, onApply, onCancel }) {
+      const imgRef = useRef(null);
+      const boxRef = useRef(null);
+      const [box, setBox] = useState(() => {
+        const ini = initial || { left: 0.15, top: 0.15, right: 0.85, bottom: 0.85, enabled: false };
+        return ini.enabled
+          ? { left: ini.left, top: ini.top, right: ini.right, bottom: ini.bottom }
+          : { left: 0.15, top: 0.15, right: 0.85, bottom: 0.85 };
+      });
+      const dragRef = useRef(null);   // { mode: 'new'|'move'|'l'|'r'|'t'|'b'|'tl'|..., startX, startY, startBox }
+
+      const getRel = (e) => {
+        const el = boxRef.current;
+        if (!el) return [0, 0];
+        const rect = el.getBoundingClientRect();
+        return [
+          Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)),
+          Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height)),
+        ];
+      };
+
+      const onPointerDown = (e, mode) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const [x, y] = getRel(e);
+        dragRef.current = { mode, startX: x, startY: y, startBox: { ...box } };
+        if (mode === "new") {
+          setBox({ left: x, top: y, right: x, bottom: y });
+        }
+        const onMove = (ev) => {
+          const d = dragRef.current;
+          if (!d) return;
+          const [nx, ny] = getRel(ev);
+          const sb = d.startBox;
+          let nb = { ...box };
+          if (d.mode === "new") {
+            nb = {
+              left: Math.min(d.startX, nx), top: Math.min(d.startY, ny),
+              right: Math.max(d.startX, nx), bottom: Math.max(d.startY, ny),
+            };
+          } else if (d.mode === "move") {
+            const dx = nx - d.startX, dy = ny - d.startY;
+            const w = sb.right - sb.left, h = sb.bottom - sb.top;
+            let nl = Math.max(0, Math.min(1 - w, sb.left + dx));
+            let nt = Math.max(0, Math.min(1 - h, sb.top + dy));
+            nb = { left: nl, top: nt, right: nl + w, bottom: nt + h };
+          } else {
+            nb = { ...sb };
+            if (d.mode.includes("l")) nb.left = Math.min(sb.right - 0.02, nx);
+            if (d.mode.includes("r")) nb.right = Math.max(sb.left + 0.02, nx);
+            if (d.mode.includes("t")) nb.top = Math.min(sb.bottom - 0.02, ny);
+            if (d.mode.includes("b")) nb.bottom = Math.max(sb.top + 0.02, ny);
+          }
+          setBox(nb);
+        };
+        const onUp = () => {
+          dragRef.current = null;
+          window.removeEventListener("mousemove", onMove);
+          window.removeEventListener("mouseup", onUp);
+        };
+        window.addEventListener("mousemove", onMove);
+        window.addEventListener("mouseup", onUp);
+      };
+
+      const pct = (v) => (v * 100).toFixed(1);
+      const w = box.right - box.left;
+      const h = box.bottom - box.top;
+
+      const HANDLES = [
+        { k: "tl", style: { left: 0, top: 0, cursor: "nwse-resize" } },
+        { k: "tr", style: { right: 0, top: 0, cursor: "nesw-resize" } },
+        { k: "bl", style: { left: 0, bottom: 0, cursor: "nesw-resize" } },
+        { k: "br", style: { right: 0, bottom: 0, cursor: "nwse-resize" } },
+        { k: "t",  style: { left: "50%", top: 0, transform: "translate(-50%, -50%)", cursor: "ns-resize" } },
+        { k: "b",  style: { left: "50%", bottom: 0, transform: "translate(-50%, 50%)", cursor: "ns-resize" } },
+        { k: "l",  style: { left: 0, top: "50%", transform: "translate(-50%, -50%)", cursor: "ew-resize" } },
+        { k: "r",  style: { right: 0, top: "50%", transform: "translate(50%, -50%)", cursor: "ew-resize" } },
+      ];
+
+      return (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
+          onClick={onCancel}>
+          <div className="bg-white rounded-lg shadow-xl p-4 max-w-[90vw] max-h-[92vh] flex flex-col gap-3"
+            onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-semibold">✂️ 設定裁剪區域</div>
+              <div className="text-[10px] text-slate-500 font-mono">
+                L {pct(box.left)}% · T {pct(box.top)}% · R {pct(box.right)}% · B {pct(box.bottom)}% · {pct(w)}×{pct(h)}%
+              </div>
+            </div>
+            <div className="text-[11px] text-slate-500">
+              拖曳框內可移動 · 拖曳邊角縮放 · 拖曳框外重新框選
+            </div>
+            <div ref={boxRef}
+              onMouseDown={(e) => onPointerDown(e, "new")}
+              className="relative bg-slate-900 select-none"
+              style={{ maxHeight: "70vh", maxWidth: "80vw" }}>
+              <img ref={imgRef}
+                src={`/api/thumb?path=${encodeURIComponent(file.path)}&size=1600`}
+                draggable={false}
+                style={{ display: "block", maxHeight: "70vh", maxWidth: "80vw", userSelect: "none", pointerEvents: "none" }} />
+              {/* 暗化 4 個遮罩 */}
+              <div className="absolute bg-black/55 pointer-events-none" style={{ left: 0, top: 0, right: 0, height: `${box.top * 100}%` }} />
+              <div className="absolute bg-black/55 pointer-events-none" style={{ left: 0, bottom: 0, right: 0, height: `${(1 - box.bottom) * 100}%` }} />
+              <div className="absolute bg-black/55 pointer-events-none" style={{ left: 0, top: `${box.top * 100}%`, width: `${box.left * 100}%`, height: `${h * 100}%` }} />
+              <div className="absolute bg-black/55 pointer-events-none" style={{ right: 0, top: `${box.top * 100}%`, width: `${(1 - box.right) * 100}%`, height: `${h * 100}%` }} />
+              {/* 裁剪框 */}
+              <div
+                onMouseDown={(e) => onPointerDown(e, "move")}
+                className="absolute border-2 border-red-500 cursor-move"
+                style={{
+                  left: `${box.left * 100}%`,
+                  top: `${box.top * 100}%`,
+                  width: `${w * 100}%`,
+                  height: `${h * 100}%`,
+                }}>
+                {HANDLES.map((H) => (
+                  <div key={H.k}
+                    onMouseDown={(e) => onPointerDown(e, H.k)}
+                    className="absolute bg-red-500 border border-white"
+                    style={{ width: 12, height: 12, ...H.style }} />
+                ))}
+              </div>
+            </div>
+            <div className="flex gap-2 justify-end text-sm">
+              <button onClick={() => setBox({ left: 0.15, top: 0.15, right: 0.85, bottom: 0.85 })}
+                className="border rounded px-3 py-1 hover:bg-slate-100">重置框</button>
+              <button onClick={() => onApply({ enabled: false, left: 0, top: 0, right: 1, bottom: 1 })}
+                className="border rounded px-3 py-1 hover:bg-slate-100">取消裁剪</button>
+              <button onClick={onCancel}
+                className="border rounded px-3 py-1 hover:bg-slate-100">關閉</button>
+              <button onClick={() => onApply({ enabled: true, ...box })}
+                className="border rounded px-3 py-1 bg-emerald-600 text-white hover:bg-emerald-700">套用到所有圖</button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     function NumberInput({ label, value, onChange, step = 0.5, suffix, disabled, hint }) {
       return (
         <label className={`flex flex-col text-xs ${disabled ? "text-slate-400" : "text-slate-600"}`}>
@@ -741,7 +882,7 @@
       );
     }
 
-    function ExcelPreview({ grid, cfg, orderedFiles, selected }) {
+    function ExcelPreview({ grid, cfg, orderedFiles, selected, thumbUrl }) {
       if (!grid) {
         return (
           <div className="border rounded-lg bg-slate-50 p-8 text-center text-slate-500">
@@ -864,7 +1005,7 @@
               const inset = fit === "contain" ? insetPct / 100 : 0;  // 四邊留白
               return (
                 <img key={`my-${i}`}
-                  src={`/api/thumb?path=${encodeURIComponent(pl.path)}&size=400`}
+                  src={thumbUrl(pl.path, 400)}
                   style={{
                     position: "absolute",
                     left: x + w * inset, top: y + h * inset,
@@ -901,6 +1042,7 @@
       const [xlGrid, setXlGrid] = useState(null);
       const [dragTpl, setDragTpl] = useState(false);
       const [dragImg, setDragImg] = useState(false);
+      const [cropOpen, setCropOpen] = useState(false);
       const [ws, setWs] = useState("");
       const [zoom, setZoom] = useState(1);
       const stageWrapRef = useRef(null);
@@ -952,6 +1094,16 @@
           .then((r) => r.json()).then((j) => setWs(j.workspace || ""))
           .catch(() => {});
       }, []);
+
+      // 縮圖 URL：對位/順序預覽的圖都從這拿，若有啟用 crop 就帶上 query
+      const thumbUrl = (path, size) => {
+        const base = `/api/thumb?path=${encodeURIComponent(path)}&size=${size}`;
+        const c = cfg.crop;
+        if (c && c.enabled) {
+          return `${base}&crop=${c.left.toFixed(4)},${c.top.toFixed(4)},${c.right.toFixed(4)},${c.bottom.toFixed(4)}`;
+        }
+        return base;
+      };
 
       const orderedFiles = useMemo(() => {
         const map = new Map(files.map((f) => [f.path, f]));
@@ -1189,6 +1341,7 @@
               embedInCell: !!cfg.excel.embedInCell,
               imgFit: cfg.excel.imgFit || "cover",
               containInset: Math.max(0, Math.min(45, cfg.excel.containInset ?? 5)) / 100,
+              crop: cfg.crop,
             });
           } else {
             const pages = computePages(cfg.slide, cfg.grid, arr, cfg.label, cfg.autoAlign);
@@ -1199,6 +1352,7 @@
               snInCell: cfg.label.enabled && cfg.slidesSn.inCell,
               snCol: Math.max(0, (cfg.slidesSn.col || 1) - 1),
               snRowStart: Math.max(0, (cfg.slidesSn.rowStart || 2) - 1),
+              crop: cfg.crop,
             });
           }
           const r = await fetch("/api/export", {
@@ -1399,8 +1553,18 @@
       const previewH_cm = firstAnchor && firstAnchor.w ? imgW_cm * (firstAnchor.h / firstAnchor.w) : null;
       const perPage = Math.max(1, cfg.grid.cols) * Math.max(1, cfg.grid.rows);
 
+      const cropTargetFile = (selected && orderedFiles.find((f) => f.path === selected)) || orderedFiles[0];
+
       return (
         <div className="max-w-[1600px] mx-auto p-4 h-screen flex flex-col">
+          {cropOpen && cropTargetFile && (
+            <CropEditor
+              file={cropTargetFile}
+              initial={cfg.crop}
+              onCancel={() => setCropOpen(false)}
+              onApply={(c) => { setCfg((x) => ({ ...x, crop: c })); setCropOpen(false); }}
+            />
+          )}
           <h1 className="text-xl font-bold mb-3 flex items-baseline gap-2">
             img-batch-paster
             {versionInfo && (
@@ -1643,11 +1807,23 @@
                     <span className="text-emerald-600 font-normal ml-1">· 選 {selectedPaths.length}</span>
                   )}
                 </div>
-                <button onClick={resetSort} disabled={files.length === 0}
-                  title="依檔名 A→Z 排序"
-                  className="text-xs border rounded px-2 py-0.5 disabled:opacity-40 hover:bg-slate-100">
-                  A→Z
-                </button>
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => {
+                      if (!selected && orderedFiles.length > 0) setSelected(orderedFiles[0].path);
+                      setCropOpen(true);
+                    }}
+                    disabled={orderedFiles.length === 0}
+                    title="對選中的圖框出裁剪區域，套用到所有圖"
+                    className={`text-xs border rounded px-2 py-0.5 disabled:opacity-40 hover:bg-slate-100 ${cfg.crop?.enabled ? "bg-emerald-100 border-emerald-400 text-emerald-800" : ""}`}>
+                    ✂️ {cfg.crop?.enabled ? "裁剪 ON" : "設定裁剪"}
+                  </button>
+                  <button onClick={resetSort} disabled={files.length === 0}
+                    title="依檔名 A→Z 排序"
+                    className="text-xs border rounded px-2 py-0.5 disabled:opacity-40 hover:bg-slate-100">
+                    A→Z
+                  </button>
+                </div>
               </div>
               <div ref={listRef} className={`flex-1 overflow-y-auto p-2 ${cfg.autoAlign ? "space-y-2" : "space-y-1"}`}
                 onClick={(e) => { if (e.target === e.currentTarget) { setSelectedPaths([]); setSelected(null); } }}
@@ -1697,7 +1873,7 @@
                               className={`aspect-square rounded overflow-hidden border cursor-pointer relative ${
                                 isSel ? "ring-2 ring-emerald-500 border-emerald-500" : "border-slate-200 hover:border-slate-400"
                               }`}>
-                              <img src={`/api/thumb?path=${encodeURIComponent(f.path)}&size=120`}
+                              <img src={thumbUrl(f.path, 120)}
                                 className="w-full h-full object-cover pointer-events-none" />
                               <div className="absolute bottom-0 left-0 right-0 text-[9px] text-center bg-black/50 text-white py-0.5 font-mono">{colLabel}</div>
                             </div>
@@ -1721,7 +1897,7 @@
                         isSel ? "bg-emerald-100 ring-1 ring-emerald-400" : "hover:bg-slate-50"
                       }`}>
                       <div className="text-xs text-slate-400 w-6 text-right tabular-nums">{idx + 1}</div>
-                      <img src={`/api/thumb?path=${encodeURIComponent(f.path)}&size=80`}
+                      <img src={thumbUrl(f.path, 80)}
                         className="w-10 h-10 object-cover border rounded pointer-events-none" />
                       <div className="flex-1 min-w-0 text-xs truncate" title={f.name}>{f.name}</div>
                       <div className="text-slate-300 text-xs pr-1" title="拖曳排序">⋮⋮</div>
@@ -1821,7 +1997,7 @@
                        <div style={{ zoom: zoom, MozTransform: `scale(${zoom})`, MozTransformOrigin: "top left" }}>
 
                       {mode === "excel" && (
-                        <ExcelPreview grid={xlGrid} cfg={cfg} orderedFiles={orderedFiles} selected={selected} />
+                        <ExcelPreview grid={xlGrid} cfg={cfg} orderedFiles={orderedFiles} selected={selected} thumbUrl={thumbUrl} />
                       )}
                       {mode === "slides" && (
                       <div className="flex gap-3 items-start justify-center">
@@ -1872,7 +2048,7 @@
                           }
                           return (
                             <img key={i}
-                              src={`/api/thumb?path=${encodeURIComponent(pl.path)}&size=400`}
+                              src={thumbUrl(pl.path, 400)}
                               style={style}
                               className={selected === pl.path ? "ring-4 ring-emerald-500 shadow-[0_0_18px_4px_rgba(16,185,129,0.7)] z-10 relative" : "border border-slate-300"} />
                           );
