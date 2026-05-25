@@ -200,6 +200,73 @@ def api_upload_images():
     return jsonify({"folder": str(folder), "count": saved})
 
 
+@app.post("/api/upload/source")
+def api_upload_source():
+    """Upload one source folder for SN-match mode. Workspace gets source-N/ subfolders."""
+    ws = request.form.get("workspace", "")
+    base = _ws_dir(ws)
+    if not base:
+        return jsonify({"error": "invalid workspace"}), 400
+    try:
+        sid = int(request.form.get("sourceId", "0"))
+    except ValueError:
+        return jsonify({"error": "invalid sourceId"}), 400
+    folder = base / f"source-{sid}"
+    if folder.exists():
+        shutil.rmtree(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+
+    files = request.files.getlist("files")
+    saved_files = []
+    for f in files:
+        if not f.filename:
+            continue
+        name = Path(f.filename).name
+        if not name:
+            continue
+        target = folder / name
+        f.save(str(target))
+        saved_files.append({"name": name, "path": str(target)})
+    return jsonify({"folder": str(folder), "count": len(saved_files), "files": saved_files})
+
+
+@app.post("/api/template/sn-list")
+def api_template_sn_list():
+    """Read SN list from an Excel template's column (e.g. column A from row 2)."""
+    from openpyxl import load_workbook
+    data = request.get_json(force=True)
+    path = Path(data["path"]).expanduser().resolve()
+    if not path.is_file():
+        return jsonify({"error": f"檔案不存在: {path}"}), 400
+    col_letter = (data.get("col") or "A").upper()
+    try:
+        row_start = max(1, int(data.get("rowStart", 2)))
+    except (TypeError, ValueError):
+        row_start = 2
+    try:
+        wb = load_workbook(str(path), data_only=True)
+    except Exception as e:
+        return jsonify({"error": f"無法開啟 Excel: {e}"}), 500
+    ws = wb.active
+    from openpyxl.utils import column_index_from_string
+    try:
+        col_idx = column_index_from_string(col_letter)
+    except ValueError:
+        return jsonify({"error": f"無效欄位字母: {col_letter}"}), 400
+    sns = []
+    # 連續讀直到遇到空 cell；同時記錄 row 號方便寫入時對應
+    max_scan = (ws.max_row or row_start) + 200  # 容錯避免無限
+    r = row_start
+    while r <= max_scan:
+        v = ws.cell(row=r, column=col_idx).value
+        if v is None or (isinstance(v, str) and not v.strip()):
+            # 允許中間出現 1-2 個空白後仍繼續嗎? 先採嚴格：遇空即停
+            break
+        sns.append({"sn": str(v).strip(), "row": r})
+        r += 1
+    return jsonify({"col": col_letter, "rowStart": row_start, "count": len(sns), "sns": sns})
+
+
 @app.get("/api/download/<ws>/<path:filename>")
 def api_download(ws, filename):
     base = _ws_dir(ws)
@@ -403,6 +470,7 @@ def api_export():
                 span_rows=int(p.get("span_rows", 1)),
                 text=p.get("text"),
                 font_pt=float(p.get("font_pt", 12)),
+                crop=p.get("crop"),
             )
             for p in data.get("cells", [])
         ]

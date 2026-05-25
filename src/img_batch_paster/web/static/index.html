@@ -46,7 +46,11 @@
         font_pt: 18,
       },
       autoAlign: false,   // 依檔名 group+idx 對位 (缺的照片留空)
-      crop: { enabled: false, left: 0, top: 0, right: 1, bottom: 1 },  // 0..1 相對裁剪
+      snMatchMode: false, // SN 對照模式：從範本讀 SN list、每個 SN 從多來源資料夾找對應圖
+      snSource: { col: "A", rowStart: 2 },  // SN 在範本的哪一欄、從第幾列開始
+      sources: [          // SN 對照模式專用：多個來源資料夾 (每元素: {id, name, folder, files, targetCol, crop})
+      ],
+      crop: { enabled: false, left: 0, top: 0, right: 1, bottom: 1 },  // 0..1 相對裁剪 (順序/對位共用)
       slidesSn: { inCell: false, col: 1, rowStart: 2 },  // PPT/Keynote SN 寫入表格 cell (1-based)
       excel: {
         startCell: "B5",
@@ -94,6 +98,15 @@
       });
       for (const entry of entries) await readEntry(entry);
       return files;
+    }
+
+    // 欄字母 → 1-based 數字 (A=1, AA=27)；無效回傳 0
+    function colLetterToIdx(letter) {
+      const s = String(letter || "").toUpperCase().trim();
+      if (!/^[A-Z]+$/.test(s)) return 0;
+      let n = 0;
+      for (let i = 0; i < s.length; i++) n = n * 26 + (s.charCodeAt(i) - 64);
+      return n;
     }
 
     function parseCell(ref) {
@@ -445,6 +458,244 @@
               欄數 = 偵測值；切「自訂」可定義欄位（含檔名沒出現的）
             </div>
           )}
+        </div>
+      );
+    }
+
+    // SN 對照模式：中欄 — SN × source 對照表
+    function SnMatchMatrix({ cfg, snList, selected, setSelected, thumbUrl, onOpenCrop }) {
+      // 把 source.files 建成 stem → file 的 map（不分大小寫，去副檔名）
+      const fileMaps = useMemo(() => cfg.sources.map((s) => {
+        const m = new Map();
+        for (const f of s.files || []) {
+          const stem = (f.name || "").replace(/\.[^./]+$/, "").toLowerCase();
+          m.set(stem, f);
+        }
+        return m;
+      }), [cfg.sources]);
+
+      if (!snList.length) {
+        return (
+          <div className="text-xs text-slate-400 text-center py-8">
+            請先讀取範本 SN list
+          </div>
+        );
+      }
+      if (!cfg.sources.length) {
+        return (
+          <div className="text-xs text-slate-400 text-center py-8">
+            請先新增至少一個資料來源
+          </div>
+        );
+      }
+
+      const missingPerSource = cfg.sources.map((s, i) => {
+        let miss = 0;
+        for (const sn of snList) {
+          if (!fileMaps[i].get(sn.sn.toLowerCase())) miss++;
+        }
+        return miss;
+      });
+      const totalMissing = missingPerSource.reduce((a, b) => a + b, 0);
+
+      return (
+        <div className="space-y-1">
+          <div className={`text-[10px] px-2 py-1 rounded ${totalMissing === 0 ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-800"}`}>
+            {totalMissing === 0
+              ? `✓ ${snList.length} 個 SN × ${cfg.sources.length} 來源 全部對到`
+              : `⚠ ${snList.length} 個 SN：${cfg.sources.map((s, i) => `${s.name} 缺 ${missingPerSource[i]}`).join(" · ")}`}
+          </div>
+          <div className="overflow-x-auto">
+            <table className="text-xs w-full">
+              <thead>
+                <tr className="text-[10px] text-slate-500">
+                  <th className="text-left px-1 py-0.5">SN</th>
+                  {cfg.sources.map((s) => (
+                    <th key={s.id} className="text-center px-1 py-1">
+                      <div className="flex items-center justify-center gap-1">
+                        <span className="bg-purple-100 text-purple-800 px-1 rounded font-mono">{s.name}</span>
+                        <span className="text-slate-400">→</span>
+                        <span className="font-mono">{s.targetCol}</span>
+                        <button
+                          onClick={() => onOpenCrop && onOpenCrop(s.id)}
+                          disabled={!s.files?.length}
+                          title={s.files?.length ? `設定來源 ${s.name} 的裁剪區域` : "請先上傳此來源的圖片"}
+                          className={`ml-1 text-xs border rounded px-1 py-0.5 hover:bg-slate-100 disabled:opacity-40 ${s.crop?.enabled ? "bg-emerald-100 border-emerald-400 text-emerald-800" : ""}`}>
+                          ✂️
+                        </button>
+                      </div>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {snList.map(({ sn, row }) => (
+                  <tr key={row} className="border-b border-slate-100 hover:bg-purple-50/30">
+                    <td className="font-mono text-[10px] px-1 py-1 text-slate-600">
+                      <span className="text-slate-300">{row}</span> {sn}
+                    </td>
+                    {cfg.sources.map((s, i) => {
+                      const f = fileMaps[i].get(sn.toLowerCase());
+                      const isSel = f && selected === f.path;
+                      return (
+                        <td key={s.id} className="px-1 py-0.5 text-center">
+                          {f ? (
+                            <img src={thumbUrl(f.path, 60, s.crop)}
+                              onClick={() => setSelected(f.path)}
+                              title={f.name}
+                              className={`inline-block w-10 h-10 object-cover border rounded cursor-pointer ${isSel ? "ring-2 ring-emerald-500" : "border-slate-300 hover:border-slate-500"}`} />
+                          ) : (
+                            <div className="inline-flex w-10 h-10 items-center justify-center border-2 border-dashed border-slate-300 rounded text-[10px] text-slate-400">缺</div>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    }
+
+    // SN 對照模式：左欄 — SN 來源設定 + 多來源資料夾管理
+    function SnMatchPanel({ cfg, setCfg, ws, tplPath, snList, setSnList, setStatus, setSelected, setCropOpen, setCropSourceId }) {
+      const [loading, setLoading] = useState(false);
+      const inputRefs = useRef({});
+
+      const loadSnList = async () => {
+        if (!tplPath) { setStatus("錯誤: 請先上傳 Excel 範本"); return; }
+        setLoading(true);
+        try {
+          const r = await fetch("/api/template/sn-list", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path: tplPath, col: cfg.snSource.col, rowStart: cfg.snSource.rowStart }),
+          });
+          const j = await r.json();
+          if (!r.ok) throw new Error(j.error || "讀取失敗");
+          setSnList(j.sns);
+          setStatus(`已載入 ${j.count} 個 SN (${cfg.snSource.col}${cfg.snSource.rowStart}起)`);
+        } catch (e) {
+          setStatus("錯誤: " + e.message);
+        } finally { setLoading(false); }
+      };
+
+      const uploadSource = async (sid, files) => {
+        if (!ws || !files || !files.length) return;
+        const src = cfg.sources.find((s) => s.id === sid);
+        if (!src) return;
+        setStatus(`上傳來源 ${src.name} (${files.length} 張)…`);
+        const fd = new FormData();
+        fd.append("workspace", ws);
+        fd.append("sourceId", String(sid));
+        for (const f of files) {
+          if (/\.(png|jpe?g)$/i.test(f.name)) fd.append("files", f);
+        }
+        try {
+          const r = await fetch("/api/upload/source", { method: "POST", body: fd });
+          const j = await r.json();
+          if (!r.ok) throw new Error(j.error || "上傳失敗");
+          setCfg((c) => ({
+            ...c,
+            sources: c.sources.map((s) => s.id === sid ? { ...s, folder: j.folder, files: j.files } : s),
+          }));
+          setStatus(`來源 ${src.name}: ${j.count} 張`);
+        } catch (e) { setStatus("錯誤: " + e.message); }
+      };
+
+      const updateSource = (sid, patch) => {
+        setCfg((c) => ({ ...c, sources: c.sources.map((s) => s.id === sid ? { ...s, ...patch } : s) }));
+      };
+
+      const addSource = () => {
+        setCfg((c) => {
+          const nextId = (c.sources.reduce((m, s) => Math.max(m, s.id), 0)) + 1;
+          const usedNames = new Set(c.sources.map((s) => s.name));
+          let name = String.fromCharCode(65 + c.sources.length);
+          while (usedNames.has(name)) name = String.fromCharCode(name.charCodeAt(0) + 1);
+          // 給個跟前一來源錯開的預設欄
+          const usedCols = new Set(c.sources.map((s) => s.targetCol));
+          let col = "F";
+          while (usedCols.has(col)) col = String.fromCharCode(col.charCodeAt(0) + 1);
+          return {
+            ...c, sources: [...c.sources, {
+              id: nextId, name, folder: "", files: [], targetCol: col,
+              crop: { enabled: false, left: 0, top: 0, right: 1, bottom: 1 },
+            }],
+          };
+        });
+      };
+
+      const removeSource = (sid) => {
+        setCfg((c) => ({ ...c, sources: c.sources.filter((s) => s.id !== sid) }));
+      };
+
+      return (
+        <div className="space-y-3">
+          {/* SN 來源 */}
+          <div className="border rounded-lg p-2 bg-purple-50/50">
+            <div className="text-sm font-medium text-purple-900 mb-2">SN 來源 (範本)</div>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="flex flex-col text-xs text-slate-600">
+                <span className="mb-1">SN 欄位</span>
+                <input value={cfg.snSource.col}
+                  onChange={(e) => setCfg((c) => ({ ...c, snSource: { ...c.snSource, col: e.target.value.toUpperCase() } }))}
+                  className="border rounded px-2 py-1 text-sm font-mono" placeholder="A" />
+              </label>
+              <label className="flex flex-col text-xs text-slate-600">
+                <span className="mb-1">起始列</span>
+                <input type="number" value={cfg.snSource.rowStart}
+                  onChange={(e) => setCfg((c) => ({ ...c, snSource: { ...c.snSource, rowStart: Math.max(1, parseInt(e.target.value) || 1) } }))}
+                  className="border rounded px-2 py-1 text-sm" />
+              </label>
+            </div>
+            <button onClick={loadSnList} disabled={loading || !tplPath}
+              className="w-full mt-2 border rounded py-1 text-xs bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-40">
+              {loading ? "讀取中…" : tplPath ? `讀取 SN list (${cfg.snSource.col}${cfg.snSource.rowStart}起)` : "請先上傳範本"}
+            </button>
+            {snList.length > 0 && (
+              <div className="text-[10px] text-slate-600 mt-1">
+                偵測到 <b>{snList.length}</b> 個 SN：
+                <span className="font-mono">{snList.slice(0, 3).map((s) => s.sn).join(", ")}{snList.length > 3 ? ` … (+${snList.length - 3})` : ""}</span>
+              </div>
+            )}
+          </div>
+
+          {/* 來源列表 */}
+          <div className="border rounded-lg p-2">
+            <div className="text-sm font-medium text-slate-700 mb-2">資料來源 ({cfg.sources.length})</div>
+            <div className="space-y-2">
+              {cfg.sources.map((s) => (
+                <div key={s.id} className="border rounded p-2 bg-white">
+                  <div className="flex items-center gap-1 mb-1">
+                    <input value={s.name}
+                      onChange={(e) => updateSource(s.id, { name: e.target.value })}
+                      className="border rounded px-1.5 py-0.5 text-xs font-mono w-12" />
+                    <span className="text-[10px] text-slate-400">→</span>
+                    <span className="text-[10px] text-slate-500">寫入欄</span>
+                    <input value={s.targetCol}
+                      onChange={(e) => updateSource(s.id, { targetCol: e.target.value.toUpperCase() })}
+                      className="border rounded px-1.5 py-0.5 text-xs font-mono w-12" />
+                    <button onClick={() => removeSource(s.id)}
+                      className="ml-auto text-slate-400 hover:text-red-600 text-xs">✕</button>
+                  </div>
+                  <button
+                    onClick={() => inputRefs.current[s.id]?.click()}
+                    className="w-full border rounded px-2 py-1 text-xs text-left truncate hover:bg-slate-50">
+                    📤 {s.files?.length ? `${s.files.length} 張` : "上傳資料夾…"}
+                  </button>
+                  <input ref={(el) => { inputRefs.current[s.id] = el; }}
+                    type="file" multiple webkitdirectory="" directory="" className="hidden"
+                    onChange={(e) => uploadSource(s.id, Array.from(e.target.files || []))} />
+                </div>
+              ))}
+              <button onClick={addSource}
+                className="w-full border border-dashed border-purple-300 text-purple-700 rounded py-1 text-xs hover:bg-purple-50">
+                + 新增來源
+              </button>
+            </div>
+          </div>
         </div>
       );
     }
@@ -882,7 +1133,7 @@
       );
     }
 
-    function ExcelPreview({ grid, cfg, orderedFiles, selected, thumbUrl }) {
+    function ExcelPreview({ grid, cfg, orderedFiles, selected, thumbUrl, snList }) {
       if (!grid) {
         return (
           <div className="border rounded-lg bg-slate-50 p-8 text-center text-slate-500">
@@ -908,7 +1159,26 @@
       grid.cells.forEach((cell) => { cellMap[`${cell.r},${cell.c}`] = cell; });
 
       // 我們的 placements
-      const placements = computeExcelCells(cfg.excel, cfg.label, orderedFiles, cfg.autoAlign);
+      let placements;
+      if (cfg.snMatchMode) {
+        // SN 對照模式：依 SN list × sources 算
+        placements = [];
+        for (const { sn, row } of (snList || [])) {
+          const stem = sn.toLowerCase();
+          for (const s of cfg.sources) {
+            const f = (s.files || []).find((x) => (x.name || "").replace(/\.[^./]+$/, "").toLowerCase() === stem);
+            if (!f) continue;
+            const col = colLetterToIdx(s.targetCol);
+            if (!col) continue;
+            placements.push({
+              path: f.path, row, col, span_cols: 1, span_rows: 1,
+              _crop: s.crop?.enabled ? s.crop : null,  // 給 thumbnail 帶 crop 用
+            });
+          }
+        }
+      } else {
+        placements = computeExcelCells(cfg.excel, cfg.label, orderedFiles, cfg.autoAlign);
+      }
 
       const alignToFlex = { left: "flex-start", center: "center", right: "flex-end" };
       const vAlignToFlex = { top: "flex-start", center: "center", middle: "center", bottom: "flex-end" };
@@ -1005,7 +1275,7 @@
               const inset = fit === "contain" ? insetPct / 100 : 0;  // 四邊留白
               return (
                 <img key={`my-${i}`}
-                  src={thumbUrl(pl.path, 400)}
+                  src={thumbUrl(pl.path, 400, pl._crop)}
                   style={{
                     position: "absolute",
                     left: x + w * inset, top: y + h * inset,
@@ -1043,6 +1313,8 @@
       const [dragTpl, setDragTpl] = useState(false);
       const [dragImg, setDragImg] = useState(false);
       const [cropOpen, setCropOpen] = useState(false);
+      const [cropSourceId, setCropSourceId] = useState(null);  // null = 全域 crop; 否則為 source.id (snMatch 模式)
+      const [snList, setSnList] = useState([]);  // [{ sn, row }] from /api/template/sn-list
       const [ws, setWs] = useState("");
       const [zoom, setZoom] = useState(1);
       const stageWrapRef = useRef(null);
@@ -1096,9 +1368,10 @@
       }, []);
 
       // 縮圖 URL：對位/順序預覽的圖都從這拿，若有啟用 crop 就帶上 query
-      const thumbUrl = (path, size) => {
+      // 第三參數可傳入特定 crop (snMatch 模式用 source.crop 覆寫全域)
+      const thumbUrl = (path, size, cropOverride) => {
         const base = `/api/thumb?path=${encodeURIComponent(path)}&size=${size}`;
-        const c = cfg.crop;
+        const c = cropOverride || cfg.crop;
         if (c && c.enabled) {
           return `${base}&crop=${c.left.toFixed(4)},${c.top.toFixed(4)},${c.right.toFixed(4)},${c.bottom.toFixed(4)}`;
         }
@@ -1320,6 +1593,52 @@
       };
 
       const doExport = async () => {
+        // SN 對照模式 — 自成一條路徑
+        if (cfg.snMatchMode) {
+          if (!tplPath) { setStatus("錯誤: 請先上傳 Excel 範本"); return; }
+          if (!snList.length) { setStatus("錯誤: 請先載入 SN list"); return; }
+          if (!cfg.sources.length) { setStatus("錯誤: 至少需一個來源"); return; }
+          setBusy(true); setStatus("組裝 SN 對照 cells…");
+          try {
+            const cells = [];
+            for (const { sn, row } of snList) {
+              const stem = sn.toLowerCase();
+              for (const s of cfg.sources) {
+                const f = (s.files || []).find((x) => (x.name || "").replace(/\.[^./]+$/, "").toLowerCase() === stem);
+                if (!f) continue;
+                const col = colLetterToIdx(s.targetCol);
+                if (!col) continue;
+                cells.push({
+                  path: f.path, row, col,
+                  span_cols: 1, span_rows: 1,
+                  crop: s.crop?.enabled ? s.crop : null,
+                });
+              }
+            }
+            if (!cells.length) throw new Error("沒有可匯出的圖片 (檢查 SN 與來源檔名是否對應)");
+            const body = JSON.stringify({
+              cells, output: cfg.output, workspace: ws,
+              embedInCell: !!cfg.excel.embedInCell,
+              imgFit: cfg.excel.imgFit || "cover",
+              containInset: Math.max(0, Math.min(45, cfg.excel.containInset ?? 5)) / 100,
+            });
+            setStatus(`匯出 Excel 中… (${cells.length} 格)`);
+            const r = await fetch("/api/export", {
+              method: "POST", headers: { "Content-Type": "application/json" }, body,
+            });
+            const j = await r.json();
+            if (!r.ok) throw new Error(j.error || "export failed");
+            if (j.download_url) {
+              window.open(j.download_url, "_blank");
+              setStatus(`✓ 已匯出 ${cells.length} 格 (SN 對照)`);
+            } else {
+              setStatus(`✓ ${j.output}`);
+            }
+          } catch (e) { setStatus("錯誤: " + e.message); }
+          finally { setBusy(false); }
+          return;
+        }
+
         if (!cfg.folder) { setStatus("錯誤: 請先指定圖片資料夾"); return; }
         setBusy(true); setStatus("匯出中…");
         try {
@@ -1553,16 +1872,29 @@
       const previewH_cm = firstAnchor && firstAnchor.w ? imgW_cm * (firstAnchor.h / firstAnchor.w) : null;
       const perPage = Math.max(1, cfg.grid.cols) * Math.max(1, cfg.grid.rows);
 
-      const cropTargetFile = (selected && orderedFiles.find((f) => f.path === selected)) || orderedFiles[0];
+      // 決定 crop modal 編輯的對象：snMatch 模式 + cropSourceId → 來源 crop；否則全域 crop
+      const editingSource = cropSourceId != null ? cfg.sources.find((s) => s.id === cropSourceId) : null;
+      const cropTargetFile = editingSource
+        ? (editingSource.files?.find((f) => f.path === selected) || editingSource.files?.[0])
+        : ((selected && orderedFiles.find((f) => f.path === selected)) || orderedFiles[0]);
+      const cropInitial = editingSource ? editingSource.crop : cfg.crop;
 
       return (
         <div className="max-w-[1600px] mx-auto p-4 h-screen flex flex-col">
           {cropOpen && cropTargetFile && (
             <CropEditor
               file={cropTargetFile}
-              initial={cfg.crop}
-              onCancel={() => setCropOpen(false)}
-              onApply={(c) => { setCfg((x) => ({ ...x, crop: c })); setCropOpen(false); }}
+              initial={cropInitial}
+              onCancel={() => { setCropOpen(false); setCropSourceId(null); }}
+              onApply={(c) => {
+                if (editingSource) {
+                  setCfg((x) => ({ ...x, sources: x.sources.map((s) => s.id === editingSource.id ? { ...s, crop: c } : s) }));
+                } else {
+                  setCfg((x) => ({ ...x, crop: c }));
+                }
+                setCropOpen(false);
+                setCropSourceId(null);
+              }}
             />
           )}
           <h1 className="text-xl font-bold mb-3 flex items-baseline gap-2">
@@ -1606,24 +1938,41 @@
                   <div className="text-[10px] text-slate-400 mt-1">可拖拉檔案；.key 需 server 在 macOS（Keynote 轉檔約 10-30 秒）</div>
                 </div>
 
-                <div>
-                  <label className="text-sm font-medium">圖片資料夾</label>
-                  <div className="flex gap-1 mt-1"
-                    onDragOver={(e) => { e.preventDefault(); setDragImg(true); }}
-                    onDragLeave={() => setDragImg(false)}
-                    onDrop={onDropImages}>
-                    <button onClick={() => imgInputRef.current?.click()}
-                      className={`flex-1 border rounded px-2 py-1 text-sm text-left truncate ${dragImg ? "border-emerald-500 bg-emerald-50" : "hover:bg-slate-100"}`}>
-                      📤 {files.length > 0 ? `已上傳 ${files.length} 張` : (dragImg ? "放開以上傳…" : "上傳 / 拖入圖片資料夾…")}
-                    </button>
-                    <input ref={imgInputRef} type="file" multiple
-                      webkitdirectory="" directory=""
-                      className="hidden"
-                      onChange={(e) => uploadImages(e.target.files)} />
+                {!cfg.snMatchMode && (
+                  <div>
+                    <label className="text-sm font-medium">圖片資料夾</label>
+                    <div className="flex gap-1 mt-1"
+                      onDragOver={(e) => { e.preventDefault(); setDragImg(true); }}
+                      onDragLeave={() => setDragImg(false)}
+                      onDrop={onDropImages}>
+                      <button onClick={() => imgInputRef.current?.click()}
+                        className={`flex-1 border rounded px-2 py-1 text-sm text-left truncate ${dragImg ? "border-emerald-500 bg-emerald-50" : "hover:bg-slate-100"}`}>
+                        📤 {files.length > 0 ? `已上傳 ${files.length} 張` : (dragImg ? "放開以上傳…" : "上傳 / 拖入圖片資料夾…")}
+                      </button>
+                      <input ref={imgInputRef} type="file" multiple
+                        webkitdirectory="" directory=""
+                        className="hidden"
+                        onChange={(e) => uploadImages(e.target.files)} />
+                    </div>
                   </div>
-                </div>
+                )}
 
-                {mode === "slides" && (
+                {cfg.snMatchMode && (
+                  <SnMatchPanel
+                    cfg={cfg}
+                    setCfg={setCfg}
+                    ws={ws}
+                    tplPath={tplPath}
+                    snList={snList}
+                    setSnList={setSnList}
+                    setStatus={setStatus}
+                    setSelected={setSelected}
+                    setCropOpen={setCropOpen}
+                    setCropSourceId={setCropSourceId}
+                  />
+                )}
+
+                {mode === "slides" && !cfg.snMatchMode && (
                   <div className="border-t pt-3">
                     <div className="text-sm font-semibold mb-2">每頁網格</div>
                     <div className="grid grid-cols-2 gap-2">
@@ -1638,7 +1987,7 @@
                   </div>
                 )}
 
-                {mode === "excel" && (
+                {mode === "excel" && !cfg.snMatchMode && (
                   <div className="border-t pt-3">
                     <div className="text-sm font-semibold mb-2">Excel 配置</div>
                     <div className="space-y-2">
@@ -1698,6 +2047,7 @@
                   </div>
                 )}
 
+                {!cfg.snMatchMode && (
                 <div className="border-t pt-3">
                   <label className="flex items-center gap-2 text-sm font-semibold">
                     <input type="checkbox" checked={cfg.label.enabled}
@@ -1738,6 +2088,7 @@
                     </div>
                   )}
                 </div>
+                )}
 
                 <div className="border-t pt-3">
                   <div className="flex items-center justify-between mb-1">
@@ -1777,30 +2128,47 @@
             </div>
 
             {/* 中欄：檔案清單 */}
-            <div className={`col-span-3 rounded-lg shadow flex flex-col min-h-0 transition-colors ${cfg.autoAlign ? "bg-sky-50 ring-2 ring-sky-300" : "bg-white"}`}>
-              {/* 排列方式：頂層模式切換 */}
+            <div className={`col-span-3 rounded-lg shadow flex flex-col min-h-0 transition-colors ${
+              cfg.snMatchMode ? "bg-purple-50 ring-2 ring-purple-300"
+                : cfg.autoAlign ? "bg-sky-50 ring-2 ring-sky-300"
+                : "bg-white"
+            }`}>
+              {/* 排列方式：頂層模式切換 (3 模式) */}
               <div className="p-2 border-b">
                 <div className="text-[10px] text-slate-500 mb-1 font-semibold">排列方式</div>
-                <div className="grid grid-cols-2 gap-1">
-                  <button onClick={() => setCfg((c) => ({ ...c, autoAlign: false }))}
+                <div className="grid grid-cols-3 gap-1">
+                  <button onClick={() => setCfg((c) => ({ ...c, autoAlign: false, snMatchMode: false }))}
                     className={`px-2 py-1.5 rounded border text-xs flex items-center justify-center gap-1 ${
-                      !cfg.autoAlign
+                      !cfg.autoAlign && !cfg.snMatchMode
                         ? "bg-slate-700 text-white border-slate-700 shadow"
                         : "bg-white text-slate-600 border-slate-300 hover:bg-slate-50"
                     }`}>
                     📝 順序填入
                   </button>
-                  <button onClick={() => setCfg((c) => ({ ...c, autoAlign: true }))}
+                  <button onClick={() => setCfg((c) => ({ ...c, autoAlign: true, snMatchMode: false }))}
                     className={`px-2 py-1.5 rounded border text-xs flex items-center justify-center gap-1 ${
-                      cfg.autoAlign
+                      cfg.autoAlign && !cfg.snMatchMode
                         ? "bg-sky-600 text-white border-sky-700 shadow"
                         : "bg-white text-slate-600 border-slate-300 hover:bg-sky-50"
                     }`}>
-                    🎯 依檔名對位
+                    🎯 檔名對位
+                  </button>
+                  <button onClick={() => setCfg((c) => ({ ...c, autoAlign: false, snMatchMode: true, sources: c.sources?.length ? c.sources : [
+                      { id: 1, name: "A", folder: "", files: [], targetCol: "F", crop: { enabled: false, left: 0, top: 0, right: 1, bottom: 1 } },
+                      { id: 2, name: "B", folder: "", files: [], targetCol: "G", crop: { enabled: false, left: 0, top: 0, right: 1, bottom: 1 } },
+                    ] }))}
+                    className={`px-2 py-1.5 rounded border text-xs flex items-center justify-center gap-1 ${
+                      cfg.snMatchMode
+                        ? "bg-purple-600 text-white border-purple-700 shadow"
+                        : "bg-white text-slate-600 border-slate-300 hover:bg-purple-50"
+                    }`}>
+                    📋 SN 對照
                   </button>
                 </div>
                 <div className="text-[10px] text-slate-500 mt-1">
-                  {cfg.autoAlign
+                  {cfg.snMatchMode
+                    ? "從 Excel 範本讀 SN list；多來源資料夾依檔名找對應圖、各自寫入指定欄"
+                    : cfg.autoAlign
                     ? "圖片位置由檔名決定，缺照片留空。拖曳/排序對欄位無效"
                     : "照清單順序依序填入格子；可拖曳排序"}
                 </div>
@@ -1813,23 +2181,25 @@
                     <span className="text-emerald-600 font-normal ml-1">· 選 {selectedPaths.length}</span>
                   )}
                 </div>
-                <div className="flex gap-1">
-                  <button
-                    onClick={() => {
-                      if (!selected && orderedFiles.length > 0) setSelected(orderedFiles[0].path);
-                      setCropOpen(true);
-                    }}
-                    disabled={orderedFiles.length === 0}
-                    title="對選中的圖框出裁剪區域，套用到所有圖"
-                    className={`text-xs border rounded px-2 py-0.5 disabled:opacity-40 hover:bg-slate-100 ${cfg.crop?.enabled ? "bg-emerald-100 border-emerald-400 text-emerald-800" : ""}`}>
-                    ✂️ {cfg.crop?.enabled ? "裁剪 ON" : "設定裁剪"}
-                  </button>
-                  <button onClick={resetSort} disabled={files.length === 0}
-                    title="依檔名 A→Z 排序"
-                    className="text-xs border rounded px-2 py-0.5 disabled:opacity-40 hover:bg-slate-100">
-                    A→Z
-                  </button>
-                </div>
+                {!cfg.snMatchMode && (
+                  <div className="flex gap-1">
+                    <button
+                      onClick={() => {
+                        if (!selected && orderedFiles.length > 0) setSelected(orderedFiles[0].path);
+                        setCropOpen(true);
+                      }}
+                      disabled={orderedFiles.length === 0}
+                      title="對選中的圖框出裁剪區域，套用到所有圖"
+                      className={`text-xs border rounded px-2 py-0.5 disabled:opacity-40 hover:bg-slate-100 ${cfg.crop?.enabled ? "bg-emerald-100 border-emerald-400 text-emerald-800" : ""}`}>
+                      ✂️ {cfg.crop?.enabled ? "裁剪 ON" : "設定裁剪"}
+                    </button>
+                    <button onClick={resetSort} disabled={files.length === 0}
+                      title="依檔名 A→Z 排序"
+                      className="text-xs border rounded px-2 py-0.5 disabled:opacity-40 hover:bg-slate-100">
+                      A→Z
+                    </button>
+                  </div>
+                )}
               </div>
               <div ref={listRef} className={`flex-1 overflow-y-auto p-2 ${cfg.autoAlign ? "space-y-2" : "space-y-1"}`}
                 onClick={(e) => { if (e.target === e.currentTarget) { setSelectedPaths([]); setSelected(null); } }}
@@ -1837,6 +2207,22 @@
                 onDragEnd={() => { setDragOverIdx(null); stopAutoScroll(); }}
                 onDragLeave={(e) => { if (e.target === e.currentTarget) { setDragOverIdx(null); stopAutoScroll(); } }}>
 
+                {cfg.snMatchMode ? (
+                  <SnMatchMatrix
+                    cfg={cfg}
+                    snList={snList}
+                    selected={selected}
+                    setSelected={setSelected}
+                    thumbUrl={thumbUrl}
+                    onOpenCrop={(sid) => {
+                      const s = cfg.sources.find((x) => x.id === sid);
+                      if (!s?.files?.length) { setStatus("先上傳此來源的圖片"); return; }
+                      setCropSourceId(sid);
+                      setSelected(s.files[0].path);
+                      setCropOpen(true);
+                    }}
+                  />
+                ) : <>
                 {orderedFiles.length === 0 && (
                   <div className="text-xs text-slate-400 text-center py-8">
                     上傳圖片資料夾後顯示
@@ -1915,6 +2301,7 @@
                   onDragOver={(e) => { e.preventDefault(); setDragOverIdx(9999); }}
                   onDrop={(e) => cfg.autoAlign ? onCardDrop(e, null) : onItemDrop(e, null)}
                   style={{ height: 12, boxShadow: dragOverIdx === 9999 ? `inset 0 2px 0 0 ${cfg.autoAlign ? "#0284c7" : "#059669"}` : "" }} />
+                </>}
               </div>
               {orderedFiles.length > 0 && (
                 <div className="border-t p-2 space-y-1">
@@ -1968,8 +2355,12 @@
                       <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
                         <div className="text-sm text-slate-500 flex items-center gap-2">
                           預覽
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded border ${cfg.autoAlign ? "bg-sky-100 text-sky-700 border-sky-300" : "bg-slate-100 text-slate-600 border-slate-300"}`}>
-                            {cfg.autoAlign ? "🎯 依檔名對位" : "📝 順序填入"}
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
+                            cfg.snMatchMode ? "bg-purple-100 text-purple-700 border-purple-300"
+                              : cfg.autoAlign ? "bg-sky-100 text-sky-700 border-sky-300"
+                              : "bg-slate-100 text-slate-600 border-slate-300"
+                          }`}>
+                            {cfg.snMatchMode ? "📋 SN 對照" : cfg.autoAlign ? "🎯 檔名對位" : "📝 順序填入"}
                           </span>
                           <span className="ml-1 text-[10px] text-slate-400">Shift＝粗調 · Alt＝微調</span>
                         </div>
@@ -2003,7 +2394,7 @@
                        <div style={{ zoom: zoom, MozTransform: `scale(${zoom})`, MozTransformOrigin: "top left" }}>
 
                       {mode === "excel" && (
-                        <ExcelPreview grid={xlGrid} cfg={cfg} orderedFiles={orderedFiles} selected={selected} thumbUrl={thumbUrl} />
+                        <ExcelPreview grid={xlGrid} cfg={cfg} orderedFiles={orderedFiles} selected={selected} thumbUrl={thumbUrl} snList={snList} />
                       )}
                       {mode === "slides" && (
                       <div className="flex gap-3 items-start justify-center">

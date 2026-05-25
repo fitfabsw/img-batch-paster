@@ -22,6 +22,7 @@ class CellPlacement:
     span_rows: int = 1
     text: str | None = None
     font_pt: float = 12.0
+    crop: dict | None = None  # per-placement crop (overrides global crop kwarg)
 
 
 # Excel 像素換算
@@ -214,8 +215,8 @@ def write_xlsx(
         if p.path is None or not Path(p.path).is_file():
             continue
 
-        # 先套用使用者設定的相對裁剪（若無則回傳原 path）
-        src_path = _apply_crop(Path(p.path), crop, out_path.parent / "_crops")
+        # 先套用裁剪（per-placement 優先，否則用全域 crop kwarg）
+        src_path = _apply_crop(Path(p.path), p.crop or crop, out_path.parent / "_crops")
 
         target_w, target_h = _placement_pixel_size(ws, p, mdw)
 
@@ -366,7 +367,7 @@ def _write_xlsx_in_cell(
         if p.path is None or not Path(p.path).is_file():
             continue
         # 依 img_fit 預處理圖片：Excel embed 模式預設 contain，所以 cover/fill 都要 PIL 先處理
-        src_path = _apply_crop(Path(p.path), crop, out_path.parent / "_crops")
+        src_path = _apply_crop(Path(p.path), p.crop or crop, out_path.parent / "_crops")
         if img_fit in ("cover", "fill"):
             tw, th = _placement_pixel_size(ws, p, mdw)
             tmp_dir = out_path.parent / "_crops"
