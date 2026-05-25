@@ -4,6 +4,7 @@ import io
 import shutil
 import tempfile
 import uuid
+import json
 from pathlib import Path
 
 import click
@@ -441,6 +442,81 @@ def api_template_preview():
     if not p.is_file():
         return "not found", 404
     return send_file(str(p), mimetype="image/png")
+
+
+# --- 設定檔配方 (Recipe) CRUD ---
+# 存 ~/.img-batch-paster/configs/<name>.json
+CONFIG_DIR = Path.home() / ".img-batch-paster" / "configs"
+import re as _re
+
+
+def _safe_config_name(name: str) -> str | None:
+    """允許中英數、空白、底線、減號、點。其他字元一律拒絕避免 path traversal。"""
+    name = (name or "").strip()
+    if not name or len(name) > 80:
+        return None
+    if not _re.match(r"^[\w \-.一-鿿]+$", name):
+        return None
+    return name
+
+
+@app.get("/api/configs")
+def api_configs_list():
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    items = []
+    for f in CONFIG_DIR.glob("*.json"):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        items.append({
+            "name": f.stem,
+            "meta": data.get("_meta", {}),
+            "mtime": f.stat().st_mtime,
+        })
+    items.sort(key=lambda x: x["mtime"], reverse=True)
+    return jsonify({"configs": items})
+
+
+@app.post("/api/configs")
+def api_configs_save():
+    data = request.get_json(force=True)
+    name = _safe_config_name(data.get("name", ""))
+    if not name:
+        return jsonify({"error": "無效的配置名稱"}), 400
+    recipe = data.get("recipe") or {}
+    if not isinstance(recipe, dict):
+        return jsonify({"error": "recipe 必須是 object"}), 400
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    out = CONFIG_DIR / f"{name}.json"
+    out.write_text(json.dumps(recipe, ensure_ascii=False, indent=2), encoding="utf-8")
+    return jsonify({"name": name, "path": str(out)})
+
+
+@app.get("/api/configs/<name>")
+def api_configs_get(name):
+    safe = _safe_config_name(name)
+    if not safe:
+        return jsonify({"error": "無效的配置名稱"}), 400
+    p = CONFIG_DIR / f"{safe}.json"
+    if not p.is_file():
+        return jsonify({"error": f"配置不存在: {safe}"}), 404
+    try:
+        return jsonify(json.loads(p.read_text(encoding="utf-8")))
+    except Exception as e:
+        return jsonify({"error": f"無法讀取配置: {e}"}), 500
+
+
+@app.delete("/api/configs/<name>")
+def api_configs_delete(name):
+    safe = _safe_config_name(name)
+    if not safe:
+        return jsonify({"error": "無效的配置名稱"}), 400
+    p = CONFIG_DIR / f"{safe}.json"
+    if not p.is_file():
+        return jsonify({"error": "配置不存在"}), 404
+    p.unlink()
+    return jsonify({"ok": True})
 
 
 @app.post("/api/export")

@@ -100,6 +100,52 @@
       return files;
     }
 
+    // cfg → 「配方」recipe：剝掉 session 專屬欄位、只留可重用設定
+    function cfgToRecipe(cfg, tplName) {
+      return {
+        _meta: {
+          version: 1,
+          created: new Date().toISOString(),
+          templateHint: tplName || "",
+        },
+        mode: { autoAlign: !!cfg.autoAlign, snMatchMode: !!cfg.snMatchMode },
+        label: cfg.label,
+        snSource: cfg.snSource,
+        sources: (cfg.sources || []).map((s) => ({
+          id: s.id, name: s.name, targetCol: s.targetCol, crop: s.crop,
+        })),
+        grid: cfg.grid,
+        slide: cfg.slide,
+        slidesSn: cfg.slidesSn,
+        excel: cfg.excel,
+        crop: cfg.crop,
+        output: { path: cfg.output?.path || "./out.xlsx" },
+      };
+    }
+
+    // recipe → 套用到目前 cfg：保留 session state (ws, files, folder, template path)
+    function applyRecipe(recipe, currentCfg) {
+      if (!recipe || typeof recipe !== "object") return currentCfg;
+      return {
+        ...currentCfg,
+        autoAlign: !!recipe.mode?.autoAlign,
+        snMatchMode: !!recipe.mode?.snMatchMode,
+        label: { ...currentCfg.label, ...(recipe.label || {}) },
+        snSource: { ...currentCfg.snSource, ...(recipe.snSource || {}) },
+        sources: (recipe.sources || []).map((s) => ({
+          id: s.id, name: s.name || "A", targetCol: s.targetCol || "F",
+          folder: "", files: [],
+          crop: s.crop || { enabled: false, left: 0, top: 0, right: 1, bottom: 1 },
+        })),
+        grid: { ...currentCfg.grid, ...(recipe.grid || {}) },
+        slide: { ...currentCfg.slide, ...(recipe.slide || {}) },
+        slidesSn: { ...currentCfg.slidesSn, ...(recipe.slidesSn || {}) },
+        excel: { ...currentCfg.excel, ...(recipe.excel || {}) },
+        crop: recipe.crop || currentCfg.crop,
+        output: { ...currentCfg.output, path: recipe.output?.path || currentCfg.output?.path || "./out.xlsx" },
+      };
+    }
+
     // 欄字母 → 1-based 數字 (A=1, AA=27)；無效回傳 0
     function colLetterToIdx(letter) {
       const s = String(letter || "").toUpperCase().trim();
@@ -1075,6 +1121,129 @@
       );
     }
 
+    // 設定檔配方 (recipe) 管理：下拉選擇 / 儲存 / 匯出 / 匯入
+    function ConfigPanel({ cfg, setCfg, tplName, setStatus }) {
+      const [configs, setConfigs] = useState([]);
+      const [selectedName, setSelectedName] = useState("");
+      const fileInputRef = useRef(null);
+
+      const refreshList = async () => {
+        try {
+          const r = await fetch("/api/configs");
+          const j = await r.json();
+          setConfigs(j.configs || []);
+        } catch (e) { /* ignore */ }
+      };
+      useEffect(() => { refreshList(); }, []);
+
+      const doSave = async (overrideName) => {
+        const defaultName = overrideName ?? selectedName ?? "";
+        const name = prompt("配置名稱 (中英數、空白、底線、減號)", defaultName || "我的配置");
+        if (!name) return;
+        const recipe = cfgToRecipe(cfg, tplName);
+        const r = await fetch("/api/configs", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, recipe }),
+        });
+        const j = await r.json();
+        if (!r.ok) { setStatus("錯誤: " + (j.error || "存檔失敗")); return; }
+        setStatus(`✓ 已儲存配置「${j.name}」`);
+        setSelectedName(j.name);
+        await refreshList();
+      };
+
+      const doLoad = async (name) => {
+        if (!name) return;
+        try {
+          const r = await fetch(`/api/configs/${encodeURIComponent(name)}`);
+          const j = await r.json();
+          if (!r.ok) throw new Error(j.error || "載入失敗");
+          setCfg((c) => applyRecipe(j, c));
+          setSelectedName(name);
+          const hint = j._meta?.templateHint;
+          setStatus(`✓ 已載入「${name}」${hint ? `（提醒：請重新上傳範本「${hint}」+ 相關來源）` : "（請重新上傳範本與來源）"}`);
+        } catch (e) { setStatus("錯誤: " + e.message); }
+      };
+
+      const doDelete = async () => {
+        if (!selectedName) return;
+        if (!confirm(`確定刪除配置「${selectedName}」？`)) return;
+        const r = await fetch(`/api/configs/${encodeURIComponent(selectedName)}`, { method: "DELETE" });
+        const j = await r.json();
+        if (!r.ok) { setStatus("錯誤: " + (j.error || "刪除失敗")); return; }
+        setStatus(`✓ 已刪除「${selectedName}」`);
+        setSelectedName("");
+        await refreshList();
+      };
+
+      const doExport = () => {
+        const recipe = cfgToRecipe(cfg, tplName);
+        const blob = new Blob([JSON.stringify(recipe, null, 2)], { type: "application/json" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `${selectedName || tplName?.replace(/\.[^.]+$/, "") || "config"}.json`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      };
+
+      const doImport = async (file) => {
+        if (!file) return;
+        try {
+          const txt = await file.text();
+          const recipe = JSON.parse(txt);
+          setCfg((c) => applyRecipe(recipe, c));
+          const hint = recipe._meta?.templateHint;
+          setStatus(`✓ 已匯入「${file.name}」${hint ? `（提醒：請重新上傳範本「${hint}」+ 來源）` : "（請重新上傳範本與來源）"}`);
+        } catch (e) { setStatus("錯誤: 匯入失敗 — " + e.message); }
+      };
+
+      return (
+        <div className="border rounded-lg p-2 bg-slate-50/60 space-y-1.5">
+          <div className="text-xs font-medium text-slate-700">📁 配置</div>
+
+          {/* 載入：下拉選一個就直接套用 */}
+          <select value={selectedName}
+            onChange={(e) => { setSelectedName(e.target.value); if (e.target.value) doLoad(e.target.value); }}
+            title="選擇要載入的設定"
+            className="w-full border rounded px-2 py-1 text-xs">
+            <option value="">— 載入既有設定 —</option>
+            {configs.map((c) => (
+              <option key={c.name} value={c.name}>{c.name}</option>
+            ))}
+          </select>
+
+          {/* 儲存：永遠彈出對話框問名字（預設帶目前選的） */}
+          <button onClick={() => doSave(selectedName)}
+            title={selectedName ? `存成新名稱或覆蓋「${selectedName}」` : "把目前 UI 設定存到 server"}
+            className="w-full border rounded px-2 py-1 text-xs bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-300">
+            💾 儲存當前設定
+          </button>
+
+          {/* 刪除：只在選了既有配置時顯示 */}
+          {selectedName && (
+            <button onClick={doDelete}
+              className="w-full border rounded px-2 py-1 text-xs text-red-700 border-red-300 hover:bg-red-50">
+              🗑️ 刪除「{selectedName}」
+            </button>
+          )}
+
+          {/* 跨機器搬遷：小字 */}
+          <div className="flex gap-2 text-[10px] text-slate-500 pt-1 border-t">
+            <button onClick={doExport} className="hover:text-slate-700 hover:underline" title="匯出當前設定為 .json 檔 (給別台機器或同事用)">
+              ⤓ 匯出 .json
+            </button>
+            <span className="text-slate-300">|</span>
+            <button onClick={() => fileInputRef.current?.click()} className="hover:text-slate-700 hover:underline" title="從 .json 檔匯入設定">
+              ⤒ 匯入 .json
+            </button>
+            <input ref={fileInputRef} type="file" accept=".json,application/json"
+              className="hidden"
+              onChange={(e) => { doImport(e.target.files?.[0]); e.target.value = ""; }} />
+          </div>
+        </div>
+      );
+    }
+
     // Stepper：◀ value ▶ 或 ▲ value ▼。
     // 按下立即觸發；按住 350ms 後每 60ms 重複；Shift=粗、Alt=細、點數字可 inline 編輯。
     // 寬度固定避免 layout shift。
@@ -1933,6 +2102,8 @@
             {/* 左欄：設定 */}
             <div className="col-span-3 bg-white rounded-lg shadow flex flex-col min-h-0">
               <div className="p-3 space-y-3 overflow-y-auto flex-1">
+                <ConfigPanel cfg={cfg} setCfg={setCfg} tplName={tplName} setStatus={setStatus} />
+
                 <div>
                   <label className="text-sm font-medium">範本 (.pptx / .key / .xlsx)</label>
                   <div className="flex gap-1 mt-1"
