@@ -1569,7 +1569,13 @@
             img-batch-paster
             {versionInfo && (
               <span className="text-[11px] font-normal text-slate-400 tabular-nums">
-                v{versionInfo.version} · {versionInfo.commit} · {versionInfo.date}
+                v{versionInfo.version}
+                {versionInfo.branch && versionInfo.branch !== "?" && (
+                  <span className={`ml-1 px-1.5 py-0.5 rounded font-sans ${versionInfo.branch === "main" ? "bg-slate-200 text-slate-700" : "bg-amber-100 text-amber-800"}`}>
+                    {versionInfo.branch}
+                  </span>
+                )}
+                {" · "}{versionInfo.commit} · {versionInfo.date}
               </span>
             )}
           </h1>
