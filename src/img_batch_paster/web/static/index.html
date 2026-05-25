@@ -510,22 +510,25 @@
               <thead>
                 <tr className="text-[10px] text-slate-500">
                   <th className="text-left px-1 py-0.5">SN</th>
-                  {cfg.sources.map((s) => (
-                    <th key={s.id} className="text-center px-1 py-1">
-                      <div className="flex items-center justify-center gap-1">
-                        <span className="bg-purple-100 text-purple-800 px-1 rounded font-mono">{s.name}</span>
-                        <span className="text-slate-400">→</span>
-                        <span className="font-mono">{s.targetCol}</span>
-                        <button
-                          onClick={() => onOpenCrop && onOpenCrop(s.id)}
-                          disabled={!s.files?.length}
-                          title={s.files?.length ? `設定來源 ${s.name} 的裁剪區域` : "請先上傳此來源的圖片"}
-                          className={`ml-1 text-xs border rounded px-1 py-0.5 hover:bg-slate-100 disabled:opacity-40 ${s.crop?.enabled ? "bg-emerald-100 border-emerald-400 text-emerald-800" : ""}`}>
-                          ✂️
-                        </button>
-                      </div>
-                    </th>
-                  ))}
+                  {cfg.sources.map((s) => {
+                    const displayName = s.files?.length ? s.name : "(未上傳)";
+                    return (
+                      <th key={s.id} className="text-center px-1 py-1">
+                        <div className="flex items-center justify-center gap-1">
+                          <span className="bg-purple-100 text-purple-800 px-1 rounded font-mono text-[10px] max-w-[100px] truncate" title={s.name}>{displayName}</span>
+                          <span className="text-slate-400">→</span>
+                          <span className="font-mono">{s.targetCol}</span>
+                          <button
+                            onClick={() => onOpenCrop && onOpenCrop(s.id)}
+                            disabled={!s.files?.length}
+                            title={s.files?.length ? `設定來源「${s.name}」的裁剪區域` : "請先上傳此來源的圖片"}
+                            className={`ml-1 text-xs border rounded px-1 py-0.5 hover:bg-slate-100 disabled:opacity-40 ${s.crop?.enabled ? "bg-emerald-100 border-emerald-400 text-emerald-800" : ""}`}>
+                            ✂️
+                          </button>
+                        </div>
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
@@ -585,6 +588,17 @@
         if (!ws || !files || !files.length) return;
         const src = cfg.sources.find((s) => s.id === sid);
         if (!src) return;
+
+        // 從 webkitRelativePath 取資料夾名稱 (e.g. "TA 106PCS L/img.jpg" → "TA 106PCS L")
+        const detectedFolderName = (() => {
+          for (const f of files) {
+            const rel = f.webkitRelativePath || "";
+            const seg = rel.split("/")[0];
+            if (seg) return seg;
+          }
+          return "";
+        })();
+
         setStatus(`上傳來源 ${src.name} (${files.length} 張)…`);
         const fd = new FormData();
         fd.append("workspace", ws);
@@ -598,9 +612,15 @@
           if (!r.ok) throw new Error(j.error || "上傳失敗");
           setCfg((c) => ({
             ...c,
-            sources: c.sources.map((s) => s.id === sid ? { ...s, folder: j.folder, files: j.files } : s),
+            sources: c.sources.map((s) => {
+              if (s.id !== sid) return s;
+              const next = { ...s, folder: j.folder, files: j.files };
+              // 名稱仍是預設單字母 (A/B/C/...) 時，自動帶入資料夾名稱
+              if (detectedFolderName && /^[A-Z]$/.test(s.name)) next.name = detectedFolderName;
+              return next;
+            }),
           }));
-          setStatus(`來源 ${src.name}: ${j.count} 張`);
+          setStatus(`來源 ${detectedFolderName || src.name}: ${j.count} 張`);
         } catch (e) { setStatus("錯誤: " + e.message); }
       };
 
@@ -669,10 +689,6 @@
               {cfg.sources.map((s) => (
                 <div key={s.id} className="border rounded p-2 bg-white">
                   <div className="flex items-center gap-1 mb-1">
-                    <input value={s.name}
-                      onChange={(e) => updateSource(s.id, { name: e.target.value })}
-                      className="border rounded px-1.5 py-0.5 text-xs font-mono w-12" />
-                    <span className="text-[10px] text-slate-400">→</span>
                     <span className="text-[10px] text-slate-500">寫入欄</span>
                     <input value={s.targetCol}
                       onChange={(e) => updateSource(s.id, { targetCol: e.target.value.toUpperCase() })}
@@ -682,8 +698,9 @@
                   </div>
                   <button
                     onClick={() => inputRefs.current[s.id]?.click()}
+                    title={s.files?.length ? s.name : "點擊選擇資料夾"}
                     className="w-full border rounded px-2 py-1 text-xs text-left truncate hover:bg-slate-50">
-                    📤 {s.files?.length ? `${s.files.length} 張` : "上傳資料夾…"}
+                    📤 {s.files?.length ? `${s.name} (${s.files.length} 張)` : "上傳資料夾…"}
                   </button>
                   <input ref={(el) => { inputRefs.current[s.id] = el; }}
                     type="file" multiple webkitdirectory="" directory="" className="hidden"
