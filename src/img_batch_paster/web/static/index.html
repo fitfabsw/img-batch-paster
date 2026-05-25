@@ -630,6 +630,13 @@
         } finally { setLoading(false); }
       };
 
+      // 自動讀取 SN list：在 SN 對照模式 + 範本已載入 + 尚無 SN list 時自動觸發
+      useEffect(() => {
+        if (cfg.snMatchMode && tplPath && snList.length === 0 && !loading) {
+          loadSnList();
+        }
+      }, [tplPath, cfg.snMatchMode]);
+
       const uploadSource = async (sid, files) => {
         if (!ws || !files || !files.length) return;
         const src = cfg.sources.find((s) => s.id === sid);
@@ -1122,7 +1129,8 @@
     }
 
     // 設定檔配方 (recipe) 管理：下拉選擇 / 儲存 / 匯出 / 匯入
-    function ConfigPanel({ cfg, setCfg, tplName, setStatus }) {
+    // 內含範本：存成 .ibp (zip)；舊版 .json 仍可讀
+    function ConfigPanel({ cfg, setCfg, tplName, tplPath, setTplName, setTplPath, ws, setStatus, loadTemplateByPath }) {
       const [configs, setConfigs] = useState([]);
       const [selectedName, setSelectedName] = useState("");
       const fileInputRef = useRef(null);
@@ -1143,11 +1151,12 @@
         const recipe = cfgToRecipe(cfg, tplName);
         const r = await fetch("/api/configs", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name, recipe }),
+          body: JSON.stringify({ name, recipe, templatePath: tplPath || "" }),
         });
         const j = await r.json();
         if (!r.ok) { setStatus("錯誤: " + (j.error || "存檔失敗")); return; }
-        setStatus(`✓ 已儲存配置「${j.name}」`);
+        const tag = j.hasTemplate ? "（含範本）" : "（不含範本）";
+        setStatus(`✓ 已儲存配置「${j.name}」${tag}`);
         setSelectedName(j.name);
         await refreshList();
       };
@@ -1155,13 +1164,21 @@
       const doLoad = async (name) => {
         if (!name) return;
         try {
-          const r = await fetch(`/api/configs/${encodeURIComponent(name)}`);
+          const url = `/api/configs/${encodeURIComponent(name)}` + (ws ? `?workspace=${encodeURIComponent(ws)}` : "");
+          const r = await fetch(url);
           const j = await r.json();
           if (!r.ok) throw new Error(j.error || "載入失敗");
           setCfg((c) => applyRecipe(j, c));
           setSelectedName(name);
-          const hint = j._meta?.templateHint;
-          setStatus(`✓ 已載入「${name}」${hint ? `（提醒：請重新上傳範本「${hint}」+ 相關來源）` : "（請重新上傳範本與來源）"}`);
+          const loaded = j._loaded || {};
+          if (loaded.templatePath && loadTemplateByPath) {
+            // 配置內含範本 → 自動載入（依副檔名走 slides 或 excel 路徑）
+            await loadTemplateByPath(loaded.templatePath, loaded.templateName || "");
+            setStatus(`✓ 已載入「${name}」（範本一併載入）`);
+          } else {
+            const hint = j._meta?.templateHint;
+            setStatus(`✓ 已載入「${name}」${hint ? `（提醒：請重新上傳範本「${hint}」+ 相關來源）` : "（請重新上傳範本與來源）"}`);
+          }
         } catch (e) { setStatus("錯誤: " + e.message); }
       };
 
@@ -1177,23 +1194,25 @@
       };
 
       const doExport = () => {
-        const recipe = cfgToRecipe(cfg, tplName);
-        const blob = new Blob([JSON.stringify(recipe, null, 2)], { type: "application/json" });
-        const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = `${selectedName || tplName?.replace(/\.[^.]+$/, "") || "config"}.json`;
-        a.click();
-        URL.revokeObjectURL(a.href);
+        if (!selectedName) {
+          setStatus("請先儲存配置，再匯出");
+          return;
+        }
+        // 透過 server 端點下載完整 .ibp (含範本)
+        window.location.href = `/api/configs/${encodeURIComponent(selectedName)}/download`;
       };
 
       const doImport = async (file) => {
         if (!file) return;
         try {
-          const txt = await file.text();
-          const recipe = JSON.parse(txt);
-          setCfg((c) => applyRecipe(recipe, c));
-          const hint = recipe._meta?.templateHint;
-          setStatus(`✓ 已匯入「${file.name}」${hint ? `（提醒：請重新上傳範本「${hint}」+ 來源）` : "（請重新上傳範本與來源）"}`);
+          const fd = new FormData();
+          fd.append("file", file);
+          const r = await fetch("/api/configs/import", { method: "POST", body: fd });
+          const j = await r.json();
+          if (!r.ok) throw new Error(j.error || "匯入失敗");
+          await refreshList();
+          // 匯入後自動載入
+          await doLoad(j.name);
         } catch (e) { setStatus("錯誤: 匯入失敗 — " + e.message); }
       };
 
@@ -1229,14 +1248,14 @@
 
           {/* 跨機器搬遷：小字 */}
           <div className="flex gap-2 text-[10px] text-slate-500 pt-1 border-t">
-            <button onClick={doExport} className="hover:text-slate-700 hover:underline" title="匯出當前設定為 .json 檔 (給別台機器或同事用)">
-              ⤓ 匯出 .json
+            <button onClick={doExport} className="hover:text-slate-700 hover:underline" title="匯出選中配置為 .ibp 檔 (含範本，給別台機器或同事用)">
+              ⤓ 匯出 .ibp
             </button>
             <span className="text-slate-300">|</span>
-            <button onClick={() => fileInputRef.current?.click()} className="hover:text-slate-700 hover:underline" title="從 .json 檔匯入設定">
-              ⤒ 匯入 .json
+            <button onClick={() => fileInputRef.current?.click()} className="hover:text-slate-700 hover:underline" title="從 .ibp / .json 檔匯入設定">
+              ⤒ 匯入 .ibp
             </button>
-            <input ref={fileInputRef} type="file" accept=".json,application/json"
+            <input ref={fileInputRef} type="file" accept=".ibp,.json,application/json,application/zip"
               className="hidden"
               onChange={(e) => { doImport(e.target.files?.[0]); e.target.value = ""; }} />
           </div>
@@ -1649,6 +1668,41 @@
         finally { setBusy(false); }
       };
 
+      // 已有 server-side 範本 path → 依副檔名觸發 slides / excel 對應的後處理
+      const loadTemplateByPath = async (path, name) => {
+        if (!path) return;
+        setTplPath(path);
+        if (name) setTplName(name);
+        const ext = (path.split(".").pop() || "").toLowerCase();
+        const newMode = ext === "xlsx" ? "excel" : "slides";
+        setMode(newMode);
+        setCfg((c) => ({
+          ...c,
+          output: {
+            ...c.output,
+            path: (c.output.path || "out").replace(/\.(pptx|key|xlsx)$/i, "") + (newMode === "excel" ? ".xlsx" : ".pptx"),
+            template: path,
+          },
+        }));
+        if (newMode === "slides") {
+          setXlGrid(null);
+          await doLoadTemplate(path);
+        } else {
+          setTpl(null);
+          const gr = await fetch("/api/template/excel-grid", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path }),
+          });
+          const gj = await gr.json();
+          if (gr.ok) {
+            setXlGrid(gj);
+            setStatus(`已載入 Excel 範本 (${gj.cols.length} 欄 × ${gj.rows.length} 列)`);
+          } else {
+            setStatus("錯誤: " + (gj.error || "讀取 Excel 範本失敗"));
+          }
+        }
+      };
+
       const uploadTemplate = async (file) => {
         if (!ws || !file) return;
         setBusy(true); setStatus("上傳範本中…");
@@ -1659,30 +1713,7 @@
           const r = await fetch("/api/upload/template", { method: "POST", body: fd });
           const j = await r.json();
           if (!r.ok) throw new Error(j.error || "上傳失敗");
-          setTplPath(j.path);
-          setTplName(file.name);
-          const newMode = j.mode || "slides";
-          setMode(newMode);
-          // 同步輸出副檔名
-          setCfg((c) => ({
-            ...c,
-            output: { ...c.output, path: (c.output.path.replace(/\.(pptx|key|xlsx)$/i, "")) +
-              (newMode === "excel" ? ".xlsx" : ".pptx") },
-          }));
-          if (newMode === "slides") {
-            await doLoadTemplate(j.path);
-          } else {
-            setTpl(null);
-            setCfg((c) => ({ ...c, output: { ...c.output, template: j.path } }));
-            const gr = await fetch("/api/template/excel-grid", {
-              method: "POST", headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ path: j.path }),
-            });
-            const gj = await gr.json();
-            if (!gr.ok) throw new Error(gj.error || "讀取 Excel 範本失敗");
-            setXlGrid(gj);
-            setStatus(`已載入 Excel 範本 (${gj.cols.length} 欄 × ${gj.rows.length} 列)`);
-          }
+          await loadTemplateByPath(j.path, file.name);
         } catch (e) { setStatus("錯誤: " + e.message); }
         finally { setBusy(false); }
       };
@@ -2102,7 +2133,11 @@
             {/* 左欄：設定 */}
             <div className="col-span-3 bg-white rounded-lg shadow flex flex-col min-h-0">
               <div className="p-3 space-y-3 overflow-y-auto flex-1">
-                <ConfigPanel cfg={cfg} setCfg={setCfg} tplName={tplName} setStatus={setStatus} />
+                <ConfigPanel cfg={cfg} setCfg={setCfg}
+                  tplName={tplName} tplPath={tplPath}
+                  setTplName={setTplName} setTplPath={setTplPath}
+                  ws={ws} setStatus={setStatus}
+                  loadTemplateByPath={loadTemplateByPath} />
 
                 <div>
                   <label className="text-sm font-medium">範本 (.pptx / .key / .xlsx)</label>

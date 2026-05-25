@@ -445,9 +445,11 @@ def api_template_preview():
 
 
 # --- 設定檔配方 (Recipe) CRUD ---
-# 存 ~/.img-batch-paster/configs/<name>.json
+# 存 ~/.img-batch-paster/configs/<name>.ibp (zip 內含 manifest.json + template.<ext>)
+# 向下相容：舊版 .json 純文字檔也讀得到 (但寫入一律 .ibp)
 CONFIG_DIR = Path.home() / ".img-batch-paster" / "configs"
 import re as _re
+import zipfile as _zipfile
 
 
 def _safe_config_name(name: str) -> str | None:
@@ -460,26 +462,71 @@ def _safe_config_name(name: str) -> str | None:
     return name
 
 
+def _config_file(name: str) -> Path | None:
+    """找出 <name>.ibp 或舊版 <name>.json，回傳實際存在的那個 path；都沒有回 None。"""
+    p_ibp = CONFIG_DIR / f"{name}.ibp"
+    if p_ibp.is_file():
+        return p_ibp
+    p_json = CONFIG_DIR / f"{name}.json"
+    if p_json.is_file():
+        return p_json
+    return None
+
+
+def _read_recipe(p: Path) -> dict | None:
+    """從 .ibp 或 .json 讀 recipe；失敗回 None。"""
+    try:
+        if p.suffix.lower() == ".ibp":
+            with _zipfile.ZipFile(p, "r") as zf:
+                with zf.open("manifest.json") as f:
+                    return json.loads(f.read().decode("utf-8"))
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _ibp_template_name(p: Path) -> str | None:
+    """讀 .ibp 內含的 template 檔名 (e.g. template.xlsx)；沒有則 None。"""
+    if p.suffix.lower() != ".ibp":
+        return None
+    try:
+        with _zipfile.ZipFile(p, "r") as zf:
+            for n in zf.namelist():
+                if n.startswith("template."):
+                    return n
+    except Exception:
+        pass
+    return None
+
+
 @app.get("/api/configs")
 def api_configs_list():
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     items = []
-    for f in CONFIG_DIR.glob("*.json"):
-        try:
-            data = json.loads(f.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        items.append({
-            "name": f.stem,
-            "meta": data.get("_meta", {}),
-            "mtime": f.stat().st_mtime,
-        })
+    seen = set()
+    # 先讀 .ibp，再 fallback .json (避免重名情況下 .ibp 優先)
+    for pattern in ("*.ibp", "*.json"):
+        for f in CONFIG_DIR.glob(pattern):
+            if f.stem in seen:
+                continue
+            seen.add(f.stem)
+            recipe = _read_recipe(f) or {}
+            items.append({
+                "name": f.stem,
+                "format": f.suffix.lstrip("."),
+                "hasTemplate": _ibp_template_name(f) is not None,
+                "meta": recipe.get("_meta", {}),
+                "mtime": f.stat().st_mtime,
+            })
     items.sort(key=lambda x: x["mtime"], reverse=True)
     return jsonify({"configs": items})
 
 
 @app.post("/api/configs")
 def api_configs_save():
+    """儲存配置 — 寫成 .ibp (zip)，可附帶範本檔。
+    請求 JSON: { name, recipe, templatePath? }
+    """
     data = request.get_json(force=True)
     name = _safe_config_name(data.get("name", ""))
     if not name:
@@ -487,24 +534,54 @@ def api_configs_save():
     recipe = data.get("recipe") or {}
     if not isinstance(recipe, dict):
         return jsonify({"error": "recipe 必須是 object"}), 400
+    template_path_str = data.get("templatePath") or ""
+    tpl_path = Path(template_path_str).expanduser().resolve() if template_path_str else None
+
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    out = CONFIG_DIR / f"{name}.json"
-    out.write_text(json.dumps(recipe, ensure_ascii=False, indent=2), encoding="utf-8")
-    return jsonify({"name": name, "path": str(out)})
+    out = CONFIG_DIR / f"{name}.ibp"
+    # 刪掉舊的 .json（若有）以免兩份混淆
+    old_json = CONFIG_DIR / f"{name}.json"
+    if old_json.is_file():
+        old_json.unlink()
+
+    with _zipfile.ZipFile(out, "w", _zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", json.dumps(recipe, ensure_ascii=False, indent=2))
+        if tpl_path and tpl_path.is_file():
+            inner_name = f"template{tpl_path.suffix}"
+            zf.write(str(tpl_path), arcname=inner_name)
+    return jsonify({"name": name, "path": str(out), "hasTemplate": bool(tpl_path and tpl_path.is_file())})
 
 
 @app.get("/api/configs/<name>")
 def api_configs_get(name):
+    """載入配置 — 回傳 recipe + (若有範本) 解壓到 workspace 的 template path。"""
     safe = _safe_config_name(name)
     if not safe:
         return jsonify({"error": "無效的配置名稱"}), 400
-    p = CONFIG_DIR / f"{safe}.json"
-    if not p.is_file():
+    p = _config_file(safe)
+    if p is None:
         return jsonify({"error": f"配置不存在: {safe}"}), 404
-    try:
-        return jsonify(json.loads(p.read_text(encoding="utf-8")))
-    except Exception as e:
-        return jsonify({"error": f"無法讀取配置: {e}"}), 500
+    recipe = _read_recipe(p)
+    if recipe is None:
+        return jsonify({"error": "無法讀取配置內容"}), 500
+
+    resp = dict(recipe)
+    resp["_loaded"] = {"name": safe, "format": p.suffix.lstrip(".")}
+
+    # 如果 .ibp 含範本，解壓到 workspace
+    ws = request.args.get("workspace", "")
+    base = _ws_dir(ws) if ws else None
+    if base and p.suffix.lower() == ".ibp":
+        inner = _ibp_template_name(p)
+        if inner:
+            ext = Path(inner).suffix
+            dest = base / f"template{ext}"
+            with _zipfile.ZipFile(p, "r") as zf:
+                with zf.open(inner) as src, open(dest, "wb") as dst:
+                    dst.write(src.read())
+            resp["_loaded"]["templatePath"] = str(dest)
+            resp["_loaded"]["templateName"] = recipe.get("_meta", {}).get("templateHint") or inner
+    return jsonify(resp)
 
 
 @app.delete("/api/configs/<name>")
@@ -512,11 +589,48 @@ def api_configs_delete(name):
     safe = _safe_config_name(name)
     if not safe:
         return jsonify({"error": "無效的配置名稱"}), 400
-    p = CONFIG_DIR / f"{safe}.json"
-    if not p.is_file():
+    p = _config_file(safe)
+    if p is None:
         return jsonify({"error": "配置不存在"}), 404
     p.unlink()
     return jsonify({"ok": True})
+
+
+@app.get("/api/configs/<name>/download")
+def api_configs_download(name):
+    """下載 .ibp / .json 配置檔給使用者帶走。"""
+    safe = _safe_config_name(name)
+    if not safe:
+        return "invalid name", 400
+    p = _config_file(safe)
+    if p is None:
+        return "not found", 404
+    return send_file(str(p), as_attachment=True, download_name=p.name)
+
+
+@app.post("/api/configs/import")
+def api_configs_import():
+    """匯入使用者上傳的 .ibp 或 .json 配置檔；存到 CONFIG_DIR 後可在下拉看到。"""
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify({"error": "no file"}), 400
+    src_name = Path(f.filename).name
+    stem = Path(src_name).stem
+    ext = Path(src_name).suffix.lower()
+    if ext not in (".ibp", ".json"):
+        return jsonify({"error": f"不支援的副檔名: {ext}"}), 400
+    safe = _safe_config_name(stem)
+    if not safe:
+        return jsonify({"error": "檔名含不允許字元"}), 400
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    out = CONFIG_DIR / f"{safe}{ext}"
+    f.save(str(out))
+    # 驗證內容
+    recipe = _read_recipe(out)
+    if recipe is None:
+        out.unlink()
+        return jsonify({"error": "檔案內容無效"}), 400
+    return jsonify({"name": safe, "format": ext.lstrip("."), "hasTemplate": _ibp_template_name(out) is not None})
 
 
 @app.post("/api/export")
