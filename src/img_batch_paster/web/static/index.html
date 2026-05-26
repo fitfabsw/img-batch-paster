@@ -984,6 +984,21 @@
       });
       const dragRef = useRef(null);   // { mode: 'new'|'move'|'l'|'r'|'t'|'b'|'tl'|..., startX, startY, startBox }
 
+      // 鍵盤快捷：Enter = 套用、Esc = 關閉
+      useEffect(() => {
+        const onKey = (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            onApply({ enabled: true, ...box });
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            onCancel();
+          }
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+      }, [box, onApply, onCancel]);
+
       const getRel = (e) => {
         const el = boxRef.current;
         if (!el) return [0, 0];
@@ -1097,15 +1112,16 @@
                 ))}
               </div>
             </div>
-            <div className="flex gap-2 justify-end text-sm">
+            <div className="flex items-center gap-2 justify-end text-sm">
+              <div className="text-[10px] text-slate-400 mr-auto">⏎ 套用 · Esc 關閉</div>
               <button onClick={() => setBox({ left: 0.15, top: 0.15, right: 0.85, bottom: 0.85 })}
                 className="border rounded px-3 py-1 hover:bg-slate-100">重置框</button>
               <button onClick={() => onApply({ enabled: false, left: 0, top: 0, right: 1, bottom: 1 })}
                 className="border rounded px-3 py-1 hover:bg-slate-100">取消裁剪</button>
               <button onClick={onCancel}
-                className="border rounded px-3 py-1 hover:bg-slate-100">關閉</button>
+                className="border rounded px-3 py-1 hover:bg-slate-100">關閉 (Esc)</button>
               <button onClick={() => onApply({ enabled: true, ...box })}
-                className="border rounded px-3 py-1 bg-emerald-600 text-white hover:bg-emerald-700">套用到所有圖</button>
+                className="border rounded px-3 py-1 bg-emerald-600 text-white hover:bg-emerald-700">套用 (⏎)</button>
             </div>
           </div>
         </div>
