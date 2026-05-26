@@ -578,7 +578,7 @@
                 </tr>
               </thead>
               <tbody>
-                {snList.map(({ sn, row }) => (
+                {snList.map(({ sn, row }, rIdx) => (
                   <tr key={row} className="border-b border-slate-100 hover:bg-purple-50/30">
                     <td className="font-mono text-[10px] px-1 py-1 text-slate-600">
                       <span className="text-slate-300">{row}</span> {sn}
@@ -587,7 +587,7 @@
                       const f = fileMaps[i].get(sn.toLowerCase());
                       const isSel = f && selected === f.path;
                       return (
-                        <td key={s.id} className="px-1 py-0.5 text-center">
+                        <td key={s.id} data-r={rIdx} data-c={i} className="px-1 py-0.5 text-center">
                           {f ? (
                             <img src={thumbUrl(f.path, 60, s.crop)}
                               onClick={() => setSelected(f.path)}
@@ -1497,6 +1497,7 @@
               return (
                 <img key={`my-${i}`}
                   src={thumbUrl(pl.path, 400, pl._crop)}
+                  data-preview-path={pl.path}
                   style={{
                     position: "absolute",
                     left: x + w * inset, top: y + h * inset,
@@ -1612,37 +1613,103 @@
         [cfg.autoAlign, orderedFiles, cfg.label.pattern, cfg.label.idxSort, cfg.label.idxOrder]
       );
 
-      // 鍵盤上下方向鍵切換選取（焦點不在輸入框時才生效）
+      // 視覺化 2D 「導航 grid」：1D 模式視為 N×1；2D 模式直接用 cells/sources matrix
+      const navGrid = useMemo(() => {
+        if (cfg.snMatchMode) {
+          return (snList || []).map((s) => {
+            const stem = s.sn.toLowerCase();
+            return (cfg.sources || []).map((src) =>
+              (src.files || []).find((f) => (f.name || "").replace(/\.[^./]+$/, "").toLowerCase() === stem) || null
+            );
+          });
+        }
+        if (cfg.autoAlign && orderedFiles.length > 0) {
+          const idxList = autoIdxList;
+          if (!idxList.length) return orderedFiles.map((f) => [f]);
+          const rows = buildRows(orderedFiles, cfg.label.pattern, idxList, true);
+          return rows.map((r) => r.cells);
+        }
+        return orderedFiles.map((f) => [f]);
+      }, [cfg.snMatchMode, cfg.autoAlign, snList, cfg.sources, orderedFiles, autoIdxList, cfg.label.pattern]);
+
+      // 鍵盤方向鍵切換選取（焦點不在輸入框時才生效）
+      // 支援 4 方向；遇空格自動跳過繼續往同方向找
       useEffect(() => {
         const onKey = (e) => {
-          if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+          const ARROWS = { ArrowDown: [1,0], ArrowUp: [-1,0], ArrowRight: [0,1], ArrowLeft: [0,-1] };
+          if (!ARROWS[e.key]) return;
           const t = e.target;
           const tag = t && t.tagName;
           if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (t && t.isContentEditable)) return;
-          if (!orderedFiles.length) return;
-          const curIdx = selected ? orderedFiles.findIndex((f) => f.path === selected) : -1;
-          const delta = e.key === "ArrowDown" ? 1 : -1;
-          let nxt = curIdx < 0 ? 0 : curIdx + delta;
-          if (nxt < 0) nxt = 0;
-          if (nxt >= orderedFiles.length) nxt = orderedFiles.length - 1;
-          if (nxt === curIdx) return;
+          if (!navGrid.length) return;
+
+          // 找當前位置
+          let cr = -1, cc = -1;
+          if (selected) {
+            for (let r = 0; r < navGrid.length && cr < 0; r++) {
+              for (let c = 0; c < navGrid[r].length; c++) {
+                if (navGrid[r][c]?.path === selected) { cr = r; cc = c; break; }
+              }
+            }
+          }
+          if (cr < 0) {
+            // 沒選 → 跳到第一個非空格
+            for (let r = 0; r < navGrid.length; r++) {
+              for (let c = 0; c < navGrid[r].length; c++) {
+                if (navGrid[r][c]) { cr = r; cc = c; break; }
+              }
+              if (cr >= 0) break;
+            }
+            if (cr < 0) return;
+            e.preventDefault();
+            const target = navGrid[cr][cc];
+            setSelected(target.path); setSelectedPaths([target.path]);
+            return;
+          }
+
+          // 沿方向走，跳過空格
+          const [dr, dc] = ARROWS[e.key];
+          let nr = cr + dr, nc = cc + dc;
+          const R = navGrid.length;
+          while (nr >= 0 && nr < R) {
+            const row = navGrid[nr] || [];
+            if (nc < 0 || nc >= row.length) break;
+            if (row[nc]) break;
+            nr += dr; nc += dc;
+          }
+          if (nr < 0 || nr >= R) return;
+          const row = navGrid[nr] || [];
+          if (nc < 0 || nc >= row.length || !row[nc]) return;
+
           e.preventDefault();
-          const target = orderedFiles[nxt];
+          const target = row[nc];
           setSelected(target.path);
           setSelectedPaths([target.path]);
-          anchorRef.current = nxt;
-          setCurrentPage(Math.floor(nxt / Math.max(1, cfg.grid.cols * cfg.grid.rows)));
-          // 自動捲動讓選中項目可見
+          anchorRef.current = nr;
+          // slides 模式：跨頁時更新 currentPage
+          if (!cfg.snMatchMode && !cfg.autoAlign) {
+            setCurrentPage(Math.floor(nr / Math.max(1, cfg.grid.cols * cfg.grid.rows)));
+          }
+          // 自動捲動（中欄清單 + 右欄預覽）
           requestAnimationFrame(() => {
+            // 中欄
             const el = listRef.current;
-            if (!el) return;
-            const item = el.querySelector(`[data-idx="${nxt}"]`);
-            if (item && item.scrollIntoView) item.scrollIntoView({ block: "nearest" });
+            if (el) {
+              const sel =
+                el.querySelector(`[data-r="${nr}"][data-c="${nc}"]`) ||
+                el.querySelector(`[data-idx="${nr}"]`);
+              if (sel && sel.scrollIntoView) sel.scrollIntoView({ block: "nearest", inline: "nearest" });
+            }
+            // 右欄預覽：依 selected 的 path 找對應預覽 img
+            const previewImg = document.querySelector(`[data-preview-path="${CSS.escape(target.path)}"]`);
+            if (previewImg && previewImg.scrollIntoView) {
+              previewImg.scrollIntoView({ block: "nearest", inline: "nearest" });
+            }
           });
         };
         window.addEventListener("keydown", onKey);
         return () => window.removeEventListener("keydown", onKey);
-      }, [orderedFiles, selected, cfg.grid.cols, cfg.grid.rows]);
+      }, [navGrid, selected, cfg.snMatchMode, cfg.autoAlign, cfg.grid.cols, cfg.grid.rows]);
 
       const setGrid = (path, value) => {
         setCfg((c) => {
@@ -2516,7 +2583,7 @@
                           const colLabel = idxList[ci] || String(ci + 1);
                           if (!f) {
                             return (
-                              <div key={ci} className="aspect-square border-2 border-dashed border-slate-300 bg-slate-50 rounded flex flex-col items-center justify-center text-slate-400">
+                              <div key={ci} data-r={rIdx} data-c={ci} className="aspect-square border-2 border-dashed border-slate-300 bg-slate-50 rounded flex flex-col items-center justify-center text-slate-400">
                                 <div className="text-[10px] font-mono">{colLabel}</div>
                                 <div className="text-[10px]">空</div>
                               </div>
@@ -2524,7 +2591,7 @@
                           }
                           const isSel = selectedPaths.includes(f.path);
                           return (
-                            <div key={ci}
+                            <div key={ci} data-r={rIdx} data-c={ci}
                               onClick={(e) => onItemClick(e, f.path, orderedFiles.indexOf(f))}
                               draggable={false}
                               title={f.name}
@@ -2712,6 +2779,7 @@
                           return (
                             <img key={i}
                               src={thumbUrl(pl.path, 400)}
+                              data-preview-path={pl.path}
                               style={style}
                               className={selected === pl.path ? "ring-4 ring-emerald-500 shadow-[0_0_18px_4px_rgba(16,185,129,0.7)] z-10 relative" : "border border-slate-300"} />
                           );
