@@ -1241,7 +1241,7 @@
             onChange={(e) => { setSelectedName(e.target.value); if (e.target.value) doLoad(e.target.value); }}
             title="選擇要載入的設定"
             className="w-full border rounded px-2 py-1 text-xs">
-            <option value="">— 載入既有設定 —</option>
+            <option value="">— 未選擇 —</option>
             {configs.map((c) => (
               <option key={c.name} value={c.name}>{c.name}</option>
             ))}
@@ -2696,7 +2696,9 @@
                           }`}>
                             {cfg.snMatchMode ? "📋 依範本 SN" : cfg.autoAlign ? "📷 依檔名 idx" : "📷 依順序"}
                           </span>
-                          <span className="ml-1 text-[10px] text-slate-400">Shift＝粗調 · Alt＝微調</span>
+                          {mode === "slides" && (
+                            <span className="ml-1 text-[10px] text-slate-400" title="Stepper ◀▶ 操作">Shift＝粗調 · Alt＝微調</span>
+                          )}
                         </div>
                         <div className="flex items-center gap-2 text-sm">
                           {/* zoom 控制 */}
