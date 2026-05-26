@@ -1503,6 +1503,7 @@
                     left: x + w * inset, top: y + h * inset,
                     width: w * (1 - 2 * inset), height: h * (1 - 2 * inset),
                     objectFit: fit,
+                    scrollMargin: 30,
                   }}
                   className={selected === pl.path ? "ring-4 ring-emerald-500 shadow-[0_0_18px_4px_rgba(16,185,129,0.7)] z-10" : ""} />
               );
@@ -2665,7 +2666,7 @@
 
             {/* 右欄：預覽 */}
             <div className="col-span-6 min-h-0">
-              <div className="bg-white rounded-lg shadow p-4 h-full overflow-auto">
+              <div className="bg-white rounded-lg shadow p-4 h-full flex flex-col min-h-0">
                 {(() => {
                   const total = Math.max(1, pages.length);
                   const pi = Math.min(currentPage, total - 1);
@@ -2685,7 +2686,7 @@
                   };
                   return (
                     <>
-                      <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
+                      <div className="flex items-center justify-between gap-2 flex-wrap pb-2 mb-2 border-b border-slate-100 shrink-0">
                         <div className="text-sm text-slate-500 flex items-center gap-2">
                           預覽
                           <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
@@ -2723,7 +2724,7 @@
                           )}
                         </div>
                       </div>
-                      <div ref={stageWrapRef} style={{ overflow: "auto" }}>
+                      <div ref={stageWrapRef} className="flex-1 min-h-0" style={{ overflow: "auto" }}>
                        <div style={{ zoom: zoom, MozTransform: `scale(${zoom})`, MozTransformOrigin: "top left" }}>
 
                       {mode === "excel" && (
@@ -2780,7 +2781,7 @@
                             <img key={i}
                               src={thumbUrl(pl.path, 400)}
                               data-preview-path={pl.path}
-                              style={style}
+                              style={{ ...style, scrollMargin: 30 }}
                               className={selected === pl.path ? "ring-4 ring-emerald-500 shadow-[0_0_18px_4px_rgba(16,185,129,0.7)] z-10 relative" : "border border-slate-300"} />
                           );
                         })}
