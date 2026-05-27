@@ -628,7 +628,8 @@
       const [loading, setLoading] = useState(false);
       const inputRefs = useRef({});
 
-      const loadSnList = async () => {
+      const loadSnList = async (opts) => {
+        const silentEmpty = opts?.silentEmpty;  // 自動觸發時不跳 alert
         if (!tplPath) { setStatus("錯誤: 請先上傳 Excel 範本"); return; }
         setLoading(true);
         try {
@@ -639,16 +640,23 @@
           const j = await r.json();
           if (!r.ok) throw new Error(j.error || "讀取失敗");
           setSnList(j.sns);
-          setStatus(`已載入 ${j.count} 個 SN (${cfg.snSource.col}${cfg.snSource.rowStart}起)`);
+          if (j.count === 0) {
+            const msg = `沒讀到任何 SN — 確認範本欄位「${cfg.snSource.col}」從第 ${cfg.snSource.rowStart} 列起是否有內容`;
+            setStatus("⚠ " + msg);
+            if (!silentEmpty) alert("⚠ " + msg);
+          } else {
+            setStatus(`已載入 ${j.count} 個 SN (${cfg.snSource.col}${cfg.snSource.rowStart}起)`);
+          }
         } catch (e) {
           setStatus("錯誤: " + e.message);
+          if (!silentEmpty) alert("錯誤: " + e.message);
         } finally { setLoading(false); }
       };
 
-      // 自動讀取 SN list：在 SN 對照模式 + 範本已載入 + 尚無 SN list 時自動觸發
+      // 自動讀取 SN list：在 SN 對照模式 + 範本已載入 + 尚無 SN list 時自動觸發 (失敗時不跳 alert)
       useEffect(() => {
         if (cfg.snMatchMode && tplPath && snList.length === 0 && !loading) {
-          loadSnList();
+          loadSnList({ silentEmpty: true });
         }
       }, [tplPath, cfg.snMatchMode]);
 
@@ -739,7 +747,7 @@
                   className="border rounded px-2 py-1 text-sm" />
               </label>
             </div>
-            <button onClick={loadSnList} disabled={loading || !tplPath}
+            <button onClick={() => loadSnList()} disabled={loading || !tplPath}
               className="w-full mt-2 border rounded py-1 text-xs bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-40">
               {loading ? "讀取中…" : tplPath ? `讀取 SN list (${cfg.snSource.col}${cfg.snSource.rowStart}起)` : "請先上傳範本"}
             </button>
@@ -2716,11 +2724,9 @@
               </div>
             </div>
 
-            {/* 中欄：檔案清單 */}
+            {/* 中欄：檔案清單。背景只區分兩個 top-level mode */}
             <div className={`col-span-3 rounded-lg shadow flex flex-col min-h-0 transition-colors ${
-              cfg.snMatchMode ? "bg-purple-50 ring-2 ring-purple-300"
-                : cfg.autoAlign ? "bg-sky-50 ring-2 ring-sky-300"
-                : "bg-white"
+              cfg.snMatchMode ? "bg-purple-50 ring-2 ring-purple-300" : "bg-white"
             }`}>
               {/* 排列方式：兩階層模式切換 */}
               <div className="p-2 border-b">
@@ -2730,9 +2736,7 @@
                   <button onClick={() => switchMode(false)}
                     className={`px-2 py-1.5 rounded border text-xs flex items-center justify-center gap-1 ${
                       !cfg.snMatchMode
-                        ? (cfg.autoAlign
-                          ? "bg-sky-600 text-white border-sky-700 shadow"
-                          : "bg-slate-700 text-white border-slate-700 shadow")
+                        ? "bg-slate-700 text-white border-slate-700 shadow"
                         : "bg-white text-slate-600 border-slate-300 hover:bg-slate-50"
                     }`}>
                     📷 依檔名
@@ -2768,8 +2772,8 @@
                       <button onClick={() => setCfg((c) => ({ ...c, autoAlign: true }))}
                         className={`px-2 py-1 rounded border text-xs ${
                           cfg.autoAlign
-                            ? "bg-sky-600 text-white border-sky-700"
-                            : "bg-white text-slate-600 border-slate-300 hover:bg-sky-50"
+                            ? "bg-slate-700 text-white border-slate-700"
+                            : "bg-white text-slate-600 border-slate-300 hover:bg-slate-50"
                         }`}>
                         依檔名 idx
                       </button>
@@ -3025,10 +3029,9 @@
                           預覽
                           <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
                             cfg.snMatchMode ? "bg-purple-100 text-purple-700 border-purple-300"
-                              : cfg.autoAlign ? "bg-sky-100 text-sky-700 border-sky-300"
                               : "bg-slate-100 text-slate-600 border-slate-300"
                           }`}>
-                            {cfg.snMatchMode ? "📋 依範本 SN" : cfg.autoAlign ? "📷 依檔名 idx" : "📷 依順序"}
+                            {cfg.snMatchMode ? "📋 依範本 SN" : cfg.autoAlign ? "📷 依檔名 · idx" : "📷 依檔名 · 順序"}
                           </span>
                           {mode === "slides" && (
                             <span className="ml-1 text-[10px] text-slate-400" title="Stepper ◀▶ 操作">Shift＝粗調 · Alt＝微調</span>
