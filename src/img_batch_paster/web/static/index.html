@@ -520,7 +520,7 @@
     }
 
     // SN 對照模式：中欄 — SN × source 對照表
-    function SnMatchMatrix({ cfg, snList, selected, setSelected, thumbUrl, onOpenCrop, perColCrop }) {
+    function SnMatchMatrix({ cfg, snList, selected, setSelected, thumbUrl, onOpenCrop, perColCrop, selectedCell, setSelectedCell, setSelectedPaths }) {
       // 把 source.files 建成 stem → file 的 map（不分大小寫，去副檔名）
       const fileMaps = useMemo(() => cfg.sources.map((s) => {
         const m = new Map();
@@ -598,16 +598,18 @@
                     </td>
                     {cfg.sources.map((s, i) => {
                       const f = fileMaps[i].get(sn.toLowerCase());
-                      const isSel = f && selected === f.path;
+                      const isCellSel = selectedCell?.r === rIdx && selectedCell?.c === i;
+                      const isSel = (f && selected === f.path) || isCellSel;
                       return (
                         <td key={s.id} data-r={rIdx} data-c={i} className="px-1 py-0.5 text-center">
                           {f ? (
                             <img src={thumbUrl(f.path, 60, perColCrop ? s.crop : cfg.crop)}
-                              onClick={() => setSelected(f.path)}
+                              onClick={() => { setSelected(f.path); setSelectedCell?.({ r: rIdx, c: i }); }}
                               title={f.name}
                               className={`inline-block w-10 h-10 object-cover border rounded cursor-pointer ${isSel ? "ring-2 ring-emerald-500" : "border-slate-300 hover:border-slate-500"}`} />
                           ) : (
-                            <div className="inline-flex w-10 h-10 items-center justify-center border-2 border-dashed border-slate-300 rounded text-[10px] text-slate-400">缺</div>
+                            <div onClick={() => { setSelectedCell?.({ r: rIdx, c: i }); setSelected(null); setSelectedPaths?.([]); }}
+                              className={`inline-flex w-10 h-10 items-center justify-center border-2 rounded text-[10px] cursor-pointer ${isCellSel ? "border-emerald-500 ring-2 ring-emerald-300 text-emerald-700" : "border-dashed border-slate-300 text-slate-400"}`}>缺</div>
                           )}
                         </td>
                       );
@@ -1567,6 +1569,7 @@
       const [cropOpen, setCropOpen] = useState(false);
       const [cropSourceId, setCropSourceId] = useState(null);  // null = 不編輯 source crop; 否則為 source.id (snMatch 模式)
       const [cropIdxKey, setCropIdxKey] = useState(null);      // null = 不編輯 per-idx crop; 否則為 idx 字串 (依檔名 idx 模式)
+      const [selectedCell, setSelectedCell] = useState(null); // {r, c} | null：2D 模式下「格子位置」選取（允許空格）
       const [snList, setSnList] = useState([]);  // [{ sn, row }] from /api/template/sn-list
       const [ws, setWs] = useState("");
       const [zoom, setZoom] = useState(1);
@@ -1663,8 +1666,10 @@
         return orderedFiles.map((f) => [f]);
       }, [cfg.snMatchMode, cfg.autoAlign, snList, cfg.sources, orderedFiles, autoIdxList, cfg.label.pattern]);
 
-      // 鍵盤方向鍵切換選取（焦點不在輸入框時才生效）
-      // 支援 4 方向；遇空格自動跳過繼續往同方向找
+      // 鍵盤方向鍵切換選取
+      // 2D 模式 (snMatch / 依檔名 idx)：用 selectedCell 移動位置，允許停在空格
+      // 1D 模式 (順序填入)：用 path 移動
+      const is2DMode = cfg.snMatchMode || cfg.autoAlign;
       useEffect(() => {
         const onKey = (e) => {
           const ARROWS = { ArrowDown: [1,0], ArrowUp: [-1,0], ArrowRight: [0,1], ArrowLeft: [0,-1] };
@@ -1673,74 +1678,110 @@
           const tag = t && t.tagName;
           if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (t && t.isContentEditable)) return;
           if (!navGrid.length) return;
+          const R = navGrid.length;
+          const [dr, dc] = ARROWS[e.key];
 
-          // 找當前位置
+          // 找起始位置：優先 selectedCell；2D 模式 fallback 從 selected path 找
           let cr = -1, cc = -1;
-          if (selected) {
-            for (let r = 0; r < navGrid.length && cr < 0; r++) {
+          if (selectedCell && selectedCell.r >= 0 && selectedCell.r < R && selectedCell.c >= 0 && selectedCell.c < (navGrid[selectedCell.r]?.length || 0)) {
+            cr = selectedCell.r; cc = selectedCell.c;
+          } else if (selected) {
+            for (let r = 0; r < R && cr < 0; r++) {
               for (let c = 0; c < navGrid[r].length; c++) {
                 if (navGrid[r][c]?.path === selected) { cr = r; cc = c; break; }
               }
             }
           }
           if (cr < 0) {
-            // 沒選 → 跳到第一個非空格
-            for (let r = 0; r < navGrid.length; r++) {
-              for (let c = 0; c < navGrid[r].length; c++) {
-                if (navGrid[r][c]) { cr = r; cc = c; break; }
-              }
-              if (cr >= 0) break;
-            }
-            if (cr < 0) return;
+            // 沒選 → (0,0)
+            cr = 0; cc = 0;
             e.preventDefault();
-            const target = navGrid[cr][cc];
-            setSelected(target.path); setSelectedPaths([target.path]);
+            const cell0 = navGrid[0][0];
+            setSelectedCell({ r: 0, c: 0 });
+            if (cell0) { setSelected(cell0.path); setSelectedPaths([cell0.path]); }
+            else { setSelected(null); setSelectedPaths([]); }
             return;
           }
 
-          // 沿方向走，跳過空格
-          const [dr, dc] = ARROWS[e.key];
           let nr = cr + dr, nc = cc + dc;
-          const R = navGrid.length;
-          while (nr >= 0 && nr < R) {
-            const row = navGrid[nr] || [];
-            if (nc < 0 || nc >= row.length) break;
-            if (row[nc]) break;
-            nr += dr; nc += dc;
-          }
-          if (nr < 0 || nr >= R) return;
-          const row = navGrid[nr] || [];
-          if (nc < 0 || nc >= row.length || !row[nc]) return;
 
-          e.preventDefault();
-          const target = row[nc];
-          setSelected(target.path);
-          setSelectedPaths([target.path]);
-          anchorRef.current = nr;
-          // slides 模式：跨頁時更新 currentPage
-          if (!cfg.snMatchMode && !cfg.autoAlign) {
+          if (is2DMode) {
+            // 2D：純粹移動位置、允許停在空格
+            if (nr < 0 || nr >= R) return;
+            const row = navGrid[nr] || [];
+            if (nc < 0 || nc >= row.length) return;
+            e.preventDefault();
+            setSelectedCell({ r: nr, c: nc });
+            anchorRef.current = nr;
+            const cell = row[nc];
+            if (cell) { setSelected(cell.path); setSelectedPaths([cell.path]); }
+            else { setSelected(null); setSelectedPaths([]); }
+            requestAnimationFrame(() => {
+              const el = listRef.current;
+              if (el) {
+                const selEl = el.querySelector(`[data-r="${nr}"][data-c="${nc}"]`);
+                if (selEl && selEl.scrollIntoView) selEl.scrollIntoView({ block: "nearest", inline: "nearest" });
+              }
+              if (cell?.path) {
+                const previewImg = document.querySelector(`[data-preview-path="${CSS.escape(cell.path)}"]`);
+                if (previewImg && previewImg.scrollIntoView) previewImg.scrollIntoView({ block: "nearest", inline: "nearest" });
+              }
+            });
+          } else {
+            // 1D：跳過空格
+            while (nr >= 0 && nr < R) {
+              const row = navGrid[nr] || [];
+              if (nc < 0 || nc >= row.length) break;
+              if (row[nc]) break;
+              nr += dr; nc += dc;
+            }
+            if (nr < 0 || nr >= R) return;
+            const row = navGrid[nr] || [];
+            if (nc < 0 || nc >= row.length || !row[nc]) return;
+            e.preventDefault();
+            const target = row[nc];
+            setSelected(target.path);
+            setSelectedPaths([target.path]);
+            setSelectedCell({ r: nr, c: nc });
+            anchorRef.current = nr;
             setCurrentPage(Math.floor(nr / Math.max(1, cfg.grid.cols * cfg.grid.rows)));
+            requestAnimationFrame(() => {
+              const el = listRef.current;
+              if (el) {
+                const selEl =
+                  el.querySelector(`[data-r="${nr}"][data-c="${nc}"]`) ||
+                  el.querySelector(`[data-idx="${nr}"]`);
+                if (selEl && selEl.scrollIntoView) selEl.scrollIntoView({ block: "nearest", inline: "nearest" });
+              }
+              const previewImg = document.querySelector(`[data-preview-path="${CSS.escape(target.path)}"]`);
+              if (previewImg && previewImg.scrollIntoView) previewImg.scrollIntoView({ block: "nearest", inline: "nearest" });
+            });
           }
-          // 自動捲動（中欄清單 + 右欄預覽）
-          requestAnimationFrame(() => {
-            // 中欄
-            const el = listRef.current;
-            if (el) {
-              const sel =
-                el.querySelector(`[data-r="${nr}"][data-c="${nc}"]`) ||
-                el.querySelector(`[data-idx="${nr}"]`);
-              if (sel && sel.scrollIntoView) sel.scrollIntoView({ block: "nearest", inline: "nearest" });
-            }
-            // 右欄預覽：依 selected 的 path 找對應預覽 img
-            const previewImg = document.querySelector(`[data-preview-path="${CSS.escape(target.path)}"]`);
-            if (previewImg && previewImg.scrollIntoView) {
-              previewImg.scrollIntoView({ block: "nearest", inline: "nearest" });
-            }
-          });
         };
         window.addEventListener("keydown", onKey);
         return () => window.removeEventListener("keydown", onKey);
-      }, [navGrid, selected, cfg.snMatchMode, cfg.autoAlign, cfg.grid.cols, cfg.grid.rows]);
+      }, [navGrid, selected, selectedCell, is2DMode, cfg.grid.cols, cfg.grid.rows]);
+
+      // Delete/Backspace 鍵刪除選取的檔案 (snMatch 模式不適用 — 那邊檔案來自 sources)
+      useEffect(() => {
+        if (cfg.snMatchMode) return;
+        const onKey = (e) => {
+          if (e.key !== "Delete" && e.key !== "Backspace") return;
+          const t = e.target;
+          const tag = t && t.tagName;
+          if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (t && t.isContentEditable)) return;
+          const paths = selectedPaths.length ? selectedPaths : (selected ? [selected] : []);
+          if (!paths.length) return;
+          e.preventDefault();
+          const sel = new Set(paths);
+          setOrder((o) => o.filter((p) => !sel.has(p)));
+          setFiles((fs) => fs.filter((f) => !sel.has(f.path)));
+          setSelectedPaths([]);
+          setSelected(null);
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+      }, [selectedPaths, selected, cfg.snMatchMode]);
 
       const setGrid = (path, value) => {
         setCfg((c) => {
@@ -2659,6 +2700,9 @@
                     setSelected={setSelected}
                     thumbUrl={thumbUrl}
                     perColCrop={cfg.cropMode === "per-col"}
+                    selectedCell={selectedCell}
+                    setSelectedCell={setSelectedCell}
+                    setSelectedPaths={setSelectedPaths}
                     onOpenCrop={(sid) => {
                       const s = cfg.sources.find((x) => x.id === sid);
                       if (!s?.files?.length) { setStatus("先上傳此來源的圖片"); return; }
@@ -2715,18 +2759,21 @@
                       <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
                         {row.cells.map((f, ci) => {
                           const colLabel = idxList[ci] || String(ci + 1);
+                          const isCellSel = selectedCell?.r === rIdx && selectedCell?.c === ci;
                           if (!f) {
                             return (
-                              <div key={ci} data-r={rIdx} data-c={ci} className="aspect-square border-2 border-dashed border-slate-300 bg-slate-50 rounded flex flex-col items-center justify-center text-slate-400">
+                              <div key={ci} data-r={rIdx} data-c={ci}
+                                onClick={() => { setSelectedCell({ r: rIdx, c: ci }); setSelected(null); setSelectedPaths([]); }}
+                                className={`aspect-square border-2 ${isCellSel ? "border-emerald-500 ring-2 ring-emerald-300" : "border-dashed border-slate-300"} bg-slate-50 rounded flex flex-col items-center justify-center text-slate-400 cursor-pointer`}>
                                 <div className="text-[10px] font-mono">{colLabel}</div>
                                 <div className="text-[10px]">空</div>
                               </div>
                             );
                           }
-                          const isSel = selectedPaths.includes(f.path);
+                          const isSel = selectedPaths.includes(f.path) || isCellSel;
                           return (
                             <div key={ci} data-r={rIdx} data-c={ci}
-                              onClick={(e) => onItemClick(e, f.path, orderedFiles.indexOf(f))}
+                              onClick={(e) => { onItemClick(e, f.path, orderedFiles.indexOf(f)); setSelectedCell({ r: rIdx, c: ci }); }}
                               draggable={false}
                               title={f.name}
                               className={`aspect-square rounded overflow-hidden border cursor-pointer relative ${
@@ -2786,13 +2833,14 @@
                     </div>
                   )}
                   <button onClick={deleteSelected} disabled={!selPathsOrFallback().length}
+                    title="Delete / Backspace 鍵也可刪除"
                     className="w-full border border-red-300 text-red-600 rounded py-1 text-xs hover:bg-red-50 disabled:opacity-40">
                     刪除選取 ({selPathsOrFallback().length})
                   </button>
                   <div className="text-[10px] text-slate-400 text-center">
                     {cfg.autoAlign
-                      ? "拖曳 SN 卡片＝改列順序 · 點圖＝選取"
-                      : "Shift＝範圍選取 · ⌘/Ctrl＝多選 · 拖曳＝排序"}
+                      ? "拖曳 SN 卡片＝改列順序 · 點圖＝選取 · Del／⌫ 刪除"
+                      : "Shift＝範圍選取 · ⌘/Ctrl＝多選 · 拖曳＝排序 · Del／⌫ 刪除"}
                   </div>
                 </div>
               )}
