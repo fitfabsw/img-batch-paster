@@ -688,6 +688,7 @@ def api_export():
             bold=bool(p.get("bold", True)),
             align=p.get("align", "center"),
             row_idx=p.get("row_idx"),
+            crop=p.get("crop"),
         )
 
     if "pages" in data:

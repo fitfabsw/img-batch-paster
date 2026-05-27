@@ -74,6 +74,7 @@ class Placement:
     bold: bool = True
     align: str = "center"         # "left" | "center" | "right"
     row_idx: int | None = None    # SN 文字所屬的列 index (給「寫入表格 cell」用)
+    crop: dict | None = None      # per-placement crop override (覆寫全域 crop)
 
 
 def _find_table(slide):
@@ -139,7 +140,9 @@ def _add_placements_to_slide(slide, placements: list[Placement],
             run.font.size = Pt(pl.font_pt)
             run.font.bold = pl.bold
         else:
-            src = _apply_crop(pl.path, crop, tmp_dir) if (crop and tmp_dir) else pl.path
+            # per-placement crop 優先；否則用全域 crop
+            eff_crop = pl.crop or crop
+            src = _apply_crop(pl.path, eff_crop, tmp_dir) if (eff_crop and tmp_dir) else pl.path
             slide.shapes.add_picture(
                 str(src), Cm(pl.x_cm), Cm(pl.y_cm),
                 width=Cm(pl.w_cm), height=Cm(pl.h_cm),

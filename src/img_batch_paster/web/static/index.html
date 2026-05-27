@@ -41,6 +41,7 @@
         rawMode: false,            // true=直接編輯 pattern, false=分段點選
         idxSort: "auto",           // 對位模式欄位排序：auto | alpha | num | custom
         idxOrder: [],              // custom 時使用者自訂順序
+        idxCrops: {},              // 各欄獨立模式 (依檔名 idx)：idx字串 → crop obj
         x: 2,
         width: 12,        // SN box 固定寬度 (% of slide width)，與圖片 X 解耦
         font_pt: 18,
@@ -50,7 +51,8 @@
       snSource: { col: "A", rowStart: 2 },  // SN 在範本的哪一欄、從第幾列開始
       sources: [          // SN 對照模式專用：多個來源資料夾 (每元素: {id, name, folder, files, targetCol, crop})
       ],
-      crop: { enabled: false, left: 0, top: 0, right: 1, bottom: 1 },  // 0..1 相對裁剪 (順序/對位共用)
+      crop: { enabled: false, left: 0, top: 0, right: 1, bottom: 1 },  // 0..1 相對裁剪 (全域)
+      cropMode: "global",   // "global" 全部統一一套 crop | "per-col" 每欄獨立 (僅 依檔名 idx / 範本 SN 模式)
       slidesSn: { inCell: false, col: 1, rowStart: 2 },  // PPT/Keynote SN 寫入表格 cell (1-based)
       excel: {
         startCell: "B5",
@@ -362,7 +364,7 @@
     }
 
     // 對位模式的欄位編輯器：自動偵測 idx 集合 + 排序選項 + 自訂欄位
-    function IdxColumnsEditor({ label, allFiles, updateLabel }) {
+    function IdxColumnsEditor({ label, allFiles, updateLabel, perColCrop, onOpenIdxCrop }) {
       const sort = label.idxSort || "auto";
       const customMode = sort === "custom";
       const idxList = useMemo(
@@ -446,6 +448,8 @@
             <div className="flex flex-wrap gap-1 items-center">
               {idxList.map((s, i) => {
                 const isEmpty = customMode && !fromFiles.includes(s);
+                const idxCrop = (label.idxCrops || {})[s];
+                const cropOn = perColCrop && idxCrop?.enabled;
                 return (
                   <div key={s + i}
                     draggable
@@ -459,6 +463,13 @@
                               : "bg-white border-sky-300 text-sky-800"
                     } ${hoverIdx === i ? "ring-2 ring-sky-400" : ""}`}>
                     {s}
+                    {perColCrop && onOpenIdxCrop && (
+                      <button onClick={(e) => { e.stopPropagation(); onOpenIdxCrop(s); }}
+                        title={cropOn ? `已設定此欄裁剪` : "設定此欄裁剪"}
+                        className={`text-[10px] px-1 rounded ${cropOn ? "bg-emerald-100 text-emerald-700 border border-emerald-300" : "hover:bg-slate-100"}`}>
+                        ✂️
+                      </button>
+                    )}
                     {customMode && (
                       <button onClick={() => removeChip(i)}
                         className="text-slate-400 hover:text-red-600 text-[10px] leading-none"
@@ -509,7 +520,7 @@
     }
 
     // SN 對照模式：中欄 — SN × source 對照表
-    function SnMatchMatrix({ cfg, snList, selected, setSelected, thumbUrl, onOpenCrop }) {
+    function SnMatchMatrix({ cfg, snList, selected, setSelected, thumbUrl, onOpenCrop, perColCrop }) {
       // 把 source.files 建成 stem → file 的 map（不分大小寫，去副檔名）
       const fileMaps = useMemo(() => cfg.sources.map((s) => {
         const m = new Map();
@@ -564,13 +575,15 @@
                           <span className="bg-purple-100 text-purple-800 px-1 rounded font-mono text-[10px] max-w-[100px] truncate" title={s.name}>{displayName}</span>
                           <span className="text-slate-400">→</span>
                           <span className="font-mono">{s.targetCol}</span>
-                          <button
-                            onClick={() => onOpenCrop && onOpenCrop(s.id)}
-                            disabled={!s.files?.length}
-                            title={s.files?.length ? `設定來源「${s.name}」的裁剪區域` : "請先上傳此來源的圖片"}
-                            className={`ml-1 text-xs border rounded px-1 py-0.5 hover:bg-slate-100 disabled:opacity-40 ${s.crop?.enabled ? "bg-emerald-100 border-emerald-400 text-emerald-800" : ""}`}>
-                            ✂️
-                          </button>
+                          {perColCrop && (
+                            <button
+                              onClick={() => onOpenCrop && onOpenCrop(s.id)}
+                              disabled={!s.files?.length}
+                              title={s.files?.length ? `設定來源「${s.name}」的裁剪區域` : "請先上傳此來源的圖片"}
+                              className={`ml-1 text-xs border rounded px-1 py-0.5 hover:bg-slate-100 disabled:opacity-40 ${s.crop?.enabled ? "bg-emerald-100 border-emerald-400 text-emerald-800" : ""}`}>
+                              ✂️
+                            </button>
+                          )}
                         </div>
                       </th>
                     );
@@ -589,7 +602,7 @@
                       return (
                         <td key={s.id} data-r={rIdx} data-c={i} className="px-1 py-0.5 text-center">
                           {f ? (
-                            <img src={thumbUrl(f.path, 60, s.crop)}
+                            <img src={thumbUrl(f.path, 60, perColCrop ? s.crop : cfg.crop)}
                               onClick={() => setSelected(f.path)}
                               title={f.name}
                               className={`inline-block w-10 h-10 object-cover border rounded cursor-pointer ${isSel ? "ring-2 ring-emerald-500" : "border-slate-300 hover:border-slate-500"}`} />
@@ -771,7 +784,7 @@
     }
 
     // 分段點選的 SN 設定 UI：分隔符 + 各段角色 chip + 即時抽取預覽 + 命中統計
-    function SnPatternPicker({ cfgLabel, autoAlign, setCfg, firstFile, allFiles }) {
+    function SnPatternPicker({ cfgLabel, autoAlign, setCfg, firstFile, allFiles, perColCrop, onOpenIdxCrop }) {
       const DELIMS = [
         { v: "-", label: "-" },
         { v: "_", label: "_" },
@@ -949,6 +962,8 @@
                       label={cfgLabel}
                       allFiles={allFiles}
                       updateLabel={updateLabel}
+                      perColCrop={perColCrop}
+                      onOpenIdxCrop={onOpenIdxCrop}
                     />
                   )}
                 </div>
@@ -1383,6 +1398,8 @@
       let placements;
       if (cfg.snMatchMode) {
         // SN 對照模式：依 SN list × sources 算
+        const perColCrop = cfg.cropMode === "per-col";
+        const globalCrop = cfg.crop?.enabled ? cfg.crop : null;
         placements = [];
         for (const { sn, row } of (snList || [])) {
           const stem = sn.toLowerCase();
@@ -1393,12 +1410,24 @@
             if (!col) continue;
             placements.push({
               path: f.path, row, col, span_cols: 1, span_rows: 1,
-              _crop: s.crop?.enabled ? s.crop : null,  // 給 thumbnail 帶 crop 用
+              _crop: perColCrop ? (s.crop?.enabled ? s.crop : null) : globalCrop,
             });
           }
         }
       } else {
         placements = computeExcelCells(cfg.excel, cfg.label, orderedFiles, cfg.autoAlign);
+        // 依檔名 idx + 各欄獨立：對每個 placement 注入 per-idx crop
+        if (cfg.autoAlign && cfg.cropMode === "per-col") {
+          const idxCrops = cfg.label.idxCrops || {};
+          placements = placements.map((pl) => {
+            if (!pl.path) return pl;
+            const f = orderedFiles.find((x) => x.path === pl.path);
+            if (!f) return pl;
+            const { idx } = extractGroupIdx(f.name || "", cfg.label.pattern);
+            const c = idx != null ? idxCrops[String(idx)] : null;
+            return c?.enabled ? { ...pl, _crop: c } : pl;
+          });
+        }
       }
 
       const alignToFlex = { left: "flex-start", center: "center", right: "flex-end" };
@@ -1536,7 +1565,8 @@
       const [dragTpl, setDragTpl] = useState(false);
       const [dragImg, setDragImg] = useState(false);
       const [cropOpen, setCropOpen] = useState(false);
-      const [cropSourceId, setCropSourceId] = useState(null);  // null = 全域 crop; 否則為 source.id (snMatch 模式)
+      const [cropSourceId, setCropSourceId] = useState(null);  // null = 不編輯 source crop; 否則為 source.id (snMatch 模式)
+      const [cropIdxKey, setCropIdxKey] = useState(null);      // null = 不編輯 per-idx crop; 否則為 idx 字串 (依檔名 idx 模式)
       const [snList, setSnList] = useState([]);  // [{ sn, row }] from /api/template/sn-list
       const [ws, setWs] = useState("");
       const [zoom, setZoom] = useState(1);
@@ -1901,6 +1931,7 @@
           if (!cfg.sources.length) { setStatus("錯誤: 至少需一個來源"); return; }
           setBusy(true); setStatus("組裝 SN 對照 cells…");
           try {
+            const perCol = cfg.cropMode === "per-col";
             const cells = [];
             for (const { sn, row } of snList) {
               const stem = sn.toLowerCase();
@@ -1912,7 +1943,7 @@
                 cells.push({
                   path: f.path, row, col,
                   span_cols: 1, span_rows: 1,
-                  crop: s.crop?.enabled ? s.crop : null,
+                  crop: perCol && s.crop?.enabled ? s.crop : null,
                 });
               }
             }
@@ -1922,6 +1953,7 @@
               embedInCell: !!cfg.excel.embedInCell,
               imgFit: cfg.excel.imgFit || "cover",
               containInset: Math.max(0, Math.min(45, cfg.excel.containInset ?? 5)) / 100,
+              crop: !perCol ? cfg.crop : null,  // 統一模式：送 global crop
             });
             setStatus(`匯出 Excel 中… (${cells.length} 格)`);
             const r = await fetch("/api/export", {
@@ -1951,9 +1983,22 @@
             setOrder(j.files.map((f) => f.path));
             arr = j.files;
           }
+          // 依檔名 idx + 各欄獨立：以檔名抽 idx → 查 idxCrops 注入 per-placement crop
+          const perColIdxCrop = cfg.autoAlign && cfg.cropMode === "per-col";
+          const idxCrops = cfg.label.idxCrops || {};
+          const attachIdxCrop = (pl) => {
+            if (!perColIdxCrop || !pl.path) return pl;
+            // 從 placement 找對應的 file 取檔名抽 idx
+            const f = arr.find((x) => x.path === pl.path);
+            if (!f) return pl;
+            const { idx } = extractGroupIdx(f.name || "", cfg.label.pattern);
+            if (idx == null) return pl;
+            const c = idxCrops[String(idx)];
+            return c?.enabled ? { ...pl, crop: c } : pl;
+          };
           let body;
           if (mode === "excel") {
-            const cells = computeExcelCells(cfg.excel, cfg.label, arr, cfg.autoAlign);
+            const cells = computeExcelCells(cfg.excel, cfg.label, arr, cfg.autoAlign).map(attachIdxCrop);
             if (cells.length === 0) throw new Error("沒有可匯出的圖片");
             setStatus(`匯出 Excel 中… (${cells.length} 格)`);
             body = JSON.stringify({
@@ -1961,10 +2006,11 @@
               embedInCell: !!cfg.excel.embedInCell,
               imgFit: cfg.excel.imgFit || "cover",
               containInset: Math.max(0, Math.min(45, cfg.excel.containInset ?? 5)) / 100,
-              crop: cfg.crop,
+              crop: perColIdxCrop ? null : cfg.crop,
             });
           } else {
-            const pages = computePages(cfg.slide, cfg.grid, arr, cfg.label, cfg.autoAlign);
+            const pages = computePages(cfg.slide, cfg.grid, arr, cfg.label, cfg.autoAlign)
+              .map((page) => page.map(attachIdxCrop));
             if (pages.length === 0) throw new Error("沒有可匯出的圖片");
             setStatus(`匯出中… (${pages.length} 頁)`);
             body = JSON.stringify({
@@ -1972,7 +2018,7 @@
               snInCell: cfg.label.enabled && cfg.slidesSn.inCell,
               snCol: Math.max(0, (cfg.slidesSn.col || 1) - 1),
               snRowStart: Math.max(0, (cfg.slidesSn.rowStart || 2) - 1),
-              crop: cfg.crop,
+              crop: perColIdxCrop ? null : cfg.crop,
             });
           }
           const r = await fetch("/api/export", {
@@ -2167,18 +2213,53 @@
       const STAGE_W = 640;
       const scale = STAGE_W / cfg.slide.width_cm;
       const stageH = cfg.slide.height_cm * scale;
-      const pages = computePages(cfg.slide, cfg.grid, orderedFiles, cfg.label, cfg.autoAlign);
+      const _pagesRaw = computePages(cfg.slide, cfg.grid, orderedFiles, cfg.label, cfg.autoAlign);
+      // 依檔名 idx + 各欄獨立：對每個 placement 注入 per-idx crop（供右側預覽縮圖用）
+      const pages = (cfg.autoAlign && cfg.cropMode === "per-col") ? (() => {
+        const idxCrops = cfg.label.idxCrops || {};
+        return _pagesRaw.map((page) => page.map((pl) => {
+          if (!pl.path) return pl;
+          const f = orderedFiles.find((x) => x.path === pl.path);
+          if (!f) return pl;
+          const { idx } = extractGroupIdx(f.name || "", cfg.label.pattern);
+          const c = idx != null ? idxCrops[String(idx)] : null;
+          return c?.enabled ? { ...pl, _crop: c } : pl;
+        }));
+      })() : _pagesRaw;
       const imgW_cm = cfg.slide.width_cm * cfg.grid.width / 100;
       const firstAnchor = orderedFiles[0];
       const previewH_cm = firstAnchor && firstAnchor.w ? imgW_cm * (firstAnchor.h / firstAnchor.w) : null;
       const perPage = Math.max(1, cfg.grid.cols) * Math.max(1, cfg.grid.rows);
 
-      // 決定 crop modal 編輯的對象：snMatch 模式 + cropSourceId → 來源 crop；否則全域 crop
+      // 決定 crop modal 編輯的對象：cropSourceId → 來源 crop；cropIdxKey → per-idx crop；否則全域 crop
       const editingSource = cropSourceId != null ? cfg.sources.find((s) => s.id === cropSourceId) : null;
+      const editingIdxKey = cropIdxKey;
+      // 對於 per-idx：找一張該 idx 的代表圖
+      const idxRepFile = editingIdxKey
+        ? orderedFiles.find((f) => {
+            const ex = extractGroupIdx(f.name || "", cfg.label.pattern);
+            return String(ex.idx) === String(editingIdxKey);
+          })
+        : null;
+      // 全域 crop：先找 orderedFiles；snMatch 模式 fallback 從 sources 找
+      const allSrcFiles = cfg.sources?.flatMap((s) => s.files || []) || [];
       const cropTargetFile = editingSource
         ? (editingSource.files?.find((f) => f.path === selected) || editingSource.files?.[0])
-        : ((selected && orderedFiles.find((f) => f.path === selected)) || orderedFiles[0]);
-      const cropInitial = editingSource ? editingSource.crop : cfg.crop;
+        : editingIdxKey
+        ? (idxRepFile || orderedFiles[0])
+        : (selected && (orderedFiles.find((f) => f.path === selected) || allSrcFiles.find((f) => f.path === selected)))
+          || orderedFiles[0] || allSrcFiles[0];
+      const cropInitial = editingSource
+        ? editingSource.crop
+        : editingIdxKey
+        ? (cfg.label.idxCrops?.[editingIdxKey] || { enabled: false, left: 0, top: 0, right: 1, bottom: 1 })
+        : cfg.crop;
+
+      const closeCropEdit = () => {
+        setCropOpen(false);
+        setCropSourceId(null);
+        setCropIdxKey(null);
+      };
 
       return (
         <div className="max-w-[1600px] mx-auto p-4 h-screen flex flex-col">
@@ -2186,15 +2267,16 @@
             <CropEditor
               file={cropTargetFile}
               initial={cropInitial}
-              onCancel={() => { setCropOpen(false); setCropSourceId(null); }}
+              onCancel={closeCropEdit}
               onApply={(c) => {
                 if (editingSource) {
                   setCfg((x) => ({ ...x, sources: x.sources.map((s) => s.id === editingSource.id ? { ...s, crop: c } : s) }));
+                } else if (editingIdxKey) {
+                  setCfg((x) => ({ ...x, label: { ...x.label, idxCrops: { ...(x.label.idxCrops || {}), [editingIdxKey]: c } } }));
                 } else {
                   setCfg((x) => ({ ...x, crop: c }));
                 }
-                setCropOpen(false);
-                setCropSourceId(null);
+                closeCropEdit();
               }}
             />
           )}
@@ -2373,6 +2455,11 @@
                         setCfg={setCfg}
                         firstFile={orderedFiles[0]}
                         allFiles={orderedFiles}
+                        perColCrop={cfg.autoAlign && cfg.cropMode === "per-col"}
+                        onOpenIdxCrop={(idxKey) => {
+                          setCropIdxKey(idxKey);
+                          setCropOpen(true);
+                        }}
                       />
                       <NumberInput label="字體" suffix="pt" step={1} value={cfg.label.font_pt}
                         onChange={(v) => setCfg((c) => ({ ...c, label: { ...c.label, font_pt: v } }))} />
@@ -2515,25 +2602,48 @@
                     <span className="text-emerald-600 font-normal ml-1">· 選 {selectedPaths.length}</span>
                   )}
                 </div>
-                {!cfg.snMatchMode && (
-                  <div className="flex gap-1">
+                <div className="flex gap-1 items-center">
+                  {/* 依檔名 idx 或 範本 SN 模式 才有「裁剪設定方式」toggle (有 column 概念) */}
+                  {(cfg.autoAlign || cfg.snMatchMode) && (
+                    <div className="flex border rounded overflow-hidden text-[10px]" title="裁剪設定方式">
+                      <button onClick={() => setCfg((c) => ({ ...c, cropMode: "global" }))}
+                        className={`px-1.5 py-0.5 ${cfg.cropMode !== "per-col" ? "bg-slate-700 text-white" : "bg-white hover:bg-slate-100"}`}>
+                        統一
+                      </button>
+                      <button onClick={() => setCfg((c) => ({ ...c, cropMode: "per-col" }))}
+                        className={`px-1.5 py-0.5 ${cfg.cropMode === "per-col" ? "bg-slate-700 text-white" : "bg-white hover:bg-slate-100"}`}>
+                        各欄
+                      </button>
+                    </div>
+                  )}
+                  {/* 全局 ✂️：只在 統一模式 顯示 (或無 column 模式) */}
+                  {cfg.cropMode !== "per-col" && (
                     <button
                       onClick={() => {
-                        if (!selected && orderedFiles.length > 0) setSelected(orderedFiles[0].path);
+                        // 找一張代表圖（snMatch 模式從 sources 拿）
+                        const repFile = cfg.snMatchMode
+                          ? cfg.sources.flatMap((s) => s.files || [])[0]
+                          : orderedFiles[0];
+                        if (!repFile) return;
+                        if (!selected) setSelected(repFile.path);
                         setCropOpen(true);
                       }}
-                      disabled={orderedFiles.length === 0}
+                      disabled={cfg.snMatchMode
+                        ? !cfg.sources.some((s) => s.files?.length)
+                        : orderedFiles.length === 0}
                       title="對選中的圖框出裁剪區域，套用到所有圖"
                       className={`text-xs border rounded px-2 py-0.5 disabled:opacity-40 hover:bg-slate-100 ${cfg.crop?.enabled ? "bg-emerald-100 border-emerald-400 text-emerald-800" : ""}`}>
                       ✂️ {cfg.crop?.enabled ? "裁剪 ON" : "設定裁剪"}
                     </button>
+                  )}
+                  {!cfg.snMatchMode && (
                     <button onClick={resetSort} disabled={files.length === 0}
                       title="依檔名 A→Z 排序"
                       className="text-xs border rounded px-2 py-0.5 disabled:opacity-40 hover:bg-slate-100">
                       A→Z
                     </button>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
               <div ref={listRef} className={`flex-1 overflow-y-auto p-2 ${cfg.autoAlign ? "space-y-2" : "space-y-1"}`}
                 onClick={(e) => { if (e.target === e.currentTarget) { setSelectedPaths([]); setSelected(null); } }}
@@ -2548,6 +2658,7 @@
                     selected={selected}
                     setSelected={setSelected}
                     thumbUrl={thumbUrl}
+                    perColCrop={cfg.cropMode === "per-col"}
                     onOpenCrop={(sid) => {
                       const s = cfg.sources.find((x) => x.id === sid);
                       if (!s?.files?.length) { setStatus("先上傳此來源的圖片"); return; }
@@ -2566,7 +2677,29 @@
                   const idxList = detectIdxList(orderedFiles, cfg.label.pattern, cfg.label.idxSort || "auto", cfg.label.idxOrder || []);
                   const cols = Math.max(1, idxList.length);
                   const rows = buildRows(orderedFiles, cfg.label.pattern, idxList, true);
-                  return rows.map((row, rIdx) => (
+                  const showPerColCrop = cfg.cropMode === "per-col";
+                  return <>
+                    {/* 各欄獨立 模式：欄位 + ✂️ 標頭列 */}
+                    {showPerColCrop && (
+                      <div className="border border-sky-300 rounded bg-sky-50 p-2 sticky top-0 z-10">
+                        <div className="text-[10px] text-sky-800 font-semibold mb-1">各欄獨立裁剪</div>
+                        <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
+                          {idxList.map((idxKey, ci) => {
+                            const idxCrop = (cfg.label.idxCrops || {})[idxKey];
+                            const cropOn = idxCrop?.enabled;
+                            return (
+                              <button key={idxKey}
+                                onClick={() => { setCropIdxKey(idxKey); setCropOpen(true); }}
+                                title={`設定欄「${idxKey}」的裁剪區域`}
+                                className={`px-1 py-0.5 rounded border text-xs font-mono ${cropOn ? "bg-emerald-100 border-emerald-400 text-emerald-800" : "bg-white border-sky-300 text-sky-700 hover:bg-sky-100"}`}>
+                                {idxKey} ✂️
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  {rows.map((row, rIdx) => (
                     <div key={row.group}
                       draggable
                       onDragStart={(e) => onCardDragStart(e, row.group)}
@@ -2599,7 +2732,7 @@
                               className={`aspect-square rounded overflow-hidden border cursor-pointer relative ${
                                 isSel ? "ring-2 ring-emerald-500 border-emerald-500" : "border-slate-200 hover:border-slate-400"
                               }`}>
-                              <img src={thumbUrl(f.path, 120)}
+                              <img src={thumbUrl(f.path, 120, showPerColCrop ? (cfg.label.idxCrops || {})[idxList[ci]] : undefined)}
                                 className="w-full h-full object-cover pointer-events-none" />
                               <div className="absolute bottom-0 left-0 right-0 text-[9px] text-center bg-black/50 text-white py-0.5 font-mono">{colLabel}</div>
                             </div>
@@ -2607,7 +2740,8 @@
                         })}
                       </div>
                     </div>
-                  ));
+                  ))}
+                  </>;
                 })() : orderedFiles.map((f, idx) => {
                   const isSel = selectedPaths.includes(f.path);
                   return (
@@ -2781,7 +2915,7 @@
                           }
                           return (
                             <img key={i}
-                              src={thumbUrl(pl.path, 400)}
+                              src={thumbUrl(pl.path, 400, pl._crop)}
                               data-preview-path={pl.path}
                               style={{ ...style, scrollMargin: 30 }}
                               className={selected === pl.path ? "ring-4 ring-emerald-500 shadow-[0_0_18px_4px_rgba(16,185,129,0.7)] z-10 relative" : "border border-slate-300"} />
