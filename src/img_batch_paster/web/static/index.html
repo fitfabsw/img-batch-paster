@@ -111,6 +111,7 @@
           templateHint: tplName || "",
         },
         mode: { autoAlign: !!cfg.autoAlign, snMatchMode: !!cfg.snMatchMode },
+        cropMode: cfg.cropMode || "global",
         label: cfg.label,
         snSource: cfg.snSource,
         sources: (cfg.sources || []).map((s) => ({
@@ -132,6 +133,7 @@
         ...currentCfg,
         autoAlign: !!recipe.mode?.autoAlign,
         snMatchMode: !!recipe.mode?.snMatchMode,
+        cropMode: recipe.cropMode || "global",
         label: { ...currentCfg.label, ...(recipe.label || {}) },
         snSource: { ...currentCfg.snSource, ...(recipe.snSource || {}) },
         sources: (recipe.sources || []).map((s) => ({
