@@ -37,13 +37,17 @@ echo "[2/3] 同步依賴…"
 
 echo "[3/3] 重啟服務…"
 launchctl kickstart -k "gui/\$(id -u)/$LABEL"
-sleep 2
 
-if curl -sf -o /dev/null "http://127.0.0.1:$PORT/"; then
-    echo "✓ active (branch: \$(git rev-parse --abbrev-ref HEAD) @ \$(git rev-parse --short HEAD))"
-else
-    echo "✗ 服務未啟動，最後 20 行 err log："
-    tail -n 20 /tmp/img-batch-paster.err 2>/dev/null || true
-    exit 1
-fi
+# Health check: prewarm 可能需要幾秒，最多等 ~20s
+for i in 1 2 3 4 5 6 7 8 9 10; do
+    sleep 2
+    if curl -sf -o /dev/null "http://127.0.0.1:$PORT/"; then
+        echo "✓ active after \${i}x2s (branch: \$(git rev-parse --abbrev-ref HEAD) @ \$(git rev-parse --short HEAD))"
+        exit 0
+    fi
+done
+
+echo "✗ 服務 20s 後仍未回應，最後 20 行 err log："
+tail -n 20 /tmp/img-batch-paster.err 2>/dev/null || true
+exit 1
 EOF
