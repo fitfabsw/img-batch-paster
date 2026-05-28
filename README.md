@@ -22,9 +22,19 @@
 
 ### 本機開發
 
+用 [uv](https://docs.astral.sh/uv/)（建議，快很多）：
+
+```bash
+uv sync                                # 建 .venv + 裝 deps
+.venv/bin/img-batch-paster-web         # → http://127.0.0.1:5050/
+# 或：uv run img-batch-paster-web
+```
+
+或 stdlib：
+
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e .
-.venv/bin/img-batch-paster-web        # → http://127.0.0.1:5050/
+.venv/bin/img-batch-paster-web
 ```
 
 部署到 lab mac mini 請看 [deploy/SETUP.md](deploy/SETUP.md)。
