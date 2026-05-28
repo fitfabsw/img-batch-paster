@@ -13,9 +13,11 @@ import tempfile
 import zipfile
 from pathlib import Path
 
+from PIL import Image
+
 from .config import Config, GridConfig, InputConfig, OutputConfig, Point, Size, SlideConfig
 from .grouper import GroupedImages, scan_folder
-from .pptx_writer import write_pptx
+from .pptx_writer import Placement, write_pages, write_pptx
 
 
 class IbpModeUnsupported(ValueError):
@@ -164,12 +166,21 @@ def run_paste_job_ibp(
         grid = manifest.get("grid") or {}
         slide = manifest.get("slide") or {}
         label = manifest.get("label") or {}
-        # Frontend stores `grid.origin.x` (no _cm suffix) and `grid.width` (no cell.w_cm)
         origin = grid.get("origin") or {}
         gap = grid.get("gap") or {}
         cols = int(grid.get("cols", 3))
+        rows_per_page = max(1, int(grid.get("rows", 3)))
         pattern = label.get("pattern") or "{group}_{n}"
         extensions = [".png", ".jpg", ".jpeg"]
+
+        # Frontend grid values are PERCENTAGES of slide dimensions, not cm.
+        slide_w = float(slide.get("width_cm", 25.4))
+        slide_h = float(slide.get("height_cm", 14.29))
+        ox = slide_w * float(origin.get("x", 8)) / 100.0
+        oy = slide_h * float(origin.get("y", 15)) / 100.0
+        cell_w = slide_w * float(grid.get("width", 25)) / 100.0
+        gx = slide_w * float(gap.get("x", 2)) / 100.0
+        gy = slide_h * float(gap.get("y", 3)) / 100.0
 
         folder = Path(image_folder).expanduser().resolve()
         grouped = _scan_sequential(folder, pattern, extensions, cols)
@@ -178,29 +189,42 @@ def run_paste_job_ibp(
                 f"No images matching pattern '{pattern}' in {folder}"
             )
 
-        cfg = Config(
-            slide=SlideConfig(
-                width_cm=float(slide.get("width_cm", 25.4)),
-                height_cm=float(slide.get("height_cm", 14.29)),
-            ),
-            grid=GridConfig(
-                origin=Point(
-                    x_cm=float(origin.get("x", origin.get("x_cm", 2.0))),
-                    y_cm=float(origin.get("y", origin.get("y_cm", 2.0))),
-                ),
-                cell=Size(
-                    w_cm=float(grid.get("width", 6.0)),
-                    h_cm=0.0,  # height computed by aspect in placements_from_config
-                ),
-                gap=Point(
-                    x_cm=float(gap.get("x", gap.get("x_cm", 0.3))),
-                    y_cm=float(gap.get("y", gap.get("y_cm", 0.3))),
-                ),
-                cols=cols,
-            ),
-            input=InputConfig(folder=folder, pattern=pattern, extensions=extensions),
-            output=OutputConfig(path=out, template=template_path),
-        )
-        return write_pptx(cfg, grouped)
+        label_enabled = bool(label.get("enabled"))
+        label_x = slide_w * float(label.get("x", 2)) / 100.0
+        label_w = slide_w * float(label.get("width", 12)) / 100.0
+        label_font_pt = float(label.get("font_pt", 18))
+
+        pages: list[list[Placement]] = []
+        for start in range(0, len(grouped.rows), rows_per_page):
+            page_rows = grouped.rows[start:start + rows_per_page]
+            page_placements: list[Placement] = []
+            cur_y = oy
+            for group, cells in page_rows:
+                anchor = next((c for c in cells if c is not None), None)
+                if anchor is None:
+                    continue
+                with Image.open(anchor) as im:
+                    iw, ih = im.size
+                aspect = (ih / iw) if iw else 0.75
+                row_h = cell_w * aspect
+
+                if label_enabled:
+                    page_placements.append(Placement(
+                        path=None, text=group,
+                        x_cm=label_x, y_cm=cur_y, w_cm=label_w, h_cm=row_h,
+                        font_pt=label_font_pt, bold=True, align="center",
+                    ))
+                for ci, f in enumerate(cells):
+                    if f is None:
+                        continue
+                    page_placements.append(Placement(
+                        path=f,
+                        x_cm=ox + ci * (cell_w + gx), y_cm=cur_y,
+                        w_cm=cell_w, h_cm=row_h,
+                    ))
+                cur_y += row_h + gy
+            pages.append(page_placements)
+
+        return write_pages(slide_w, slide_h, pages, out, template=template_path)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
