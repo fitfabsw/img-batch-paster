@@ -14,10 +14,12 @@ dependencies = [
 
 [project.optional-dependencies]
 desktop = ["pywebview>=5.0"]
+mcp = ["mcp>=1.0"]
 
 [project.scripts]
 img-batch-paster = "img_batch_paster.cli:main"
 img-batch-paster-web = "img_batch_paster.web.app:run"
+img-batch-paster-mcp = "img_batch_paster.mcp_server:main"
 
 [build-system]
 requires = ["setuptools>=68"]
