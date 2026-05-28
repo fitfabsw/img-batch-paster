@@ -982,18 +982,6 @@
             </>
           )}
 
-          <details>
-            <summary className="text-[10px] text-slate-500 cursor-pointer hover:text-slate-700">
-              ▸ 進階：直接編輯 pattern
-            </summary>
-            <input value={cfgLabel.pattern}
-              onChange={(e) => updateLabel({ pattern: e.target.value, rawMode: true })}
-              className="mt-1 w-full border rounded px-2 py-1 text-xs font-mono" />
-            <div className="text-[10px] text-slate-400 mt-1">
-              佔位符：<code>{"{group}"}</code> · <code>{"{idx}"}</code> · <code>{"{skip}"}</code>（略過該段）；
-              其他字元為字面值。改回上面分隔符即重新同步。
-            </div>
-          </details>
         </div>
       );
     }
@@ -1172,9 +1160,8 @@
 
     // 設定檔配方 (recipe) 管理：下拉選擇 / 儲存 / 匯出 / 匯入
     // 內含範本：存成 .ibp (zip)；舊版 .json 仍可讀
-    function ConfigPanel({ cfg, setCfg, tplName, tplPath, setTplName, setTplPath, ws, setStatus, loadTemplateByPath, confirmAndReset }) {
+    function ConfigPanel({ cfg, setCfg, tplName, tplPath, setTplName, setTplPath, ws, setStatus, loadTemplateByPath, confirmAndReset, selectedName, setSelectedName, onClose }) {
       const [configs, setConfigs] = useState([]);
-      const [selectedName, setSelectedName] = useState("");
       const fileInputRef = useRef(null);
 
       const refreshList = async () => {
@@ -1267,12 +1254,12 @@
       };
 
       return (
-        <div className="border rounded-lg p-2 bg-slate-50/60 space-y-1.5">
+        <div className="p-2 space-y-1.5">
           <div className="text-xs font-medium text-slate-700">📁 配置</div>
 
           {/* 載入：下拉選一個就直接套用 */}
           <select value={selectedName}
-            onChange={(e) => { setSelectedName(e.target.value); if (e.target.value) doLoad(e.target.value); }}
+            onChange={(e) => { setSelectedName(e.target.value); if (e.target.value) { doLoad(e.target.value); onClose?.(); } }}
             title="選擇要載入的設定"
             className="w-full border rounded px-2 py-1 text-xs">
             <option value="">— 未選擇 —</option>
@@ -1591,6 +1578,10 @@
       const [historyPast, setHistoryPast] = useState([]);
       const [historyFuture, setHistoryFuture] = useState([]);
       const HISTORY_MAX = 50;
+
+      // 當前載入的配置名稱（用於 header 顯示）
+      const [currentConfigName, setCurrentConfigName] = useState("");
+      const [configMenuOpen, setConfigMenuOpen] = useState(false);
       const [snList, setSnList] = useState([]);  // [{ sn, row }] from /api/template/sn-list
       const [ws, setWs] = useState("");
       const [zoom, setZoom] = useState(1);
@@ -2477,8 +2468,32 @@
                 {" · "}{versionInfo.commit} · {versionInfo.date}
               </span>
             )}
-            {/* Undo / Redo */}
-            <div className="ml-auto flex gap-1 text-sm font-normal">
+            {/* 配置 menu / Undo / Redo */}
+            <div className="ml-auto flex gap-1 text-sm font-normal items-center">
+              {/* 配置 popover */}
+              <div className="relative">
+                <button onClick={() => setConfigMenuOpen((v) => !v)}
+                  title="配置：載入 / 儲存 / 匯入匯出"
+                  className={`border rounded px-2 py-0.5 text-xs hover:bg-slate-100 ${configMenuOpen ? "bg-slate-100" : ""}`}>
+                  📁 {currentConfigName || "配置"} ▾
+                </button>
+                {configMenuOpen && (
+                  <>
+                    <div className="fixed inset-0 z-30" onClick={() => setConfigMenuOpen(false)} />
+                    <div className="absolute right-0 top-full mt-1 z-40 bg-white border rounded shadow-lg w-72">
+                      <ConfigPanel cfg={cfg} setCfg={setCfg}
+                        tplName={tplName} tplPath={tplPath}
+                        setTplName={setTplName} setTplPath={setTplPath}
+                        ws={ws} setStatus={setStatus}
+                        loadTemplateByPath={loadTemplateByPath}
+                        confirmAndReset={confirmAndReset}
+                        selectedName={currentConfigName}
+                        setSelectedName={setCurrentConfigName}
+                        onClose={() => setConfigMenuOpen(false)} />
+                    </div>
+                  </>
+                )}
+              </div>
               <button onClick={undo} disabled={historyPast.length === 0}
                 title={historyPast.length ? `Undo「${historyPast[historyPast.length-1].desc || ""}」(⌘Z)` : "無動作可 undo"}
                 className="border rounded px-2 py-0.5 text-xs hover:bg-slate-100 disabled:opacity-40">
@@ -2496,13 +2511,6 @@
             {/* 左欄：設定 */}
             <div className="col-span-3 bg-white rounded-lg shadow flex flex-col min-h-0">
               <div className="p-3 space-y-3 overflow-y-auto flex-1">
-                <ConfigPanel cfg={cfg} setCfg={setCfg}
-                  tplName={tplName} tplPath={tplPath}
-                  setTplName={setTplName} setTplPath={setTplPath}
-                  ws={ws} setStatus={setStatus}
-                  loadTemplateByPath={loadTemplateByPath}
-                  confirmAndReset={confirmAndReset} />
-
                 <div>
                   <label className="text-sm font-medium">範本 (.pptx / .key / .xlsx)</label>
                   <div className="flex gap-1 mt-1"
