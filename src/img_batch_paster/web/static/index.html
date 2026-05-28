@@ -36,9 +36,24 @@
       label: {
         enabled: true,
         pattern: "{group}-{idx}",
+        delim: "-",                // 分段點選用的分隔符
+        roles: ["sn", "idx"],      // 各段角色：sn | idx | skip
+        rawMode: false,            // true=直接編輯 pattern, false=分段點選
+        idxSort: "auto",           // 對位模式欄位排序：auto | alpha | num | custom
+        idxOrder: [],              // custom 時使用者自訂順序
+        idxCrops: {},              // 各欄獨立模式 (依檔名 idx)：idx字串 → crop obj
         x: 2,
+        width: 12,        // SN box 固定寬度 (% of slide width)，與圖片 X 解耦
         font_pt: 18,
       },
+      autoAlign: false,   // 依檔名 group+idx 對位 (缺的照片留空)
+      snMatchMode: false, // SN 對照模式：從範本讀 SN list、每個 SN 從多來源資料夾找對應圖
+      snSource: { col: "A", rowStart: 2 },  // SN 在範本的哪一欄、從第幾列開始
+      sources: [          // SN 對照模式專用：多個來源資料夾 (每元素: {id, name, folder, files, targetCol, crop})
+      ],
+      crop: { enabled: false, left: 0, top: 0, right: 1, bottom: 1 },  // 0..1 相對裁剪 (全域)
+      cropMode: "global",   // "global" 全部統一一套 crop | "per-col" 每欄獨立 (僅 依檔名 idx / 範本 SN 模式)
+      slidesSn: { inCell: false, col: 1, rowStart: 2 },  // PPT/Keynote SN 寫入表格 cell (1-based)
       excel: {
         startCell: "B5",
         imgsPerRow: 4,
@@ -47,10 +62,102 @@
         gapRows: 0,
         snCol: "A",
         embedInCell: false,
-        imgFit: "cover",   // cover (裁切填滿) | contain (完整留白) | fill (拉伸)
+        imgFit: "contain", // cover (裁切填滿) | contain (完整留白) | fill (拉伸)
+        containInset: 5,   // contain 模式四邊留白百分比 (%)
       },
       output: { path: "./out.pptx", template: null },
     };
+
+    // 從 drop 事件取出所有檔案（支援拖資料夾，遞迴讀目錄）
+    async function filesFromDrop(dataTransfer) {
+      const items = dataTransfer.items;
+      if (!items || !items.length) {
+        return Array.from(dataTransfer.files || []);
+      }
+      const entries = [];
+      for (const item of items) {
+        const entry = item.webkitGetAsEntry && item.webkitGetAsEntry();
+        if (entry) entries.push(entry);
+      }
+      if (!entries.length) return Array.from(dataTransfer.files || []);
+      const files = [];
+      const readEntry = (entry) => new Promise((resolve) => {
+        if (entry.isFile) {
+          entry.file((f) => { files.push(f); resolve(); }, () => resolve());
+        } else if (entry.isDirectory) {
+          const reader = entry.createReader();
+          const readBatch = () => {
+            reader.readEntries(async (batch) => {
+              if (!batch.length) { resolve(); return; }
+              for (const e of batch) await readEntry(e);
+              readBatch();
+            }, () => resolve());
+          };
+          readBatch();
+        } else {
+          resolve();
+        }
+      });
+      for (const entry of entries) await readEntry(entry);
+      return files;
+    }
+
+    // cfg → 「配方」recipe：剝掉 session 專屬欄位、只留可重用設定
+    function cfgToRecipe(cfg, tplName) {
+      return {
+        _meta: {
+          version: 1,
+          created: new Date().toISOString(),
+          templateHint: tplName || "",
+        },
+        mode: { autoAlign: !!cfg.autoAlign, snMatchMode: !!cfg.snMatchMode },
+        cropMode: cfg.cropMode || "global",
+        label: cfg.label,
+        snSource: cfg.snSource,
+        sources: (cfg.sources || []).map((s) => ({
+          id: s.id, name: s.name, targetCol: s.targetCol, crop: s.crop,
+        })),
+        grid: cfg.grid,
+        slide: cfg.slide,
+        slidesSn: cfg.slidesSn,
+        excel: cfg.excel,
+        crop: cfg.crop,
+        output: { path: cfg.output?.path || "./out.xlsx" },
+      };
+    }
+
+    // recipe → 套用到目前 cfg：保留 session state (ws, files, folder, template path)
+    function applyRecipe(recipe, currentCfg) {
+      if (!recipe || typeof recipe !== "object") return currentCfg;
+      return {
+        ...currentCfg,
+        autoAlign: !!recipe.mode?.autoAlign,
+        snMatchMode: !!recipe.mode?.snMatchMode,
+        cropMode: recipe.cropMode || "global",
+        label: { ...currentCfg.label, ...(recipe.label || {}) },
+        snSource: { ...currentCfg.snSource, ...(recipe.snSource || {}) },
+        sources: (recipe.sources || []).map((s) => ({
+          id: s.id, name: s.name || "A", targetCol: s.targetCol || "F",
+          folder: "", files: [],
+          crop: s.crop || { enabled: false, left: 0, top: 0, right: 1, bottom: 1 },
+        })),
+        grid: { ...currentCfg.grid, ...(recipe.grid || {}) },
+        slide: { ...currentCfg.slide, ...(recipe.slide || {}) },
+        slidesSn: { ...currentCfg.slidesSn, ...(recipe.slidesSn || {}) },
+        excel: { ...currentCfg.excel, ...(recipe.excel || {}) },
+        crop: recipe.crop || currentCfg.crop,
+        output: { ...currentCfg.output, path: recipe.output?.path || currentCfg.output?.path || "./out.xlsx" },
+      };
+    }
+
+    // 欄字母 → 1-based 數字 (A=1, AA=27)；無效回傳 0
+    function colLetterToIdx(letter) {
+      const s = String(letter || "").toUpperCase().trim();
+      if (!/^[A-Z]+$/.test(s)) return 0;
+      let n = 0;
+      for (let i = 0; i < s.length; i++) n = n * 26 + (s.charCodeAt(i) - 64);
+      return n;
+    }
 
     function parseCell(ref) {
       const m = (ref || "").trim().match(/^([A-Za-z]+)(\d+)$/);
@@ -62,27 +169,28 @@
     }
 
     // 計算 Excel 的儲存格 placements
-    function computeExcelCells(excel, label, orderedFiles) {
+    function computeExcelCells(excel, label, orderedFiles, autoAlign) {
       if (!orderedFiles || orderedFiles.length === 0) return [];
       const start = parseCell(excel.startCell);
       const snCol = excel.snCol ? parseCell(excel.snCol + "1").col : 0;
       const stepCol = Math.max(1, excel.cellCols);
       const stepRow = Math.max(1, excel.cellRows) + Math.max(0, excel.gapRows);
       const perRow = Math.max(1, excel.imgsPerRow);
+      const colsArg = autoAlign
+        ? detectIdxList(orderedFiles, label.pattern, label.idxSort || "auto", label.idxOrder || [])
+        : perRow;
+      const rows = buildRows(orderedFiles, label.pattern, colsArg, autoAlign);
       const cells = [];
-      for (let i = 0; i < orderedFiles.length; i += perRow) {
-        const row = orderedFiles.slice(i, i + perRow);
-        const rIdx = i / perRow;
+      rows.forEach(({ group, cells: rowCells }, rIdx) => {
         const targetRow = start.row + rIdx * stepRow;
-        // 列標籤（SN）寫入 snCol
         if (label && label.enabled && snCol > 0) {
-          const group = extractGroup(row[0].name || row[0].path.split("/").pop(), label.pattern);
           cells.push({
             row: targetRow, col: snCol, span_cols: 1, span_rows: excel.cellRows,
             text: group, font_pt: label.font_pt,
           });
         }
-        row.forEach((f, ci) => {
+        rowCells.forEach((f, ci) => {
+          if (!f) return;  // 缺的照片留空
           cells.push({
             path: f.path,
             row: targetRow,
@@ -91,24 +199,125 @@
             span_rows: excel.cellRows,
           });
         });
-      }
+      });
       return cells;
     }
 
-    // 從檔名抽 group：pattern 用 {group} 和 {idx} 兩個 placeholder
-    function extractGroup(filename, pattern) {
-      const stem = filename.replace(/\.[^./]+$/, "");
-      const escaped = pattern.replace(/[.+?^$()|\[\]\\]/g, "\\$&")
-        .replace("{group}", "(.+?)").replace("{idx}", ".+?");
-      try {
-        const m = stem.match(new RegExp("^" + escaped + "$"));
-        if (m && m[1]) return m[1];
-      } catch (e) {}
-      return stem;  // fallback：整個檔名
+    // pattern → regex 字串：先轉義字面字元，再展開 placeholder ({group}/{idx}/{skip})
+    function patternToRegex(pattern, groupCapture = "(.+?)", idxCapture = "(.+?)") {
+      // 用佔位符暫存避免被字面 escape 影響
+      const G = "G", I = "I", S = "S";
+      let p = pattern.replace(/\{group\}/g, G).replace(/\{idx\}/g, I).replace(/\{skip\}/g, S);
+      p = p.replace(/[.+?^$()|\[\]\\]/g, "\\$&");
+      p = p.replace(new RegExp(G, "g"), groupCapture)
+           .replace(new RegExp(I, "g"), idxCapture)
+           .replace(new RegExp(S, "g"), ".+?");
+      return p;
     }
 
-    // 把檔案依「每頁 cols × rows」切成多頁；每頁從 origin 開始重新計算
-    function computePages(slide, grid, orderedFiles, label) {
+    // 從檔名抽 group：pattern 用 {group} / {idx} / {skip} 佔位符
+    function extractGroup(filename, pattern) {
+      const stem = filename.replace(/\.[^./]+$/, "");
+      try {
+        const m = stem.match(new RegExp("^" + patternToRegex(pattern, "(.+?)", ".+?") + "$"));
+        if (m && m[1]) return m[1];
+      } catch (e) {}
+      return stem;
+    }
+
+    // 嚴格版：match 不到回傳 null（給 UI 統計用）
+    function tryExtract(filename, pattern) {
+      if (!pattern || !pattern.includes("{group}")) return null;
+      const stem = filename.replace(/\.[^./]+$/, "");
+      try {
+        const m = stem.match(new RegExp("^" + patternToRegex(pattern) + "$"));
+        if (!m) return null;
+        return { group: m[1] || "", idx: m[2] || null };
+      } catch (e) { return null; }
+    }
+
+    // 同時抽 group + idx
+    function extractGroupIdx(filename, pattern) {
+      const stem = filename.replace(/\.[^./]+$/, "");
+      try {
+        const m = stem.match(new RegExp("^" + patternToRegex(pattern) + "$"));
+        if (m) return { group: m[1] || stem, idx: m[2] || null };
+      } catch (e) {}
+      return { group: stem, idx: null };
+    }
+
+    // 從所有檔名抽 idx → 去重 → 依 sort 規則排序
+    function detectIdxList(orderedFiles, pattern, sort, customOrder) {
+      const seenOrder = [];
+      const seen = new Set();
+      for (const f of orderedFiles || []) {
+        const { idx } = extractGroupIdx(f.name || f.path.split("/").pop(), pattern);
+        if (idx == null) continue;
+        const s = String(idx);
+        if (!seen.has(s)) { seen.add(s); seenOrder.push(s); }
+      }
+      if (sort === "custom") {
+        // custom：完全由使用者定義（可含檔名沒出現的 idx → 該欄全部留空）
+        return Array.isArray(customOrder) ? [...customOrder] : [];
+      }
+      if (sort === "alpha") return [...seenOrder].sort((a, b) => a.localeCompare(b));
+      if (sort === "num") {
+        return [...seenOrder].sort((a, b) => {
+          const na = parseFloat(a), nb = parseFloat(b);
+          if (isNaN(na) || isNaN(nb)) return a.localeCompare(b);
+          return na - nb;
+        });
+      }
+      // auto: 全字母 → alpha；全數字 → num；混合 → 首見順序
+      const allNum = seenOrder.every((x) => !isNaN(parseFloat(x)));
+      const allAlpha = seenOrder.every((x) => /^[A-Za-z]+$/.test(x));
+      if (allNum) return [...seenOrder].sort((a, b) => parseFloat(a) - parseFloat(b));
+      if (allAlpha) return [...seenOrder].sort((a, b) => a.localeCompare(b));
+      return seenOrder;
+    }
+
+    // 依檔名 group+idx 把檔案排成 rows[group] = [col0, col1, ...]，缺的留 null
+    // idxList: 欄位定義（字串陣列），cols = idxList.length
+    function groupBySnIdx(orderedFiles, pattern, idxList) {
+      const cols = idxList.length;
+      const idxToColMap = new Map(idxList.map((s, i) => [s, i]));
+      const groups = [];
+      const map = {};
+      for (const f of orderedFiles) {
+        const { group, idx } = extractGroupIdx(f.name || f.path.split("/").pop(), pattern);
+        if (!(group in map)) { map[group] = new Array(cols).fill(null); groups.push(group); }
+        let col = idx != null ? idxToColMap.get(String(idx)) : undefined;
+        if (col == null) {
+          col = map[group].findIndex((x) => x === null);
+          if (col < 0) col = 0;
+        }
+        map[group][col] = f;
+      }
+      return groups.map((g) => ({ group: g, cells: map[g] }));
+    }
+
+    // 建立 rows：每個 = { group, cells: [file|null × cols] }
+    // autoAlign=true 用 idxList 對位；false 用 cols 順序填滿
+    function buildRows(orderedFiles, pattern, colsOrIdxList, autoAlign) {
+      if (autoAlign) {
+        const idxList = Array.isArray(colsOrIdxList) ? colsOrIdxList : [];
+        return groupBySnIdx(orderedFiles, pattern, idxList);
+      }
+      const cols = typeof colsOrIdxList === "number" ? colsOrIdxList : (colsOrIdxList?.length || 1);
+      const rows = [];
+      for (let i = 0; i < orderedFiles.length; i += cols) {
+        const slice = orderedFiles.slice(i, i + cols);
+        const cells = new Array(cols).fill(null);
+        slice.forEach((f, ci) => { cells[ci] = f; });
+        const a = slice.find((f) => f);
+        const group = a ? extractGroup(a.name || a.path.split("/").pop(), pattern) : "";
+        rows.push({ group, cells });
+      }
+      return rows;
+    }
+
+    // 把 rows 依「每頁 rows」切成多頁；每頁從 origin 重新計算
+    function computePages(slide, grid, orderedFiles, label, autoAlign) {
       if (!orderedFiles || orderedFiles.length === 0) return [];
       const W = slide.width_cm, H = slide.height_cm;
       const ox = W * grid.origin.x / 100;
@@ -117,41 +326,36 @@
       const gx = W * grid.gap.x / 100;
       const gy = H * grid.gap.y / 100;
       const cols = Math.max(1, grid.cols);
-      const rows = Math.max(1, grid.rows);
-      const perPage = cols * rows;
+      const rowsPerPage = Math.max(1, grid.rows);
+      const colsArg = autoAlign
+        ? detectIdxList(orderedFiles, label.pattern, label.idxSort || "auto", label.idxOrder || [])
+        : cols;
 
+      const allRows = buildRows(orderedFiles, label.pattern, colsArg, autoAlign);
       const pages = [];
-      for (let p = 0; p < orderedFiles.length; p += perPage) {
-        const pageFiles = orderedFiles.slice(p, p + perPage);
+      for (let p = 0; p < allRows.length; p += rowsPerPage) {
+        const pageRows = allRows.slice(p, p + rowsPerPage);
         const placements = [];
         let cur_y = oy;
-        for (let i = 0; i < pageFiles.length; i += cols) {
-          const row = pageFiles.slice(i, i + cols);
-          const anchor = row[0];
-          const aspect = anchor.h && anchor.w ? anchor.h / anchor.w : 0.75;
+        let rowIdxInPage = 0;
+        for (const { group, cells } of pageRows) {
+          const anchor = cells.find((c) => c);
+          const aspect = anchor && anchor.h && anchor.w ? anchor.h / anchor.w : 0.75;
           const row_h = w * aspect;
-          // 列標籤：抽 group from first file's name；寬度 = 「label.x → origin.x」這段
           if (label && label.enabled) {
-            const group = extractGroup(anchor.name || anchor.path.split("/").pop(), label.pattern);
             const lx_cm = W * label.x / 100;
-            const lw_cm = Math.max(0.5, ox - lx_cm);
+            const lw_cm = W * (label.width || 12) / 100;
             placements.push({
-              text: group,
-              x_cm: lx_cm,
-              y_cm: cur_y,
-              w_cm: lw_cm,
-              h_cm: row_h,
-              font_pt: label.font_pt,
-              align: "center",
-              bold: true,
+              text: group, x_cm: lx_cm, y_cm: cur_y, w_cm: lw_cm, h_cm: row_h,
+              font_pt: label.font_pt, align: "center", bold: true,
+              row_idx: rowIdxInPage,
             });
           }
-          row.forEach((f, ci) => {
+          rowIdxInPage++;
+          cells.forEach((f, ci) => {
+            if (!f) return;  // 缺的照片留空，不遞補
             placements.push({
-              path: f.path,
-              x_cm: ox + ci * (w + gx),
-              y_cm: cur_y,
-              w_cm: w, h_cm: row_h,
+              path: f.path, x_cm: ox + ci * (w + gx), y_cm: cur_y, w_cm: w, h_cm: row_h,
             });
           });
           cur_y += row_h + gy;
@@ -161,17 +365,1041 @@
       return pages;
     }
 
-    function NumberInput({ label, value, onChange, step = 0.5, suffix }) {
+    // 對位模式的欄位編輯器：自動偵測 idx 集合 + 排序選項 + 自訂欄位
+    function IdxColumnsEditor({ label, allFiles, updateLabel, perColCrop, onOpenIdxCrop }) {
+      const sort = label.idxSort || "auto";
+      const customMode = sort === "custom";
+      const idxList = useMemo(
+        () => detectIdxList(allFiles || [], label.pattern, sort, label.idxOrder || []),
+        [allFiles, label.pattern, sort, label.idxOrder]
+      );
+      // 從檔名偵測到的實際 idx 集合（給自訂模式檢查 unmapped/empty 用）
+      const fromFiles = useMemo(
+        () => detectIdxList(allFiles || [], label.pattern, "auto", []),
+        [allFiles, label.pattern]
+      );
+      const dragRef = useRef(null);
+      const [hoverIdx, setHoverIdx] = useState(-1);
+      const [newChip, setNewChip] = useState("");
+
+      const setSort = (s) => {
+        if (s === "custom") {
+          updateLabel({ idxSort: "custom", idxOrder: idxList.length ? [...idxList] : [...fromFiles] });
+        } else {
+          updateLabel({ idxSort: s, idxOrder: [] });
+        }
+      };
+
+      const onChipDragStart = (i) => { dragRef.current = i; };
+      const onChipDrop = (toIdx) => {
+        const from = dragRef.current;
+        dragRef.current = null;
+        setHoverIdx(-1);
+        if (from == null || from === toIdx) return;
+        const next = [...idxList];
+        const [moved] = next.splice(from, 1);
+        next.splice(toIdx, 0, moved);
+        updateLabel({ idxSort: "custom", idxOrder: next });
+      };
+
+      const removeChip = (i) => {
+        const next = idxList.filter((_, j) => j !== i);
+        updateLabel({ idxSort: "custom", idxOrder: next });
+      };
+
+      const addChip = () => {
+        const v = newChip.trim();
+        if (!v) return;
+        if (idxList.includes(v)) { setNewChip(""); return; }
+        updateLabel({ idxSort: "custom", idxOrder: [...idxList, v] });
+        setNewChip("");
+      };
+
+      const loadFromFiles = () => {
+        updateLabel({ idxSort: "custom", idxOrder: [...fromFiles] });
+      };
+
+      const SORTS = [
+        { v: "auto",   label: "自動" },
+        { v: "custom", label: "自訂" },
+      ];
+
+      // 自訂模式下的異常檢查
+      const unmapped = customMode ? fromFiles.filter((x) => !idxList.includes(x)) : [];
+
       return (
-        <label className="flex flex-col text-xs text-slate-600">
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <div className="text-xs text-sky-800 font-semibold">
+              {customMode ? `自訂 ${idxList.length} 欄` : `偵測到 ${idxList.length} 欄`}
+            </div>
+            <div className="flex border rounded overflow-hidden text-[10px]">
+              {SORTS.map((s) => (
+                <button key={s.v} onClick={() => setSort(s.v)}
+                  className={`px-1.5 py-0.5 ${sort === s.v ? "bg-sky-600 text-white" : "bg-white hover:bg-sky-100"}`}>
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {idxList.length === 0 && !customMode ? (
+            <div className="text-[10px] text-amber-700 p-2 bg-amber-50 rounded">
+              ⚠ 從現有檔名中找不到 idx 段內容 — 請確認上方分段選取
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-1 items-center">
+              {idxList.map((s, i) => {
+                const isEmpty = customMode && !fromFiles.includes(s);
+                const idxCrop = (label.idxCrops || {})[s];
+                const cropOn = perColCrop && idxCrop?.enabled;
+                return (
+                  <div key={s + i}
+                    draggable
+                    onDragStart={() => onChipDragStart(i)}
+                    onDragOver={(e) => { e.preventDefault(); if (hoverIdx !== i) setHoverIdx(i); }}
+                    onDrop={() => onChipDrop(i)}
+                    onDragEnd={() => setHoverIdx(-1)}
+                    title={isEmpty ? "此欄沒有對應檔名（將全部留空）" : "可拖曳改變順序"}
+                    className={`flex items-center gap-1 px-2 py-0.5 rounded border text-xs font-mono cursor-grab active:cursor-grabbing ${
+                      isEmpty ? "bg-slate-50 border-dashed border-slate-400 text-slate-500"
+                              : "bg-white border-sky-300 text-sky-800"
+                    } ${hoverIdx === i ? "ring-2 ring-sky-400" : ""}`}>
+                    {s}
+                    {perColCrop && onOpenIdxCrop && (
+                      <button onClick={(e) => { e.stopPropagation(); onOpenIdxCrop(s); }}
+                        title={cropOn ? `已設定此欄裁剪` : "設定此欄裁剪"}
+                        className={`text-[10px] px-1 rounded ${cropOn ? "bg-emerald-100 text-emerald-700 border border-emerald-300" : "hover:bg-slate-100"}`}>
+                        ✂️
+                      </button>
+                    )}
+                    {customMode && (
+                      <button onClick={() => removeChip(i)}
+                        className="text-slate-400 hover:text-red-600 text-[10px] leading-none"
+                        title="移除此欄">✕</button>
+                    )}
+                  </div>
+                );
+              })}
+              {customMode && (
+                <div className="flex items-center gap-1">
+                  <input
+                    value={newChip}
+                    onChange={(e) => setNewChip(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addChip(); } }}
+                    placeholder="新增欄位名…"
+                    className="border rounded px-1.5 py-0.5 text-xs font-mono w-24" />
+                  <button onClick={addChip}
+                    disabled={!newChip.trim()}
+                    className="text-[10px] px-1.5 py-0.5 rounded border bg-sky-100 hover:bg-sky-200 text-sky-800 disabled:opacity-40">
+                    + 新增
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+          {customMode && (
+            <div className="space-y-0.5 mt-1">
+              {unmapped.length > 0 && (
+                <div className="text-[10px] text-amber-700">
+                  ⚠ 檔名中有 {unmapped.length} 個 idx 不在自訂欄位中（將自動塞到剩餘空位）：
+                  <span className="font-mono">{unmapped.join(", ")}</span>
+                </div>
+              )}
+              <div className="flex gap-2 text-[10px]">
+                <button onClick={loadFromFiles}
+                  className="text-sky-700 hover:underline">↻ 從檔名重新載入</button>
+                <span className="text-slate-500">拖曳排序 · 點 ✕ 移除 · Enter 新增</span>
+              </div>
+            </div>
+          )}
+          {!customMode && (
+            <div className="text-[10px] text-slate-500 mt-1">
+              欄數 = 偵測值；切「自訂」可定義欄位（含檔名沒出現的）
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // SN 對照模式：中欄 — SN × source 對照表
+    function SnMatchMatrix({ cfg, snList, selected, setSelected, thumbUrl, onOpenCrop, perColCrop, selectedCell, setSelectedCell, setSelectedPaths }) {
+      // 把 source.files 建成 stem → file 的 map（不分大小寫，去副檔名）
+      const fileMaps = useMemo(() => cfg.sources.map((s) => {
+        const m = new Map();
+        for (const f of s.files || []) {
+          const stem = (f.name || "").replace(/\.[^./]+$/, "").toLowerCase();
+          m.set(stem, f);
+        }
+        return m;
+      }), [cfg.sources]);
+
+      if (!snList.length) {
+        return (
+          <div className="text-xs text-slate-400 text-center py-8">
+            請先讀取範本 SN list
+          </div>
+        );
+      }
+      if (!cfg.sources.length) {
+        return (
+          <div className="text-xs text-slate-400 text-center py-8">
+            請先新增至少一個資料來源
+          </div>
+        );
+      }
+
+      const missingPerSource = cfg.sources.map((s, i) => {
+        let miss = 0;
+        for (const sn of snList) {
+          if (!fileMaps[i].get(sn.sn.toLowerCase())) miss++;
+        }
+        return miss;
+      });
+      const totalMissing = missingPerSource.reduce((a, b) => a + b, 0);
+
+      return (
+        <div className="space-y-1">
+          <div className={`text-[10px] px-2 py-1 rounded ${totalMissing === 0 ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-800"}`}>
+            {totalMissing === 0
+              ? `✓ ${snList.length} 個 SN × ${cfg.sources.length} 來源 全部對到`
+              : `⚠ ${snList.length} 個 SN：${cfg.sources.map((s, i) => `${s.name} 缺 ${missingPerSource[i]}`).join(" · ")}`}
+          </div>
+          <div className="overflow-x-auto">
+            <table className="text-xs w-full">
+              <thead>
+                <tr className="text-[10px] text-slate-500">
+                  <th className="text-left px-1 py-0.5">SN</th>
+                  {cfg.sources.map((s) => {
+                    const displayName = s.files?.length ? s.name : "(未上傳)";
+                    return (
+                      <th key={s.id} className="text-center px-1 py-1">
+                        <div className="flex items-center justify-center gap-1">
+                          <span className="bg-purple-100 text-purple-800 px-1 rounded font-mono text-[10px] max-w-[100px] truncate" title={s.name}>{displayName}</span>
+                          <span className="text-slate-400">→</span>
+                          <span className="font-mono">{s.targetCol}</span>
+                          {perColCrop && (
+                            <button
+                              onClick={() => onOpenCrop && onOpenCrop(s.id)}
+                              disabled={!s.files?.length}
+                              title={s.files?.length ? `設定來源「${s.name}」的裁剪區域` : "請先上傳此來源的圖片"}
+                              className={`ml-1 text-xs border rounded px-1 py-0.5 hover:bg-slate-100 disabled:opacity-40 ${s.crop?.enabled ? "bg-emerald-100 border-emerald-400 text-emerald-800" : ""}`}>
+                              ✂️
+                            </button>
+                          )}
+                        </div>
+                      </th>
+                    );
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {snList.map(({ sn, row }, rIdx) => (
+                  <tr key={row} className="border-b border-slate-100 hover:bg-purple-50/30">
+                    <td className="font-mono text-[10px] px-1 py-1 text-slate-600">
+                      <span className="text-slate-300">{row}</span> {sn}
+                    </td>
+                    {cfg.sources.map((s, i) => {
+                      const f = fileMaps[i].get(sn.toLowerCase());
+                      const isCellSel = selectedCell?.r === rIdx && selectedCell?.c === i;
+                      const isSel = (f && selected === f.path) || isCellSel;
+                      return (
+                        <td key={s.id} data-r={rIdx} data-c={i} className="px-1 py-0.5 text-center">
+                          {f ? (
+                            <img src={thumbUrl(f.path, 60, perColCrop ? (s.crop || null) : cfg.crop)}
+                              onClick={() => { setSelected(f.path); setSelectedCell?.({ r: rIdx, c: i }); }}
+                              title={f.name}
+                              className={`inline-block w-10 h-10 object-cover border rounded cursor-pointer ${isSel ? "ring-2 ring-emerald-500" : "border-slate-300 hover:border-slate-500"}`} />
+                          ) : (
+                            <div onClick={() => { setSelectedCell?.({ r: rIdx, c: i }); setSelected(null); setSelectedPaths?.([]); }}
+                              className={`inline-flex w-10 h-10 items-center justify-center border-2 rounded text-[10px] cursor-pointer ${isCellSel ? "border-emerald-500 ring-2 ring-emerald-300 text-emerald-700" : "border-dashed border-slate-300 text-slate-400"}`}>缺</div>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    }
+
+    // SN 對照模式：左欄 — SN 來源設定 + 多來源資料夾管理
+    function SnMatchPanel({ cfg, setCfg, ws, tplPath, snList, setSnList, setStatus, setSelected, setCropOpen, setCropSourceId, pushHistory }) {
+      const [loading, setLoading] = useState(false);
+      const inputRefs = useRef({});
+
+      const loadSnList = async (opts) => {
+        const silentEmpty = opts?.silentEmpty;  // 自動觸發時不跳 alert
+        if (!tplPath) { setStatus("錯誤: 請先上傳 Excel 範本"); return; }
+        setLoading(true);
+        try {
+          const r = await fetch("/api/template/sn-list", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path: tplPath, col: cfg.snSource.col, rowStart: cfg.snSource.rowStart }),
+          });
+          const j = await r.json();
+          if (!r.ok) throw new Error(j.error || "讀取失敗");
+          setSnList(j.sns);
+          if (j.count === 0) {
+            const msg = `沒讀到任何 SN — 確認範本欄位「${cfg.snSource.col}」從第 ${cfg.snSource.rowStart} 列起是否有內容`;
+            setStatus("⚠ " + msg);
+            if (!silentEmpty) alert("⚠ " + msg);
+          } else {
+            setStatus(`已載入 ${j.count} 個 SN (${cfg.snSource.col}${cfg.snSource.rowStart}起)`);
+          }
+        } catch (e) {
+          setStatus("錯誤: " + e.message);
+          if (!silentEmpty) alert("錯誤: " + e.message);
+        } finally { setLoading(false); }
+      };
+
+      // 自動讀取 SN list：在 SN 對照模式 + 範本已載入 + 尚無 SN list 時自動觸發 (失敗時不跳 alert)
+      useEffect(() => {
+        if (cfg.snMatchMode && tplPath && snList.length === 0 && !loading) {
+          loadSnList({ silentEmpty: true });
+        }
+      }, [tplPath, cfg.snMatchMode]);
+
+      const uploadSource = async (sid, files) => {
+        if (!ws || !files || !files.length) return;
+        const src = cfg.sources.find((s) => s.id === sid);
+        if (!src) return;
+
+        // 從 webkitRelativePath 取資料夾名稱 (e.g. "TA 106PCS L/img.jpg" → "TA 106PCS L")
+        const detectedFolderName = (() => {
+          for (const f of files) {
+            const rel = f.webkitRelativePath || "";
+            const seg = rel.split("/")[0];
+            if (seg) return seg;
+          }
+          return "";
+        })();
+
+        setStatus(`上傳來源 ${src.name} (${files.length} 張)…`);
+        const fd = new FormData();
+        fd.append("workspace", ws);
+        fd.append("sourceId", String(sid));
+        for (const f of files) {
+          if (/\.(png|jpe?g)$/i.test(f.name)) fd.append("files", f);
+        }
+        try {
+          const r = await fetch("/api/upload/source", { method: "POST", body: fd });
+          const j = await r.json();
+          if (!r.ok) throw new Error(j.error || "上傳失敗");
+          setCfg((c) => ({
+            ...c,
+            sources: c.sources.map((s) => {
+              if (s.id !== sid) return s;
+              const next = { ...s, folder: j.folder, files: j.files };
+              // 名稱仍是預設單字母 (A/B/C/...) 時，自動帶入資料夾名稱
+              if (detectedFolderName && /^[A-Z]$/.test(s.name)) next.name = detectedFolderName;
+              return next;
+            }),
+          }));
+          setStatus(`來源 ${detectedFolderName || src.name}: ${j.count} 張`);
+        } catch (e) { setStatus("錯誤: " + e.message); }
+      };
+
+      const updateSource = (sid, patch) => {
+        setCfg((c) => ({ ...c, sources: c.sources.map((s) => s.id === sid ? { ...s, ...patch } : s) }));
+      };
+
+      const addSource = () => {
+        setCfg((c) => {
+          const nextId = (c.sources.reduce((m, s) => Math.max(m, s.id), 0)) + 1;
+          const usedNames = new Set(c.sources.map((s) => s.name));
+          let name = String.fromCharCode(65 + c.sources.length);
+          while (usedNames.has(name)) name = String.fromCharCode(name.charCodeAt(0) + 1);
+          // 給個跟前一來源錯開的預設欄
+          const usedCols = new Set(c.sources.map((s) => s.targetCol));
+          let col = "F";
+          while (usedCols.has(col)) col = String.fromCharCode(col.charCodeAt(0) + 1);
+          return {
+            ...c, sources: [...c.sources, {
+              id: nextId, name, folder: "", files: [], targetCol: col,
+              crop: { enabled: false, left: 0, top: 0, right: 1, bottom: 1 },
+            }],
+          };
+        });
+      };
+
+      const removeSource = (sid) => {
+        pushHistory?.("移除來源");
+        setCfg((c) => ({ ...c, sources: c.sources.filter((s) => s.id !== sid) }));
+      };
+
+      return (
+        <div className="space-y-3">
+          {/* SN 來源 */}
+          <div className="border rounded-lg p-2 bg-purple-50/50">
+            <div className="text-sm font-medium text-purple-900 mb-2">SN 來源 (範本)</div>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="flex flex-col text-xs text-slate-600">
+                <span className="mb-1">SN 欄位</span>
+                <input value={cfg.snSource.col}
+                  onChange={(e) => setCfg((c) => ({ ...c, snSource: { ...c.snSource, col: e.target.value.toUpperCase() } }))}
+                  className="border rounded px-2 py-1 text-sm font-mono" placeholder="A" />
+              </label>
+              <label className="flex flex-col text-xs text-slate-600">
+                <span className="mb-1">起始列</span>
+                <input type="number" value={cfg.snSource.rowStart}
+                  onChange={(e) => setCfg((c) => ({ ...c, snSource: { ...c.snSource, rowStart: Math.max(1, parseInt(e.target.value) || 1) } }))}
+                  className="border rounded px-2 py-1 text-sm" />
+              </label>
+            </div>
+            <button onClick={() => loadSnList()} disabled={loading || !tplPath}
+              className="w-full mt-2 border rounded py-1 text-xs bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-40">
+              {loading ? "讀取中…" : tplPath ? `讀取 SN list (${cfg.snSource.col}${cfg.snSource.rowStart}起)` : "請先上傳範本"}
+            </button>
+            {snList.length > 0 && (
+              <div className="text-[10px] text-slate-600 mt-1">
+                偵測到 <b>{snList.length}</b> 個 SN：
+                <span className="font-mono">{snList.slice(0, 3).map((s) => s.sn).join(", ")}{snList.length > 3 ? ` … (+${snList.length - 3})` : ""}</span>
+              </div>
+            )}
+          </div>
+
+          {/* 來源列表 */}
+          <div className="border rounded-lg p-2">
+            <div className="text-sm font-medium text-slate-700 mb-2">資料來源 ({cfg.sources.length})</div>
+            <div className="space-y-2">
+              {cfg.sources.map((s) => (
+                <div key={s.id} className="border rounded p-2 bg-white">
+                  <div className="flex items-center gap-1 mb-1">
+                    <span className="text-[10px] text-slate-500">寫入欄</span>
+                    <input value={s.targetCol}
+                      onChange={(e) => updateSource(s.id, { targetCol: e.target.value.toUpperCase() })}
+                      className="border rounded px-1.5 py-0.5 text-xs font-mono w-12" />
+                    <button onClick={() => removeSource(s.id)}
+                      className="ml-auto text-slate-400 hover:text-red-600 text-xs">✕</button>
+                  </div>
+                  <button
+                    onClick={() => inputRefs.current[s.id]?.click()}
+                    title={s.files?.length ? s.name : "點擊選擇資料夾"}
+                    className="w-full border rounded px-2 py-1 text-xs text-left truncate hover:bg-slate-50">
+                    📤 {s.files?.length ? `${s.name} (${s.files.length} 張)` : "上傳資料夾…"}
+                  </button>
+                  <input ref={(el) => { inputRefs.current[s.id] = el; }}
+                    type="file" multiple webkitdirectory="" directory="" className="hidden"
+                    onChange={(e) => uploadSource(s.id, Array.from(e.target.files || []))} />
+                </div>
+              ))}
+              <button onClick={addSource}
+                className="w-full border border-dashed border-purple-300 text-purple-700 rounded py-1 text-xs hover:bg-purple-50">
+                + 新增來源
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // 分段點選的 SN 設定 UI：分隔符 + 各段角色 chip + 即時抽取預覽 + 命中統計
+    function SnPatternPicker({ cfgLabel, autoAlign, setCfg, firstFile, allFiles, perColCrop, onOpenIdxCrop }) {
+      const DELIMS = [
+        { v: "-", label: "-" },
+        { v: "_", label: "_" },
+        { v: ".", label: "." },
+        { v: " ", label: "空白" },
+      ];
+
+      const delim = cfgLabel.delim || "-";
+      const firstStem = firstFile ? (firstFile.name || "").replace(/\.[^./]+$/, "") : "";
+      const segs = firstStem ? firstStem.split(delim) : [];
+      // roles 對齊長度；缺值補 skip
+      const roles = (cfgLabel.roles || []).slice(0, segs.length);
+      while (roles.length < segs.length) roles.push("skip");
+
+      const snIdx = roles.indexOf("sn");
+      const idxIdx = roles.indexOf("idx");
+
+      // 沒勾「依檔名對位」時，idx 角色視為 skip（既不出現在 pattern、也不擋 SN 選取）
+      const effRole = (i) => {
+        const r = roles[i] || "skip";
+        if (r === "idx" && !autoAlign) return "skip";
+        return r;
+      };
+
+      const buildPattern = (rs) =>
+        segs.map((_, i) => {
+          let r = rs[i] || "skip";
+          if (r === "idx" && !autoAlign) r = "skip";
+          return r === "sn" ? "{group}" : r === "idx" ? "{idx}" : "{skip}";
+        }).join(delim);
+
+      const updateLabel = (patch) =>
+        setCfg((c) => ({ ...c, label: { ...c.label, ...patch } }));
+
+      // 檔案 / 分隔符 變動時自動同步 pattern + roles 長度
+      useEffect(() => {
+        if (cfgLabel.rawMode) return;
+        if (!segs.length) return;
+        const targetPattern = buildPattern(roles);
+        const rolesChanged = (cfgLabel.roles || []).length !== roles.length;
+        if (targetPattern !== cfgLabel.pattern || rolesChanged) {
+          updateLabel({ pattern: targetPattern, roles });
+        }
+      }, [firstStem, delim, cfgLabel.rawMode, autoAlign]);
+
+      // SN 列：點 chip = 設為 SN；點已選的 = 取消；該段已是 idx (且對位啟用中) 則禁用
+      const toggleSn = (i) => {
+        if (effRole(i) === "idx") return;
+        const newRoles = roles.map((r) => (r === "sn" ? "skip" : r));
+        if (roles[i] !== "sn") newRoles[i] = "sn";
+        updateLabel({ roles: newRoles, pattern: buildPattern(newRoles), rawMode: false });
+      };
+
+      // idx 列：點 chip = 設為 idx；點已選的 = 取消；該段已是 SN 則禁用
+      const toggleIdx = (i) => {
+        if (effRole(i) === "sn") return;
+        const newRoles = roles.map((r) => (r === "idx" ? "skip" : r));
+        if (roles[i] !== "idx") newRoles[i] = "idx";
+        updateLabel({ roles: newRoles, pattern: buildPattern(newRoles), rawMode: false });
+      };
+
+      const onDelimChange = (d) => {
+        const newSegs = firstStem ? firstStem.split(d) : [];
+        // 預設第 1 段 = sn，第 2 段 = idx
+        const newRoles = newSegs.map((_, i) => (i === 0 ? "sn" : i === 1 ? "idx" : "skip"));
+        const pattern = newSegs.map((_, i) =>
+          newRoles[i] === "sn" ? "{group}" : newRoles[i] === "idx" ? "{idx}" : "{skip}"
+        ).join(d);
+        updateLabel({ delim: d, roles: newRoles, pattern, rawMode: false });
+      };
+
+      const hasSn = snIdx >= 0;
+      const preview = firstFile && hasSn ? tryExtract(firstFile.name, cfgLabel.pattern) : null;
+
+      let okCount = 0;
+      if (hasSn && allFiles && allFiles.length) {
+        for (const f of allFiles) if (tryExtract(f.name, cfgLabel.pattern)) okCount++;
+      }
+      const total = (allFiles || []).length;
+
+      const CHIP_CLS = {
+        sn:   { sel: "bg-emerald-500 border-emerald-600 text-white ring-2 ring-emerald-200",
+                idle: "bg-white border-slate-300 text-slate-700 hover:bg-emerald-50" },
+        idx:  { sel: "bg-sky-500 border-sky-600 text-white ring-2 ring-sky-200",
+                idle: "bg-white border-slate-300 text-slate-700 hover:bg-sky-50" },
+      };
+      const DISABLED_CLS = "bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed line-through";
+
+      const ChipRow = ({ selectedIdx, onPick, kind }) => (
+        <div className="flex flex-wrap gap-1">
+          {segs.map((s, i) => {
+            const isSel = selectedIdx === i;
+            // 該段被另一角色佔走 → disable
+            const eff = effRole(i);
+            const takenBy = eff === "sn" && kind === "idx" ? "SN"
+                          : eff === "idx" && kind === "sn" ? "對位"
+                          : null;
+            const cls = takenBy
+              ? DISABLED_CLS
+              : (isSel ? CHIP_CLS[kind].sel : CHIP_CLS[kind].idle);
+            return (
+              <button key={i}
+                disabled={!!takenBy}
+                title={takenBy ? `此段已被「${takenBy}」選用` : ""}
+                onClick={() => onPick(i)}
+                className={`px-3 py-1.5 rounded border text-xs font-mono ${cls}`}>
+                {s || <span className="opacity-50">(空)</span>}
+              </button>
+            );
+          })}
+        </div>
+      );
+
+      return (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-600">分隔符</span>
+            <div className="flex border rounded overflow-hidden text-xs">
+              {DELIMS.map((d) => (
+                <button key={d.v}
+                  onClick={() => onDelimChange(d.v)}
+                  className={`px-2 py-0.5 ${delim === d.v ? "bg-slate-700 text-white" : "hover:bg-slate-100"}`}>
+                  {d.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {!firstFile ? (
+            <div className="text-xs text-slate-400 border rounded p-2 bg-slate-50">
+              請先上傳圖片，再點選哪一段是 SN
+            </div>
+          ) : (
+            <>
+              <div>
+                <div className="text-xs text-slate-700 mb-1">
+                  <b>SN 取哪一段？</b>
+                  <span className="text-[10px] text-slate-400 ml-1">範例 <span className="font-mono">{firstFile.name}</span></span>
+                </div>
+                <ChipRow selectedIdx={snIdx} onPick={toggleSn} kind="sn" />
+
+                {hasSn ? (
+                  <div className="text-xs mt-2 p-2 border rounded bg-emerald-50">
+                    抽出 SN：<b className="font-mono text-emerald-800">{preview ? preview.group : "(無法抽出)"}</b>
+                    <div className="text-[10px] text-slate-500 mt-0.5">
+                      {okCount === total
+                        ? `全部 ${total} 個檔案皆可抽出 ✓`
+                        : `${okCount} / ${total} 個檔案可抽出${okCount < total ? "（其餘以原檔名顯示）" : ""}`}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-xs mt-2 p-2 border border-amber-300 rounded bg-amber-50 text-amber-800">
+                    ⚠ 尚未選 SN — 請點選上方任一段
+                  </div>
+                )}
+              </div>
+
+              {autoAlign && (
+                <div className="pt-2 border-t bg-sky-50 -mx-1 px-2 py-2 rounded space-y-2">
+                  <div>
+                    <div className="text-xs text-sky-800 mb-1 font-semibold">🎯 對位用哪一段？</div>
+                    <ChipRow selectedIdx={idxIdx} onPick={toggleIdx} kind="idx" />
+                    {idxIdx >= 0 ? (
+                      <div className="text-[10px] text-slate-600 mt-1">
+                        該段內容將自動展開成欄位（見下方）
+                      </div>
+                    ) : (
+                      <div className="text-[10px] text-amber-700 mt-1">
+                        ⚠ 對位模式已啟用但未選欄位段 — 對位將無效
+                      </div>
+                    )}
+                  </div>
+                  {idxIdx >= 0 && (
+                    <IdxColumnsEditor
+                      label={cfgLabel}
+                      allFiles={allFiles}
+                      updateLabel={updateLabel}
+                      perColCrop={perColCrop}
+                      onOpenIdxCrop={onOpenIdxCrop}
+                    />
+                  )}
+                </div>
+              )}
+            </>
+          )}
+
+        </div>
+      );
+    }
+
+    // 視覺化裁剪 modal：拖一個矩形、回傳相對比例
+    function CropEditor({ file, initial, onApply, onCancel }) {
+      const imgRef = useRef(null);
+      const boxRef = useRef(null);
+      const [box, setBox] = useState(() => {
+        const ini = initial || { left: 0.15, top: 0.15, right: 0.85, bottom: 0.85, enabled: false };
+        return ini.enabled
+          ? { left: ini.left, top: ini.top, right: ini.right, bottom: ini.bottom }
+          : { left: 0.15, top: 0.15, right: 0.85, bottom: 0.85 };
+      });
+      const dragRef = useRef(null);   // { mode: 'new'|'move'|'l'|'r'|'t'|'b'|'tl'|..., startX, startY, startBox }
+
+      // 鍵盤快捷：Enter = 套用、Esc = 關閉
+      useEffect(() => {
+        const onKey = (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            onApply({ enabled: true, ...box });
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            onCancel();
+          }
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+      }, [box, onApply, onCancel]);
+
+      const getRel = (e) => {
+        const el = boxRef.current;
+        if (!el) return [0, 0];
+        const rect = el.getBoundingClientRect();
+        return [
+          Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)),
+          Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height)),
+        ];
+      };
+
+      const onPointerDown = (e, mode) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const [x, y] = getRel(e);
+        dragRef.current = { mode, startX: x, startY: y, startBox: { ...box } };
+        if (mode === "new") {
+          setBox({ left: x, top: y, right: x, bottom: y });
+        }
+        const onMove = (ev) => {
+          const d = dragRef.current;
+          if (!d) return;
+          const [nx, ny] = getRel(ev);
+          const sb = d.startBox;
+          let nb = { ...box };
+          if (d.mode === "new") {
+            nb = {
+              left: Math.min(d.startX, nx), top: Math.min(d.startY, ny),
+              right: Math.max(d.startX, nx), bottom: Math.max(d.startY, ny),
+            };
+          } else if (d.mode === "move") {
+            const dx = nx - d.startX, dy = ny - d.startY;
+            const w = sb.right - sb.left, h = sb.bottom - sb.top;
+            let nl = Math.max(0, Math.min(1 - w, sb.left + dx));
+            let nt = Math.max(0, Math.min(1 - h, sb.top + dy));
+            nb = { left: nl, top: nt, right: nl + w, bottom: nt + h };
+          } else {
+            nb = { ...sb };
+            if (d.mode.includes("l")) nb.left = Math.min(sb.right - 0.02, nx);
+            if (d.mode.includes("r")) nb.right = Math.max(sb.left + 0.02, nx);
+            if (d.mode.includes("t")) nb.top = Math.min(sb.bottom - 0.02, ny);
+            if (d.mode.includes("b")) nb.bottom = Math.max(sb.top + 0.02, ny);
+          }
+          setBox(nb);
+        };
+        const onUp = () => {
+          dragRef.current = null;
+          window.removeEventListener("mousemove", onMove);
+          window.removeEventListener("mouseup", onUp);
+        };
+        window.addEventListener("mousemove", onMove);
+        window.addEventListener("mouseup", onUp);
+      };
+
+      const pct = (v) => (v * 100).toFixed(1);
+      const w = box.right - box.left;
+      const h = box.bottom - box.top;
+
+      const HANDLES = [
+        { k: "tl", style: { left: 0, top: 0, cursor: "nwse-resize" } },
+        { k: "tr", style: { right: 0, top: 0, cursor: "nesw-resize" } },
+        { k: "bl", style: { left: 0, bottom: 0, cursor: "nesw-resize" } },
+        { k: "br", style: { right: 0, bottom: 0, cursor: "nwse-resize" } },
+        { k: "t",  style: { left: "50%", top: 0, transform: "translate(-50%, -50%)", cursor: "ns-resize" } },
+        { k: "b",  style: { left: "50%", bottom: 0, transform: "translate(-50%, 50%)", cursor: "ns-resize" } },
+        { k: "l",  style: { left: 0, top: "50%", transform: "translate(-50%, -50%)", cursor: "ew-resize" } },
+        { k: "r",  style: { right: 0, top: "50%", transform: "translate(50%, -50%)", cursor: "ew-resize" } },
+      ];
+
+      return (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
+          onClick={onCancel}>
+          <div className="bg-white rounded-lg shadow-xl p-4 max-w-[90vw] max-h-[92vh] flex flex-col gap-3"
+            onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-semibold">✂️ 設定裁剪區域</div>
+              <div className="text-[10px] text-slate-500 font-mono">
+                L {pct(box.left)}% · T {pct(box.top)}% · R {pct(box.right)}% · B {pct(box.bottom)}% · {pct(w)}×{pct(h)}%
+              </div>
+            </div>
+            <div className="text-[11px] text-slate-500">
+              拖曳框內可移動 · 拖曳邊角縮放 · 拖曳框外重新框選
+            </div>
+            <div ref={boxRef}
+              onMouseDown={(e) => onPointerDown(e, "new")}
+              className="relative bg-slate-900 select-none"
+              style={{ maxHeight: "70vh", maxWidth: "80vw" }}>
+              <img ref={imgRef}
+                src={`/api/thumb?path=${encodeURIComponent(file.path)}&size=1600`}
+                draggable={false}
+                style={{ display: "block", maxHeight: "70vh", maxWidth: "80vw", userSelect: "none", pointerEvents: "none" }} />
+              {/* 暗化 4 個遮罩 */}
+              <div className="absolute bg-black/55 pointer-events-none" style={{ left: 0, top: 0, right: 0, height: `${box.top * 100}%` }} />
+              <div className="absolute bg-black/55 pointer-events-none" style={{ left: 0, bottom: 0, right: 0, height: `${(1 - box.bottom) * 100}%` }} />
+              <div className="absolute bg-black/55 pointer-events-none" style={{ left: 0, top: `${box.top * 100}%`, width: `${box.left * 100}%`, height: `${h * 100}%` }} />
+              <div className="absolute bg-black/55 pointer-events-none" style={{ right: 0, top: `${box.top * 100}%`, width: `${(1 - box.right) * 100}%`, height: `${h * 100}%` }} />
+              {/* 裁剪框 */}
+              <div
+                onMouseDown={(e) => onPointerDown(e, "move")}
+                className="absolute border-2 border-red-500 cursor-move"
+                style={{
+                  left: `${box.left * 100}%`,
+                  top: `${box.top * 100}%`,
+                  width: `${w * 100}%`,
+                  height: `${h * 100}%`,
+                }}>
+                {HANDLES.map((H) => (
+                  <div key={H.k}
+                    onMouseDown={(e) => onPointerDown(e, H.k)}
+                    className="absolute bg-red-500 border border-white"
+                    style={{ width: 12, height: 12, ...H.style }} />
+                ))}
+              </div>
+            </div>
+            <div className="flex items-center gap-2 justify-end text-sm">
+              <div className="text-[10px] text-slate-400 mr-auto">⏎ 套用 · Esc 關閉</div>
+              <button onClick={() => setBox({ left: 0.15, top: 0.15, right: 0.85, bottom: 0.85 })}
+                className="border rounded px-3 py-1 hover:bg-slate-100">重置框</button>
+              <button onClick={() => onApply({ enabled: false, left: 0, top: 0, right: 1, bottom: 1 })}
+                className="border rounded px-3 py-1 hover:bg-slate-100">取消裁剪</button>
+              <button onClick={onCancel}
+                className="border rounded px-3 py-1 hover:bg-slate-100">關閉 (Esc)</button>
+              <button onClick={() => onApply({ enabled: true, ...box })}
+                className="border rounded px-3 py-1 bg-emerald-600 text-white hover:bg-emerald-700">套用 (⏎)</button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function InfoModal({ title, onClose, children }) {
+      useEffect(() => {
+        const onKey = (e) => { if (e.key === "Escape") { e.preventDefault(); onClose(); } };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+      }, [onClose]);
+      return (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+          onClick={onClose}>
+          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[85vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-4 py-3 border-b">
+              <div className="text-base font-semibold">{title}</div>
+              <button onClick={onClose}
+                className="border rounded px-2 py-0.5 text-xs hover:bg-slate-100">關閉 (Esc)</button>
+            </div>
+            <div className="p-4 overflow-y-auto text-sm leading-relaxed text-slate-700">
+              {children}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function HelpModal({ onClose }) {
+      return (
+        <InfoModal title="❓ 說明" onClose={onClose}>
+          <h3 className="text-sm font-semibold text-slate-800 mt-0 mb-1">主要目的</h3>
+          <p className="mb-3">
+            把一批圖片，依規則自動貼到 <b>PowerPoint / Keynote / Excel</b> 範本中的指定格子，
+            省去手動逐張拖放的繁瑣作業。
+          </p>
+
+          <h3 className="text-sm font-semibold text-slate-800 mt-3 mb-1">兩種分群方式</h3>
+          <ul className="list-disc ml-5 space-y-1 mb-3">
+            <li>
+              <b>📷 依檔名</b>：上傳<u>一個資料夾</u>的圖片，由檔名規則 (group/idx) 分群，再依
+              <code className="px-1 bg-slate-100 rounded text-[12px]">依順序</code> 或
+              <code className="px-1 bg-slate-100 rounded text-[12px]">依檔名 idx</code> 對位填入。
+            </li>
+            <li>
+              <b>📋 依範本 SN</b>：從 <u>Excel 範本第一欄</u>讀 SN 清單，
+              <u>每欄</u>對應一個來源資料夾，依 SN 對應檔名填入。
+            </li>
+          </ul>
+
+          <h3 className="text-sm font-semibold text-slate-800 mt-3 mb-1">一般流程</h3>
+          <ol className="list-decimal ml-5 space-y-1 mb-3">
+            <li>上傳範本 (.pptx / .key / .xlsx) — Keynote 需 macOS 環境自動轉檔</li>
+            <li>上傳圖片資料夾（依檔名）或多個 SN 來源資料夾（依範本 SN）</li>
+            <li>在中欄調整檔名規則、排序、欄／列數</li>
+            <li>(可選) 點 <b>✂️ 設定裁剪</b> — 全域裁剪 或 各欄／各 SN 獨立裁剪</li>
+            <li>看右側預覽 → 按 <b>匯出</b> 下載結果</li>
+          </ol>
+
+          <h3 className="text-sm font-semibold text-slate-800 mt-3 mb-1">配置存讀</h3>
+          <p className="mb-1">
+            右上角 <code className="px-1 bg-slate-100 rounded text-[12px]">📁 配置</code> 可
+            <b>儲存 / 載入 / 匯出</b> <code className="px-1 bg-slate-100 rounded text-[12px]">.ibp</code> 包檔
+            （含範本檔），方便不同專案間複用。
+          </p>
+        </InfoModal>
+      );
+    }
+
+    function ShortcutsModal({ onClose }) {
+      const Kbd = ({ children }) => (
+        <kbd className="inline-block px-1.5 py-0.5 border border-slate-300 rounded bg-slate-50 text-[11px] font-mono text-slate-700 mx-0.5">{children}</kbd>
+      );
+      const Row = ({ k, desc }) => (
+        <div className="grid grid-cols-[180px_1fr] gap-2 py-1 border-b border-slate-100 last:border-0">
+          <div>{k}</div>
+          <div className="text-slate-600">{desc}</div>
+        </div>
+      );
+      return (
+        <InfoModal title="⌨️ 熱鍵" onClose={onClose}>
+          <h3 className="text-sm font-semibold text-slate-800 mt-0 mb-1">全域</h3>
+          <Row k={<><Kbd>⌘</Kbd><Kbd>Z</Kbd> / <Kbd>Ctrl</Kbd><Kbd>Z</Kbd></>} desc="Undo（復原上一步）" />
+          <Row k={<><Kbd>⇧</Kbd><Kbd>⌘</Kbd><Kbd>Z</Kbd> / <Kbd>Ctrl</Kbd><Kbd>Y</Kbd></>} desc="Redo（重做）" />
+
+          <h3 className="text-sm font-semibold text-slate-800 mt-4 mb-1">預覽區 / 2D 格子</h3>
+          <Row k={<><Kbd>↑</Kbd><Kbd>↓</Kbd><Kbd>←</Kbd><Kbd>→</Kbd></>} desc="移動選取格子（focus）" />
+          <Row k={<><Kbd>Del</Kbd> / <Kbd>⌫</Kbd></>} desc="刪除選取的圖（不刪除格子位置）" />
+          <Row k={<><Kbd>Shift</Kbd>+click</>} desc="範圍選取" />
+          <Row k={<><Kbd>⌘</Kbd>/<Kbd>Ctrl</Kbd>+click</>} desc="多選 / 取消多選" />
+          <Row k={<>拖曳</>} desc="重新排序" />
+
+          <h3 className="text-sm font-semibold text-slate-800 mt-4 mb-1">✂️ 裁剪框</h3>
+          <Row k={<Kbd>⏎</Kbd>} desc="套用裁剪" />
+          <Row k={<Kbd>Esc</Kbd>} desc="關閉" />
+
+          <h3 className="text-sm font-semibold text-slate-800 mt-4 mb-1">數字 stepper（左欄參數）</h3>
+          <Row k={<><Kbd>Shift</Kbd>+◀▶</>} desc="粗調 (×5)" />
+          <Row k={<><Kbd>Alt</Kbd>+◀▶</>} desc="微調 (×0.2)" />
+          <Row k={<>長按 ◀▶</>} desc="連續調整（350ms 後每 60ms 重複）" />
+          <Row k={<>點數字</>} desc="直接輸入" />
+        </InfoModal>
+      );
+    }
+
+    function NumberInput({ label, value, onChange, step = 0.5, suffix, disabled, hint }) {
+      return (
+        <label className={`flex flex-col text-xs ${disabled ? "text-slate-400" : "text-slate-600"}`}>
           <span className="mb-1">{label}</span>
           <div className="relative">
-            <input type="number" step={step} value={value}
+            <input type="number" step={step} value={value} disabled={disabled}
               onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
-              className="border rounded px-2 py-1 text-sm w-full pr-7" />
+              title={hint}
+              className={`border rounded px-2 py-1 text-sm w-full pr-7 ${disabled ? "bg-slate-100 cursor-not-allowed" : ""}`} />
             {suffix && <span className="absolute right-2 top-1.5 text-[10px] text-slate-400">{suffix}</span>}
           </div>
+          {hint && disabled && <span className="text-[10px] text-sky-700 mt-0.5">{hint}</span>}
         </label>
+      );
+    }
+
+    // 設定檔配方 (recipe) 管理：下拉選擇 / 儲存 / 匯出 / 匯入
+    // 內含範本：存成 .ibp (zip)；舊版 .json 仍可讀
+    function ConfigPanel({ cfg, setCfg, tplName, tplPath, setTplName, setTplPath, ws, setStatus, loadTemplateByPath, confirmAndReset, selectedName, setSelectedName, onClose }) {
+      const [configs, setConfigs] = useState([]);
+      const fileInputRef = useRef(null);
+
+      const refreshList = async () => {
+        try {
+          const r = await fetch("/api/configs");
+          const j = await r.json();
+          setConfigs(j.configs || []);
+        } catch (e) { /* ignore */ }
+      };
+      useEffect(() => { refreshList(); }, []);
+
+      const doSave = async (overrideName) => {
+        const defaultName = overrideName ?? selectedName ?? "";
+        const name = prompt("配置名稱 (中英數、空白、底線、減號)", defaultName || "我的配置");
+        if (!name) return;
+        const recipe = cfgToRecipe(cfg, tplName);
+        const r = await fetch("/api/configs", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, recipe, templatePath: tplPath || "" }),
+        });
+        const j = await r.json();
+        if (!r.ok) { setStatus("錯誤: " + (j.error || "存檔失敗")); return; }
+        const tag = j.hasTemplate ? "（含範本）" : "（不含範本）";
+        setStatus(`✓ 已儲存配置「${j.name}」${tag}`);
+        setSelectedName(j.name);
+        await refreshList();
+      };
+
+      const doLoad = async (name) => {
+        if (!name) return;
+        try {
+          const url = `/api/configs/${encodeURIComponent(name)}` + (ws ? `?workspace=${encodeURIComponent(ws)}` : "");
+          const r = await fetch(url);
+          const j = await r.json();
+          if (!r.ok) throw new Error(j.error || "載入失敗");
+          const apply = () => {
+            setCfg((c) => applyRecipe(j, c));
+            setSelectedName(name);
+            const loaded = j._loaded || {};
+            if (loaded.templatePath && loadTemplateByPath) {
+              loadTemplateByPath(loaded.templatePath, loaded.templateName || "")
+                .then(() => setStatus(`✓ 已載入「${name}」（範本一併載入）`))
+                .catch(() => {});
+            } else {
+              const hint = j._meta?.templateHint;
+              setStatus(`✓ 已載入「${name}」${hint ? `（提醒：請重新上傳範本「${hint}」+ 相關來源）` : "（請重新上傳範本與來源）"}`);
+            }
+          };
+          if (confirmAndReset) {
+            const ok = confirmAndReset(`載入配置「${name}」`, apply);
+            if (!ok) setSelectedName("");  // 取消 → 還原下拉選擇
+          } else {
+            apply();
+          }
+        } catch (e) { setStatus("錯誤: " + e.message); }
+      };
+
+      const doDelete = async () => {
+        if (!selectedName) return;
+        if (!confirm(`確定刪除配置「${selectedName}」？`)) return;
+        const r = await fetch(`/api/configs/${encodeURIComponent(selectedName)}`, { method: "DELETE" });
+        const j = await r.json();
+        if (!r.ok) { setStatus("錯誤: " + (j.error || "刪除失敗")); return; }
+        setStatus(`✓ 已刪除「${selectedName}」`);
+        setSelectedName("");
+        await refreshList();
+      };
+
+      const doExport = () => {
+        if (!selectedName) {
+          setStatus("請先儲存配置，再匯出");
+          return;
+        }
+        // 透過 server 端點下載完整 .ibp (含範本)
+        window.location.href = `/api/configs/${encodeURIComponent(selectedName)}/download`;
+      };
+
+      const doImport = async (file) => {
+        if (!file) return;
+        try {
+          const fd = new FormData();
+          fd.append("file", file);
+          const r = await fetch("/api/configs/import", { method: "POST", body: fd });
+          const j = await r.json();
+          if (!r.ok) throw new Error(j.error || "匯入失敗");
+          await refreshList();
+          // 匯入後自動載入
+          await doLoad(j.name);
+        } catch (e) { setStatus("錯誤: 匯入失敗 — " + e.message); }
+      };
+
+      return (
+        <div className="p-2 space-y-1.5">
+          <div className="text-xs font-medium text-slate-700">📁 配置</div>
+
+          {/* 載入：下拉選一個就直接套用 */}
+          <select value={selectedName}
+            onChange={(e) => { setSelectedName(e.target.value); if (e.target.value) { doLoad(e.target.value); onClose?.(); } }}
+            title="選擇要載入的設定"
+            className="w-full border rounded px-2 py-1 text-xs">
+            <option value="">— 未選擇 —</option>
+            {configs.map((c) => (
+              <option key={c.name} value={c.name}>{c.name}</option>
+            ))}
+          </select>
+
+          {/* 儲存：永遠彈出對話框問名字（預設帶目前選的） */}
+          <button onClick={() => doSave(selectedName)}
+            title={selectedName ? `存成新名稱或覆蓋「${selectedName}」` : "把目前 UI 設定存到 server"}
+            className="w-full border rounded px-2 py-1 text-xs bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-300">
+            💾 儲存當前設定
+          </button>
+
+          {/* 刪除：只在選了既有配置時顯示 */}
+          {selectedName && (
+            <button onClick={doDelete}
+              className="w-full border rounded px-2 py-1 text-xs text-red-700 border-red-300 hover:bg-red-50">
+              🗑️ 刪除「{selectedName}」
+            </button>
+          )}
+
+          {/* 跨機器搬遷：小字 */}
+          <div className="flex gap-2 text-[10px] text-slate-500 pt-1 border-t">
+            <button onClick={doExport} className="hover:text-slate-700 hover:underline" title="匯出選中配置為 .ibp 檔 (含範本，給別台機器或同事用)">
+              ⤓ 匯出 .ibp
+            </button>
+            <span className="text-slate-300">|</span>
+            <button onClick={() => fileInputRef.current?.click()} className="hover:text-slate-700 hover:underline" title="從 .ibp / .json 檔匯入設定">
+              ⤒ 匯入 .ibp
+            </button>
+            <input ref={fileInputRef} type="file" accept=".ibp,.json,application/json,application/zip"
+              className="hidden"
+              onChange={(e) => { doImport(e.target.files?.[0]); e.target.value = ""; }} />
+          </div>
+        </div>
       );
     }
 
@@ -250,7 +1478,7 @@
       );
     }
 
-    function ExcelPreview({ grid, cfg, orderedFiles, selected }) {
+    function ExcelPreview({ grid, cfg, orderedFiles, selected, thumbUrl, snList }) {
       if (!grid) {
         return (
           <div className="border rounded-lg bg-slate-50 p-8 text-center text-slate-500">
@@ -276,7 +1504,39 @@
       grid.cells.forEach((cell) => { cellMap[`${cell.r},${cell.c}`] = cell; });
 
       // 我們的 placements
-      const placements = computeExcelCells(cfg.excel, cfg.label, orderedFiles);
+      let placements;
+      if (cfg.snMatchMode) {
+        // SN 對照模式：依 SN list × sources 算
+        const perColCrop = cfg.cropMode === "per-col";
+        const globalCrop = cfg.crop?.enabled ? cfg.crop : null;
+        placements = [];
+        for (const { sn, row } of (snList || [])) {
+          const stem = sn.toLowerCase();
+          for (const s of cfg.sources) {
+            const f = (s.files || []).find((x) => (x.name || "").replace(/\.[^./]+$/, "").toLowerCase() === stem);
+            if (!f) continue;
+            const col = colLetterToIdx(s.targetCol);
+            if (!col) continue;
+            placements.push({
+              path: f.path, row, col, span_cols: 1, span_rows: 1,
+              _crop: perColCrop ? (s.crop?.enabled ? s.crop : null) : globalCrop,
+            });
+          }
+        }
+      } else {
+        placements = computeExcelCells(cfg.excel, cfg.label, orderedFiles, cfg.autoAlign);
+        // 依檔名 idx + 各欄獨立：對每個 placement 注入 per-idx crop (沒設定者 _crop=null 表示不裁剪、避免回退全域)
+        if (cfg.autoAlign && cfg.cropMode === "per-col") {
+          const idxCrops = cfg.label.idxCrops || {};
+          placements = placements.map((pl) => {
+            if (!pl.path) return pl;
+            const f = orderedFiles.find((x) => x.path === pl.path);
+            const { idx } = f ? extractGroupIdx(f.name || "", cfg.label.pattern) : { idx: null };
+            const c = idx != null ? idxCrops[String(idx)] : null;
+            return { ...pl, _crop: c?.enabled ? c : null };
+          });
+        }
+      }
 
       const alignToFlex = { left: "flex-start", center: "center", right: "flex-end" };
       const vAlignToFlex = { top: "flex-start", center: "center", middle: "center", bottom: "flex-end" };
@@ -368,11 +1628,21 @@
                   }}>{pl.text}</div>
                 );
               }
+              const fit = cfg.excel?.imgFit || "cover";
+              const insetPct = Math.max(0, Math.min(45, cfg.excel?.containInset ?? 5));
+              const inset = fit === "contain" ? insetPct / 100 : 0;  // 四邊留白
               return (
                 <img key={`my-${i}`}
-                  src={`/api/thumb?path=${encodeURIComponent(pl.path)}&size=400`}
-                  style={{ position: "absolute", left: x, top: y, width: w, height: h, objectFit: cfg.excel?.imgFit || "cover" }}
-                  className={selected === pl.path ? "ring-2 ring-emerald-500" : ""} />
+                  src={thumbUrl(pl.path, 400, pl._crop)}
+                  data-preview-path={pl.path}
+                  style={{
+                    position: "absolute",
+                    left: x + w * inset, top: y + h * inset,
+                    width: w * (1 - 2 * inset), height: h * (1 - 2 * inset),
+                    objectFit: fit,
+                    scrollMargin: 30,
+                  }}
+                  className={selected === pl.path ? "ring-4 ring-emerald-500 shadow-[0_0_18px_4px_rgba(16,185,129,0.7)] z-10" : ""} />
               );
             })}
           </div>
@@ -384,7 +1654,14 @@
       const [cfg, setCfg] = useState(DEFAULTS);
       const [files, setFiles] = useState([]);          // 原始檔案清單（由後端掃描）
       const [order, setOrder] = useState([]);          // 使用者調整後的順序 (paths array)
-      const [selected, setSelected] = useState(null);  // 目前選中的 path
+      const [selected, setSelected] = useState(null);  // 預覽 highlight (最後點的)
+      const [selectedPaths, setSelectedPaths] = useState([]);  // 多選
+      const anchorRef = useRef(0);                     // shift 範圍錨點
+      const dragFromRef = useRef(null);                // 拖曳來源 path
+      const [dragOverIdx, setDragOverIdx] = useState(null);  // 拖曳插入位置指示
+      const listRef = useRef(null);                    // 檔案清單捲動容器
+      const scrollDirRef = useRef(0);
+      const scrollRafRef = useRef(null);
       const [currentPage, setCurrentPage] = useState(0);
       const [status, setStatus] = useState("");
       const [busy, setBusy] = useState(false);
@@ -393,6 +1670,24 @@
       const [tpl, setTpl] = useState(null);
       const [mode, setMode] = useState("slides");
       const [xlGrid, setXlGrid] = useState(null);
+      const [dragTpl, setDragTpl] = useState(false);
+      const [dragImg, setDragImg] = useState(false);
+      const [cropOpen, setCropOpen] = useState(false);
+      const [cropSourceId, setCropSourceId] = useState(null);  // null = 不編輯 source crop; 否則為 source.id (snMatch 模式)
+      const [cropIdxKey, setCropIdxKey] = useState(null);      // null = 不編輯 per-idx crop; 否則為 idx 字串 (依檔名 idx 模式)
+      const [selectedCell, setSelectedCell] = useState(null); // {r, c} | null：2D 模式下「格子位置」選取（允許空格）
+
+      // --- Undo / Redo ---
+      const [historyPast, setHistoryPast] = useState([]);
+      const [historyFuture, setHistoryFuture] = useState([]);
+      const HISTORY_MAX = 50;
+
+      // 當前載入的配置名稱（用於 header 顯示）
+      const [currentConfigName, setCurrentConfigName] = useState("");
+      const [configMenuOpen, setConfigMenuOpen] = useState(false);
+      const [helpOpen, setHelpOpen] = useState(false);
+      const [shortcutsOpen, setShortcutsOpen] = useState(false);
+      const [snList, setSnList] = useState([]);  // [{ sn, row }] from /api/template/sn-list
       const [ws, setWs] = useState("");
       const [zoom, setZoom] = useState(1);
       const stageWrapRef = useRef(null);
@@ -445,10 +1740,278 @@
           .catch(() => {});
       }, []);
 
+      // 縮圖 URL：第 3 參數語意
+      //   undefined  → 套用全域 cfg.crop
+      //   null       → 明確不裁剪 (各欄模式但此欄無設定)
+      //   crop obj   → 套用該 crop
+      const thumbUrl = (path, size, cropOverride) => {
+        const base = `/api/thumb?path=${encodeURIComponent(path)}&size=${size}`;
+        const c = cropOverride === undefined ? cfg.crop : cropOverride;
+        if (c && c.enabled) {
+          return `${base}&crop=${c.left.toFixed(4)},${c.top.toFixed(4)},${c.right.toFixed(4)},${c.bottom.toFixed(4)}`;
+        }
+        return base;
+      };
+
       const orderedFiles = useMemo(() => {
         const map = new Map(files.map((f) => [f.path, f]));
         return order.map((p) => map.get(p)).filter(Boolean);
       }, [files, order]);
+
+      // 鏡像目前所有可 undo 的 state，給 pushHistory / undo / redo 用
+      const stateRef = useRef({});
+      stateRef.current = {
+        cfg, order, files, snList,
+        selected, selectedCell, selectedPaths,
+        xlGrid, tpl, tplPath, tplName, mode,
+      };
+      const SNAPSHOT_SETTERS = {
+        cfg: setCfg, order: setOrder, files: setFiles, snList: setSnList,
+        selected: setSelected, selectedCell: setSelectedCell, selectedPaths: setSelectedPaths,
+        xlGrid: setXlGrid, tpl: setTpl, tplPath: setTplPath, tplName: setTplName, mode: setMode,
+      };
+      const captureSnapshot = (desc) => ({ ...stateRef.current, desc });
+      const restoreSnapshot = (snap) => {
+        for (const k of Object.keys(SNAPSHOT_SETTERS)) {
+          if (k in snap) SNAPSHOT_SETTERS[k](snap[k]);
+        }
+      };
+      const pushHistory = (desc) => {
+        const snap = captureSnapshot(desc || "");
+        setHistoryPast((past) => [...past.slice(-(HISTORY_MAX - 1)), snap]);
+        setHistoryFuture([]);
+      };
+      const clearHistory = () => {
+        setHistoryPast([]);
+        setHistoryFuture([]);
+      };
+      // 通用「重新開始」前確認 + 重置 (給切換模式、載入配置等用)
+      // reason: 顯示在 confirm 開頭，e.g. "切換模式"、"載入配置"
+      // apply: 取得 confirm 通過後執行的動作 (callback)
+      // 回傳是否真的執行了
+      const confirmAndReset = (reason, apply) => {
+        const hasUserState =
+          historyPast.length > 0 || historyFuture.length > 0 ||
+          files.length > 0 || snList.length > 0 ||
+          (cfg.sources || []).some((s) => (s.files?.length || 0) > 0 || s.crop?.enabled) ||
+          cfg.crop?.enabled ||
+          Object.keys(cfg.label?.idxCrops || {}).length > 0;
+        if (hasUserState) {
+          if (!confirm(`${reason}會清掉 undo 歷史與所有調整 (已上傳的圖片、裁剪、來源 等)。範本會保留。確定？`)) return false;
+        }
+        clearHistory();
+        setOrder([]);
+        setFiles([]);
+        setSnList([]);
+        setSelected(null);
+        setSelectedCell(null);
+        setSelectedPaths([]);
+        apply();
+        return true;
+      };
+
+      // 模式切換 = fresh start
+      const switchMode = (toSnMatch) => {
+        if (!!toSnMatch === !!cfg.snMatchMode) return;
+        confirmAndReset("切換模式", () => {
+          setCfg((c) => {
+            const fresh = JSON.parse(JSON.stringify(DEFAULTS));
+            fresh.output = { ...fresh.output, path: c.output?.path || fresh.output.path, template: c.output?.template };
+            fresh.snMatchMode = !!toSnMatch;
+            fresh.autoAlign = false;
+            if (toSnMatch) {
+              fresh.sources = [
+                { id: 1, name: "A", folder: "", files: [], targetCol: "F", crop: { enabled: false, left: 0, top: 0, right: 1, bottom: 1 } },
+                { id: 2, name: "B", folder: "", files: [], targetCol: "G", crop: { enabled: false, left: 0, top: 0, right: 1, bottom: 1 } },
+              ];
+            }
+            return fresh;
+          });
+        });
+      };
+      const undo = () => {
+        if (historyPast.length === 0) return;
+        const last = historyPast[historyPast.length - 1];
+        const current = captureSnapshot(last.desc || "redo");
+        setHistoryPast((past) => past.slice(0, -1));
+        setHistoryFuture((fut) => [...fut, current]);
+        restoreSnapshot(last);
+        setStatus(`↶ undo${last.desc ? `「${last.desc}」` : ""}`);
+      };
+      const redo = () => {
+        if (historyFuture.length === 0) return;
+        const next = historyFuture[historyFuture.length - 1];
+        const current = captureSnapshot(next.desc || "undo");
+        setHistoryFuture((fut) => fut.slice(0, -1));
+        setHistoryPast((past) => [...past, current]);
+        restoreSnapshot(next);
+        setStatus(`↷ redo${next.desc ? `「${next.desc}」` : ""}`);
+      };
+
+      // 鍵盤：⌘Z / Ctrl+Z = undo；⇧⌘Z / Ctrl+Y = redo
+      useEffect(() => {
+        const onKey = (e) => {
+          const t = e.target;
+          const tag = t && t.tagName;
+          if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (t && t.isContentEditable)) return;
+          const mod = e.metaKey || e.ctrlKey;
+          if (!mod) return;
+          if (e.key === "z" || e.key === "Z") {
+            e.preventDefault();
+            if (e.shiftKey) redo(); else undo();
+          } else if (e.key === "y" || e.key === "Y") {
+            e.preventDefault();
+            redo();
+          }
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+      }, [historyPast, historyFuture]);
+
+      // 對位模式下，欄數由檔名 idx 自動決定（給輸入框顯示提示用）
+      const autoIdxList = useMemo(
+        () => cfg.autoAlign
+          ? detectIdxList(orderedFiles, cfg.label.pattern, cfg.label.idxSort || "auto", cfg.label.idxOrder || [])
+          : [],
+        [cfg.autoAlign, orderedFiles, cfg.label.pattern, cfg.label.idxSort, cfg.label.idxOrder]
+      );
+
+      // 視覺化 2D 「導航 grid」：1D 模式視為 N×1；2D 模式直接用 cells/sources matrix
+      const navGrid = useMemo(() => {
+        if (cfg.snMatchMode) {
+          return (snList || []).map((s) => {
+            const stem = s.sn.toLowerCase();
+            return (cfg.sources || []).map((src) =>
+              (src.files || []).find((f) => (f.name || "").replace(/\.[^./]+$/, "").toLowerCase() === stem) || null
+            );
+          });
+        }
+        if (cfg.autoAlign && orderedFiles.length > 0) {
+          const idxList = autoIdxList;
+          if (!idxList.length) return orderedFiles.map((f) => [f]);
+          const rows = buildRows(orderedFiles, cfg.label.pattern, idxList, true);
+          return rows.map((r) => r.cells);
+        }
+        return orderedFiles.map((f) => [f]);
+      }, [cfg.snMatchMode, cfg.autoAlign, snList, cfg.sources, orderedFiles, autoIdxList, cfg.label.pattern]);
+
+      // 鍵盤方向鍵切換選取
+      // 2D 模式 (snMatch / 依檔名 idx)：用 selectedCell 移動位置，允許停在空格
+      // 1D 模式 (順序填入)：用 path 移動
+      const is2DMode = cfg.snMatchMode || cfg.autoAlign;
+      useEffect(() => {
+        const onKey = (e) => {
+          const ARROWS = { ArrowDown: [1,0], ArrowUp: [-1,0], ArrowRight: [0,1], ArrowLeft: [0,-1] };
+          if (!ARROWS[e.key]) return;
+          const t = e.target;
+          const tag = t && t.tagName;
+          if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (t && t.isContentEditable)) return;
+          if (!navGrid.length) return;
+          const R = navGrid.length;
+          const [dr, dc] = ARROWS[e.key];
+
+          // 找起始位置：優先 selectedCell；2D 模式 fallback 從 selected path 找
+          let cr = -1, cc = -1;
+          if (selectedCell && selectedCell.r >= 0 && selectedCell.r < R && selectedCell.c >= 0 && selectedCell.c < (navGrid[selectedCell.r]?.length || 0)) {
+            cr = selectedCell.r; cc = selectedCell.c;
+          } else if (selected) {
+            for (let r = 0; r < R && cr < 0; r++) {
+              for (let c = 0; c < navGrid[r].length; c++) {
+                if (navGrid[r][c]?.path === selected) { cr = r; cc = c; break; }
+              }
+            }
+          }
+          if (cr < 0) {
+            // 沒選 → (0,0)
+            cr = 0; cc = 0;
+            e.preventDefault();
+            const cell0 = navGrid[0][0];
+            setSelectedCell({ r: 0, c: 0 });
+            if (cell0) { setSelected(cell0.path); setSelectedPaths([cell0.path]); }
+            else { setSelected(null); setSelectedPaths([]); }
+            return;
+          }
+
+          let nr = cr + dr, nc = cc + dc;
+
+          if (is2DMode) {
+            // 2D：純粹移動位置、允許停在空格
+            if (nr < 0 || nr >= R) return;
+            const row = navGrid[nr] || [];
+            if (nc < 0 || nc >= row.length) return;
+            e.preventDefault();
+            setSelectedCell({ r: nr, c: nc });
+            anchorRef.current = nr;
+            const cell = row[nc];
+            if (cell) { setSelected(cell.path); setSelectedPaths([cell.path]); }
+            else { setSelected(null); setSelectedPaths([]); }
+            requestAnimationFrame(() => {
+              const el = listRef.current;
+              if (el) {
+                const selEl = el.querySelector(`[data-r="${nr}"][data-c="${nc}"]`);
+                if (selEl && selEl.scrollIntoView) selEl.scrollIntoView({ block: "nearest", inline: "nearest" });
+              }
+              if (cell?.path) {
+                const previewImg = document.querySelector(`[data-preview-path="${CSS.escape(cell.path)}"]`);
+                if (previewImg && previewImg.scrollIntoView) previewImg.scrollIntoView({ block: "nearest", inline: "nearest" });
+              }
+            });
+          } else {
+            // 1D：跳過空格
+            while (nr >= 0 && nr < R) {
+              const row = navGrid[nr] || [];
+              if (nc < 0 || nc >= row.length) break;
+              if (row[nc]) break;
+              nr += dr; nc += dc;
+            }
+            if (nr < 0 || nr >= R) return;
+            const row = navGrid[nr] || [];
+            if (nc < 0 || nc >= row.length || !row[nc]) return;
+            e.preventDefault();
+            const target = row[nc];
+            setSelected(target.path);
+            setSelectedPaths([target.path]);
+            setSelectedCell({ r: nr, c: nc });
+            anchorRef.current = nr;
+            setCurrentPage(Math.floor(nr / Math.max(1, cfg.grid.cols * cfg.grid.rows)));
+            requestAnimationFrame(() => {
+              const el = listRef.current;
+              if (el) {
+                const selEl =
+                  el.querySelector(`[data-r="${nr}"][data-c="${nc}"]`) ||
+                  el.querySelector(`[data-idx="${nr}"]`);
+                if (selEl && selEl.scrollIntoView) selEl.scrollIntoView({ block: "nearest", inline: "nearest" });
+              }
+              const previewImg = document.querySelector(`[data-preview-path="${CSS.escape(target.path)}"]`);
+              if (previewImg && previewImg.scrollIntoView) previewImg.scrollIntoView({ block: "nearest", inline: "nearest" });
+            });
+          }
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+      }, [navGrid, selected, selectedCell, is2DMode, cfg.grid.cols, cfg.grid.rows]);
+
+      // Delete/Backspace 鍵刪除選取的檔案 (snMatch 模式不適用 — 那邊檔案來自 sources)
+      useEffect(() => {
+        if (cfg.snMatchMode) return;
+        const onKey = (e) => {
+          if (e.key !== "Delete" && e.key !== "Backspace") return;
+          const t = e.target;
+          const tag = t && t.tagName;
+          if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (t && t.isContentEditable)) return;
+          const paths = selectedPaths.length ? selectedPaths : (selected ? [selected] : []);
+          if (!paths.length) return;
+          e.preventDefault();
+          const sel = new Set(paths);
+          pushHistory(`刪除 ${sel.size} 張`);
+          setOrder((o) => o.filter((p) => !sel.has(p)));
+          setFiles((fs) => fs.filter((f) => !sel.has(f.path)));
+          setSelectedPaths([]);
+          setSelected(null);
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+      }, [selectedPaths, selected, cfg.snMatchMode]);
 
       const setGrid = (path, value) => {
         setCfg((c) => {
@@ -472,22 +2035,39 @@
         return j.path;
       };
 
-      const useDefaultTemplate = async () => {
-        if (!ws) return;
-        setBusy(true); setStatus("套用預設範本…");
-        try {
-          const r = await fetch("/api/template/default", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ workspace: ws }),
+      // 已有 server-side 範本 path → 依副檔名觸發 slides / excel 對應的後處理
+      const loadTemplateByPath = async (path, name) => {
+        if (!path) return;
+        setTplPath(path);
+        if (name) setTplName(name);
+        const ext = (path.split(".").pop() || "").toLowerCase();
+        const newMode = ext === "xlsx" ? "excel" : "slides";
+        setMode(newMode);
+        setCfg((c) => ({
+          ...c,
+          output: {
+            ...c.output,
+            path: (c.output.path || "out").replace(/\.(pptx|key|xlsx)$/i, "") + (newMode === "excel" ? ".xlsx" : ".pptx"),
+            template: path,
+          },
+        }));
+        if (newMode === "slides") {
+          setXlGrid(null);
+          await doLoadTemplate(path);
+        } else {
+          setTpl(null);
+          const gr = await fetch("/api/template/excel-grid", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path }),
           });
-          const j = await r.json();
-          if (!r.ok) throw new Error(j.error || "失敗");
-          setTplPath(j.path);
-          setTplName(j.name || "default.pptx");
-          await doLoadTemplate(j.path);
-        } catch (e) { setStatus("錯誤: " + e.message); }
-        finally { setBusy(false); }
+          const gj = await gr.json();
+          if (gr.ok) {
+            setXlGrid(gj);
+            setStatus(`已載入 Excel 範本 (${gj.cols.length} 欄 × ${gj.rows.length} 列)`);
+          } else {
+            setStatus("錯誤: " + (gj.error || "讀取 Excel 範本失敗"));
+          }
+        }
       };
 
       const uploadTemplate = async (file) => {
@@ -500,30 +2080,7 @@
           const r = await fetch("/api/upload/template", { method: "POST", body: fd });
           const j = await r.json();
           if (!r.ok) throw new Error(j.error || "上傳失敗");
-          setTplPath(j.path);
-          setTplName(file.name);
-          const newMode = j.mode || "slides";
-          setMode(newMode);
-          // 同步輸出副檔名
-          setCfg((c) => ({
-            ...c,
-            output: { ...c.output, path: (c.output.path.replace(/\.(pptx|key|xlsx)$/i, "")) +
-              (newMode === "excel" ? ".xlsx" : ".pptx") },
-          }));
-          if (newMode === "slides") {
-            await doLoadTemplate(j.path);
-          } else {
-            setTpl(null);
-            setCfg((c) => ({ ...c, output: { ...c.output, template: j.path } }));
-            const gr = await fetch("/api/template/excel-grid", {
-              method: "POST", headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ path: j.path }),
-            });
-            const gj = await gr.json();
-            if (!gr.ok) throw new Error(gj.error || "讀取 Excel 範本失敗");
-            setXlGrid(gj);
-            setStatus(`已載入 Excel 範本 (${gj.cols.length} 欄 × ${gj.rows.length} 列)`);
-          }
+          await loadTemplateByPath(j.path, file.name);
         } catch (e) { setStatus("錯誤: " + e.message); }
         finally { setBusy(false); }
       };
@@ -543,6 +2100,21 @@
           await doScanFolder(j.folder);
         } catch (e) { setStatus("錯誤: " + e.message); }
         finally { setBusy(false); }
+      };
+
+      // drag-drop handlers
+      const onDropTemplate = async (e) => {
+        e.preventDefault(); setDragTpl(false);
+        const fs = await filesFromDrop(e.dataTransfer);
+        const tpl = fs.find((f) => /\.(pptx|key|xlsx)$/i.test(f.name)) || fs[0];
+        if (tpl) uploadTemplate(tpl);
+      };
+      const onDropImages = async (e) => {
+        e.preventDefault(); setDragImg(false);
+        const fs = await filesFromDrop(e.dataTransfer);
+        const imgs = fs.filter((f) => /\.(png|jpe?g)$/i.test(f.name));
+        if (imgs.length) uploadImages(imgs);
+        else setStatus("拖入的內容沒有圖片檔 (png/jpg)");
       };
 
       const doScanFolder = async (folder) => {
@@ -605,6 +2177,54 @@
       };
 
       const doExport = async () => {
+        // SN 對照模式 — 自成一條路徑
+        if (cfg.snMatchMode) {
+          if (!tplPath) { setStatus("錯誤: 請先上傳 Excel 範本"); return; }
+          if (!snList.length) { setStatus("錯誤: 請先載入 SN list"); return; }
+          if (!cfg.sources.length) { setStatus("錯誤: 至少需一個來源"); return; }
+          setBusy(true); setStatus("組裝 SN 對照 cells…");
+          try {
+            const perCol = cfg.cropMode === "per-col";
+            const cells = [];
+            for (const { sn, row } of snList) {
+              const stem = sn.toLowerCase();
+              for (const s of cfg.sources) {
+                const f = (s.files || []).find((x) => (x.name || "").replace(/\.[^./]+$/, "").toLowerCase() === stem);
+                if (!f) continue;
+                const col = colLetterToIdx(s.targetCol);
+                if (!col) continue;
+                cells.push({
+                  path: f.path, row, col,
+                  span_cols: 1, span_rows: 1,
+                  crop: perCol && s.crop?.enabled ? s.crop : null,
+                });
+              }
+            }
+            if (!cells.length) throw new Error("沒有可匯出的圖片 (檢查 SN 與來源檔名是否對應)");
+            const body = JSON.stringify({
+              cells, output: cfg.output, workspace: ws,
+              embedInCell: !!cfg.excel.embedInCell,
+              imgFit: cfg.excel.imgFit || "cover",
+              containInset: Math.max(0, Math.min(45, cfg.excel.containInset ?? 5)) / 100,
+              crop: !perCol ? cfg.crop : null,  // 統一模式：送 global crop
+            });
+            setStatus(`匯出 Excel 中… (${cells.length} 格)`);
+            const r = await fetch("/api/export", {
+              method: "POST", headers: { "Content-Type": "application/json" }, body,
+            });
+            const j = await r.json();
+            if (!r.ok) throw new Error(j.error || "export failed");
+            if (j.download_url) {
+              window.open(j.download_url, "_blank");
+              setStatus(`✓ 已匯出 ${cells.length} 格 (SN 對照)`);
+            } else {
+              setStatus(`✓ ${j.output}`);
+            }
+          } catch (e) { setStatus("錯誤: " + e.message); }
+          finally { setBusy(false); }
+          return;
+        }
+
         if (!cfg.folder) { setStatus("錯誤: 請先指定圖片資料夾"); return; }
         setBusy(true); setStatus("匯出中…");
         try {
@@ -616,21 +2236,43 @@
             setOrder(j.files.map((f) => f.path));
             arr = j.files;
           }
+          // 依檔名 idx + 各欄獨立：以檔名抽 idx → 查 idxCrops 注入 per-placement crop
+          const perColIdxCrop = cfg.autoAlign && cfg.cropMode === "per-col";
+          const idxCrops = cfg.label.idxCrops || {};
+          const attachIdxCrop = (pl) => {
+            if (!perColIdxCrop || !pl.path) return pl;
+            // 從 placement 找對應的 file 取檔名抽 idx
+            const f = arr.find((x) => x.path === pl.path);
+            if (!f) return pl;
+            const { idx } = extractGroupIdx(f.name || "", cfg.label.pattern);
+            if (idx == null) return pl;
+            const c = idxCrops[String(idx)];
+            return c?.enabled ? { ...pl, crop: c } : pl;
+          };
           let body;
           if (mode === "excel") {
-            const cells = computeExcelCells(cfg.excel, cfg.label, arr);
+            const cells = computeExcelCells(cfg.excel, cfg.label, arr, cfg.autoAlign).map(attachIdxCrop);
             if (cells.length === 0) throw new Error("沒有可匯出的圖片");
             setStatus(`匯出 Excel 中… (${cells.length} 格)`);
             body = JSON.stringify({
               cells, output: cfg.output, workspace: ws,
               embedInCell: !!cfg.excel.embedInCell,
               imgFit: cfg.excel.imgFit || "cover",
+              containInset: Math.max(0, Math.min(45, cfg.excel.containInset ?? 5)) / 100,
+              crop: perColIdxCrop ? null : cfg.crop,
             });
           } else {
-            const pages = computePages(cfg.slide, cfg.grid, arr, cfg.label);
+            const pages = computePages(cfg.slide, cfg.grid, arr, cfg.label, cfg.autoAlign)
+              .map((page) => page.map(attachIdxCrop));
             if (pages.length === 0) throw new Error("沒有可匯出的圖片");
             setStatus(`匯出中… (${pages.length} 頁)`);
-            body = JSON.stringify({ slide: cfg.slide, pages, output: cfg.output, workspace: ws });
+            body = JSON.stringify({
+              slide: cfg.slide, pages, output: cfg.output, workspace: ws,
+              snInCell: cfg.label.enabled && cfg.slidesSn.inCell,
+              snCol: Math.max(0, (cfg.slidesSn.col || 1) - 1),
+              snRowStart: Math.max(0, (cfg.slidesSn.rowStart || 2) - 1),
+              crop: perColIdxCrop ? null : cfg.crop,
+            });
           }
           const r = await fetch("/api/export", {
             method: "POST",
@@ -653,34 +2295,255 @@
         finally { setBusy(false); }
       };
 
-      // --- 排序操作 ---
-      const moveBy = (path, delta) => {
+      // --- 選取 ---
+      const selPathsOrFallback = () =>
+        selectedPaths.length ? selectedPaths : (selected ? [selected] : []);
+
+      const onItemClick = (e, path, idx) => {
+        if (e.shiftKey && anchorRef.current != null) {
+          const a = anchorRef.current, b = idx;
+          const [lo, hi] = a < b ? [a, b] : [b, a];
+          setSelectedPaths(orderedFiles.slice(lo, hi + 1).map((f) => f.path));
+        } else if (e.metaKey || e.ctrlKey) {
+          setSelectedPaths((prev) =>
+            prev.includes(path) ? prev.filter((p) => p !== path) : [...prev, path]);
+          anchorRef.current = idx;
+        } else {
+          setSelectedPaths([path]);
+          anchorRef.current = idx;
+          setCurrentPage(Math.floor(idx / Math.max(1, cfg.grid.cols * cfg.grid.rows)));
+        }
+        setSelected(path);
+      };
+
+      // --- 排序 / 刪除 ---
+      const moveSelected = (delta) => {
+        const sel = new Set(selPathsOrFallback());
+        if (!sel.size) return;
+        pushHistory(delta < 0 ? "上移" : "下移");
         setOrder((o) => {
-          const idx = o.indexOf(path);
-          if (idx < 0) return o;
-          const tgt = idx + delta;
-          if (tgt < 0 || tgt >= o.length) return o;
           const next = [...o];
-          [next[idx], next[tgt]] = [next[tgt], next[idx]];
+          const idxs = next.map((p, i) => (sel.has(p) ? i : -1)).filter((i) => i >= 0);
+          const seq = delta < 0 ? idxs : [...idxs].reverse();
+          for (const i of seq) {
+            const t = i + delta;
+            if (t < 0 || t >= next.length || sel.has(next[t])) continue;
+            [next[i], next[t]] = [next[t], next[i]];
+          }
           return next;
         });
       };
-      const moveTop    = (path) => setOrder((o) => [path, ...o.filter((p) => p !== path)]);
-      const moveBottom = (path) => setOrder((o) => [...o.filter((p) => p !== path), path]);
-      const resetSort  = () => setOrder([...files].sort((a, b) => a.name.localeCompare(b.name)).map((f) => f.path));
+      const moveTop = () => {
+        const sel = new Set(selPathsOrFallback());
+        if (!sel.size) return;
+        pushHistory("置頂");
+        setOrder((o) => [...o.filter((p) => sel.has(p)), ...o.filter((p) => !sel.has(p))]);
+      };
+      const moveBottom = () => {
+        const sel = new Set(selPathsOrFallback());
+        if (!sel.size) return;
+        pushHistory("置底");
+        setOrder((o) => [...o.filter((p) => !sel.has(p)), ...o.filter((p) => sel.has(p))]);
+      };
+      const deleteSelected = () => {
+        const sel = new Set(selPathsOrFallback());
+        if (!sel.size) return;
+        pushHistory(`刪除 ${sel.size} 張`);
+        setOrder((o) => o.filter((p) => !sel.has(p)));
+        setFiles((fs) => fs.filter((f) => !sel.has(f.path)));
+        setSelectedPaths([]);
+        setSelected(null);
+      };
+      const resetSort = () => {
+        pushHistory("A→Z 排序");
+        setOrder([...files].sort((a, b) => a.name.localeCompare(b.name)).map((f) => f.path));
+        setSelectedPaths([]);
+      };
+
+      // --- 拖曳重排 ---
+      // 拖曳到清單上/下緣自動捲動
+      const startAutoScroll = () => {
+        if (scrollRafRef.current) return;
+        const step = () => {
+          const el = listRef.current;
+          if (el && scrollDirRef.current !== 0) el.scrollTop += scrollDirRef.current * 10;
+          scrollRafRef.current = requestAnimationFrame(step);
+        };
+        scrollRafRef.current = requestAnimationFrame(step);
+      };
+      const stopAutoScroll = () => {
+        if (scrollRafRef.current) { cancelAnimationFrame(scrollRafRef.current); scrollRafRef.current = null; }
+        scrollDirRef.current = 0;
+      };
+      const onListDragOver = (e) => {
+        const el = listRef.current;
+        if (!el) return;
+        const rect = el.getBoundingClientRect();
+        const EDGE = 48;
+        if (e.clientY < rect.top + EDGE) scrollDirRef.current = -1;
+        else if (e.clientY > rect.bottom - EDGE) scrollDirRef.current = 1;
+        else scrollDirRef.current = 0;
+        if (scrollDirRef.current !== 0) startAutoScroll();
+        else stopAutoScroll();
+      };
+
+      const onItemDragStart = (e, path) => {
+        const inSel = selectedPaths.includes(path);
+        if (!inSel) { setSelectedPaths([path]); setSelected(path); }
+        dragFromRef.current = path;
+        e.dataTransfer.effectAllowed = "move";
+        // 多選時顯示「移動 N 個檔案」的拖曳殘影
+        const count = inSel ? selectedPaths.length : 1;
+        if (count > 1) {
+          const ghost = document.createElement("div");
+          ghost.textContent = `移動 ${count} 個檔案`;
+          ghost.style.cssText =
+            "position:absolute;top:-1000px;left:-1000px;padding:6px 12px;" +
+            "background:#059669;color:#fff;border-radius:8px;font-size:13px;" +
+            "font-weight:600;box-shadow:0 4px 12px rgba(0,0,0,.25);white-space:nowrap;";
+          document.body.appendChild(ghost);
+          e.dataTransfer.setDragImage(ghost, 12, 12);
+          setTimeout(() => { try { document.body.removeChild(ghost); } catch (_) {} }, 0);
+        }
+      };
+      const onItemDrop = (e, targetPath) => {
+        e.preventDefault();
+        const from = dragFromRef.current;
+        setDragOverIdx(null);
+        if (!from) return;
+        pushHistory("拖曳重排");
+        const movingSet = new Set(selectedPaths.includes(from) ? selectedPaths : [from]);
+        setOrder((o) => {
+          const movingOrdered = o.filter((p) => movingSet.has(p));
+          const without = o.filter((p) => !movingSet.has(p));
+          let at = without.indexOf(targetPath);
+          if (at < 0) at = without.length;
+          return [...without.slice(0, at), ...movingOrdered, ...without.slice(at)];
+        });
+        dragFromRef.current = null;
+        stopAutoScroll();
+      };
+
+      // --- 對位模式：以 SN 群組為單位拖曳重排 ---
+      const onCardDragStart = (e, group) => {
+        dragFromRef.current = `__group:${group}`;
+        e.dataTransfer.effectAllowed = "move";
+        const ghost = document.createElement("div");
+        ghost.textContent = `移動 SN「${group}」`;
+        ghost.style.cssText =
+          "position:absolute;top:-1000px;left:-1000px;padding:6px 12px;" +
+          "background:#0284c7;color:#fff;border-radius:8px;font-size:13px;" +
+          "font-weight:600;box-shadow:0 4px 12px rgba(0,0,0,.25);white-space:nowrap;";
+        document.body.appendChild(ghost);
+        e.dataTransfer.setDragImage(ghost, 12, 12);
+        setTimeout(() => { try { document.body.removeChild(ghost); } catch (_) {} }, 0);
+      };
+      const onCardDrop = (e, targetGroup) => {
+        e.preventDefault();
+        const from = dragFromRef.current;
+        setDragOverIdx(null);
+        dragFromRef.current = null;
+        stopAutoScroll();
+        if (!from || !from.startsWith("__group:")) return;
+        const fromGroup = from.slice(8);
+        if (fromGroup === targetGroup) return;
+        pushHistory(`移動 SN 列「${fromGroup}」`);
+        const pattern = cfg.label.pattern;
+        const fileMap = new Map(files.map((f) => [f.path, f]));
+        setOrder((o) => {
+          const map = new Map();
+          const groupOrder = [];
+          for (const p of o) {
+            const f = fileMap.get(p);
+            if (!f) continue;
+            const g = extractGroupIdx(f.name, pattern).group;
+            if (!map.has(g)) { map.set(g, []); groupOrder.push(g); }
+            map.get(g).push(p);
+          }
+          const fi = groupOrder.indexOf(fromGroup);
+          if (fi < 0) return o;
+          groupOrder.splice(fi, 1);
+          const ti = targetGroup == null ? groupOrder.length : groupOrder.indexOf(targetGroup);
+          groupOrder.splice(ti < 0 ? groupOrder.length : ti, 0, fromGroup);
+          return groupOrder.flatMap((g) => map.get(g));
+        });
+      };
 
       // --- 預覽 ---
       const STAGE_W = 640;
       const scale = STAGE_W / cfg.slide.width_cm;
       const stageH = cfg.slide.height_cm * scale;
-      const pages = computePages(cfg.slide, cfg.grid, orderedFiles, cfg.label);
+      const _pagesRaw = computePages(cfg.slide, cfg.grid, orderedFiles, cfg.label, cfg.autoAlign);
+      // 依檔名 idx + 各欄獨立：對每個 placement 注入 per-idx crop（沒設定者 _crop=null）
+      const pages = (cfg.autoAlign && cfg.cropMode === "per-col") ? (() => {
+        const idxCrops = cfg.label.idxCrops || {};
+        return _pagesRaw.map((page) => page.map((pl) => {
+          if (!pl.path) return pl;
+          const f = orderedFiles.find((x) => x.path === pl.path);
+          const { idx } = f ? extractGroupIdx(f.name || "", cfg.label.pattern) : { idx: null };
+          const c = idx != null ? idxCrops[String(idx)] : null;
+          return { ...pl, _crop: c?.enabled ? c : null };
+        }));
+      })() : _pagesRaw;
       const imgW_cm = cfg.slide.width_cm * cfg.grid.width / 100;
       const firstAnchor = orderedFiles[0];
       const previewH_cm = firstAnchor && firstAnchor.w ? imgW_cm * (firstAnchor.h / firstAnchor.w) : null;
       const perPage = Math.max(1, cfg.grid.cols) * Math.max(1, cfg.grid.rows);
 
+      // 決定 crop modal 編輯的對象：cropSourceId → 來源 crop；cropIdxKey → per-idx crop；否則全域 crop
+      const editingSource = cropSourceId != null ? cfg.sources.find((s) => s.id === cropSourceId) : null;
+      const editingIdxKey = cropIdxKey;
+      // 對於 per-idx：找一張該 idx 的代表圖
+      const idxRepFile = editingIdxKey
+        ? orderedFiles.find((f) => {
+            const ex = extractGroupIdx(f.name || "", cfg.label.pattern);
+            return String(ex.idx) === String(editingIdxKey);
+          })
+        : null;
+      // 全域 crop：先找 orderedFiles；snMatch 模式 fallback 從 sources 找
+      const allSrcFiles = cfg.sources?.flatMap((s) => s.files || []) || [];
+      const cropTargetFile = editingSource
+        ? (editingSource.files?.find((f) => f.path === selected) || editingSource.files?.[0])
+        : editingIdxKey
+        ? (idxRepFile || orderedFiles[0])
+        : (selected && (orderedFiles.find((f) => f.path === selected) || allSrcFiles.find((f) => f.path === selected)))
+          || orderedFiles[0] || allSrcFiles[0];
+      const cropInitial = editingSource
+        ? editingSource.crop
+        : editingIdxKey
+        ? (cfg.label.idxCrops?.[editingIdxKey] || { enabled: false, left: 0, top: 0, right: 1, bottom: 1 })
+        : cfg.crop;
+
+      const closeCropEdit = () => {
+        setCropOpen(false);
+        setCropSourceId(null);
+        setCropIdxKey(null);
+      };
+
       return (
         <div className="max-w-[1600px] mx-auto p-4 h-screen flex flex-col">
+          {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />}
+          {shortcutsOpen && <ShortcutsModal onClose={() => setShortcutsOpen(false)} />}
+          {cropOpen && cropTargetFile && (
+            <CropEditor
+              file={cropTargetFile}
+              initial={cropInitial}
+              onCancel={closeCropEdit}
+              onApply={(c) => {
+                pushHistory(editingSource ? `來源「${editingSource.name}」裁剪`
+                          : editingIdxKey ? `欄「${editingIdxKey}」裁剪`
+                          : "裁剪");
+                if (editingSource) {
+                  setCfg((x) => ({ ...x, sources: x.sources.map((s) => s.id === editingSource.id ? { ...s, crop: c } : s) }));
+                } else if (editingIdxKey) {
+                  setCfg((x) => ({ ...x, label: { ...x.label, idxCrops: { ...(x.label.idxCrops || {}), [editingIdxKey]: c } } }));
+                } else {
+                  setCfg((x) => ({ ...x, crop: c }));
+                }
+                closeCropEdit();
+              }}
+            />
+          )}
           <h1 className="text-xl font-bold mb-3 flex items-baseline gap-2">
             img-batch-paster
             {versionInfo && (
@@ -694,6 +2557,51 @@
                 {" · "}{versionInfo.commit} · {versionInfo.date}
               </span>
             )}
+            {/* 配置 menu / Undo / Redo */}
+            <div className="ml-auto flex gap-1 text-sm font-normal items-center">
+              {/* 配置 popover */}
+              <div className="relative">
+                <button onClick={() => setConfigMenuOpen((v) => !v)}
+                  title="配置：載入 / 儲存 / 匯入匯出"
+                  className={`border rounded px-2 py-0.5 text-xs hover:bg-slate-100 ${configMenuOpen ? "bg-slate-100" : ""}`}>
+                  📁 {currentConfigName || "配置"} ▾
+                </button>
+                {configMenuOpen && (
+                  <>
+                    <div className="fixed inset-0 z-30" onClick={() => setConfigMenuOpen(false)} />
+                    <div className="absolute right-0 top-full mt-1 z-40 bg-white border rounded shadow-lg w-72">
+                      <ConfigPanel cfg={cfg} setCfg={setCfg}
+                        tplName={tplName} tplPath={tplPath}
+                        setTplName={setTplName} setTplPath={setTplPath}
+                        ws={ws} setStatus={setStatus}
+                        loadTemplateByPath={loadTemplateByPath}
+                        confirmAndReset={confirmAndReset}
+                        selectedName={currentConfigName}
+                        setSelectedName={setCurrentConfigName}
+                        onClose={() => setConfigMenuOpen(false)} />
+                    </div>
+                  </>
+                )}
+              </div>
+              <button onClick={undo} disabled={historyPast.length === 0}
+                title={historyPast.length ? `Undo「${historyPast[historyPast.length-1].desc || ""}」(⌘Z)` : "無動作可 undo"}
+                className="border rounded px-2 py-0.5 text-xs hover:bg-slate-100 disabled:opacity-40">
+                ↶ Undo {historyPast.length > 0 && <span className="text-slate-400 ml-0.5">({historyPast.length})</span>}
+              </button>
+              <button onClick={redo} disabled={historyFuture.length === 0}
+                title={historyFuture.length ? `Redo「${historyFuture[historyFuture.length-1].desc || ""}」(⇧⌘Z)` : "無動作可 redo"}
+                className="border rounded px-2 py-0.5 text-xs hover:bg-slate-100 disabled:opacity-40">
+                ↷ Redo {historyFuture.length > 0 && <span className="text-slate-400 ml-0.5">({historyFuture.length})</span>}
+              </button>
+              <button onClick={() => setShortcutsOpen(true)} title="鍵盤熱鍵"
+                className="border rounded px-2 py-0.5 text-xs hover:bg-slate-100">
+                ⌨️ 熱鍵
+              </button>
+              <button onClick={() => setHelpOpen(true)} title="說明 / 使用方式"
+                className="border rounded px-2 py-0.5 text-xs hover:bg-slate-100">
+                ❓ 說明
+              </button>
+            </div>
           </h1>
 
           <div className="grid grid-cols-12 gap-4 flex-1 min-h-0">
@@ -702,42 +2610,65 @@
               <div className="p-3 space-y-3 overflow-y-auto flex-1">
                 <div>
                   <label className="text-sm font-medium">範本 (.pptx / .key / .xlsx)</label>
-                  <div className="flex gap-1 mt-1">
+                  <div className="flex gap-1 mt-1"
+                    onDragOver={(e) => { e.preventDefault(); setDragTpl(true); }}
+                    onDragLeave={() => setDragTpl(false)}
+                    onDrop={onDropTemplate}>
                     <button onClick={() => tplInputRef.current?.click()}
-                      className="flex-1 border rounded px-2 py-1 text-sm hover:bg-slate-100 text-left truncate">
-                      📤 {tplName || (tplPath ? tplPath.split("/").pop() : "上傳範本…")}
-                    </button>
-                    <button onClick={useDefaultTemplate} title="使用預設範本"
-                      className="border rounded px-2 py-1 text-xs hover:bg-slate-100">
-                      預設
+                      className={`flex-1 border rounded px-2 py-1 text-sm text-left truncate ${dragTpl ? "border-emerald-500 bg-emerald-50" : "hover:bg-slate-100"}`}>
+                      📤 {tplName || (tplPath ? tplPath.split("/").pop() : (dragTpl ? "放開以上傳…" : "上傳 / 拖入範本…"))}
                     </button>
                     <input ref={tplInputRef} type="file"
                       accept=".pptx,.key,.xlsx,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.apple.keynote,application/zip"
                       className="hidden"
                       onChange={(e) => uploadTemplate(e.target.files?.[0])} />
                   </div>
-                  <div className="text-[10px] text-slate-400 mt-1">.key 需 server 在 macOS（Keynote 轉檔約 10-30 秒）</div>
+                  <div className="text-[10px] text-slate-400 mt-1">可拖拉檔案；.key 需 server 在 macOS（Keynote 轉檔約 10-30 秒）</div>
                 </div>
 
-                <div>
-                  <label className="text-sm font-medium">圖片資料夾</label>
-                  <div className="flex gap-1 mt-1">
-                    <button onClick={() => imgInputRef.current?.click()}
-                      className="flex-1 border rounded px-2 py-1 text-sm hover:bg-slate-100 text-left truncate">
-                      📤 {files.length > 0 ? `已上傳 ${files.length} 張` : "上傳圖片資料夾…"}
-                    </button>
-                    <input ref={imgInputRef} type="file" multiple
-                      webkitdirectory="" directory=""
-                      className="hidden"
-                      onChange={(e) => uploadImages(e.target.files)} />
+                {!cfg.snMatchMode && (
+                  <div>
+                    <label className="text-sm font-medium">圖片資料夾</label>
+                    <div className="flex gap-1 mt-1"
+                      onDragOver={(e) => { e.preventDefault(); setDragImg(true); }}
+                      onDragLeave={() => setDragImg(false)}
+                      onDrop={onDropImages}>
+                      <button onClick={() => imgInputRef.current?.click()}
+                        className={`flex-1 border rounded px-2 py-1 text-sm text-left truncate ${dragImg ? "border-emerald-500 bg-emerald-50" : "hover:bg-slate-100"}`}>
+                        📤 {files.length > 0 ? `已上傳 ${files.length} 張` : (dragImg ? "放開以上傳…" : "上傳 / 拖入圖片資料夾…")}
+                      </button>
+                      <input ref={imgInputRef} type="file" multiple
+                        webkitdirectory="" directory=""
+                        className="hidden"
+                        onChange={(e) => uploadImages(e.target.files)} />
+                    </div>
                   </div>
-                </div>
+                )}
 
-                {mode === "slides" && (
+                {cfg.snMatchMode && (
+                  <SnMatchPanel
+                    cfg={cfg}
+                    setCfg={setCfg}
+                    ws={ws}
+                    tplPath={tplPath}
+                    snList={snList}
+                    setSnList={setSnList}
+                    setStatus={setStatus}
+                    setSelected={setSelected}
+                    setCropOpen={setCropOpen}
+                    setCropSourceId={setCropSourceId}
+                    pushHistory={pushHistory}
+                  />
+                )}
+
+                {mode === "slides" && !cfg.snMatchMode && (
                   <div className="border-t pt-3">
                     <div className="text-sm font-semibold mb-2">每頁網格</div>
                     <div className="grid grid-cols-2 gap-2">
-                      <NumberInput label="欄 cols" step={1} value={cfg.grid.cols}
+                      <NumberInput label="欄 cols" step={1}
+                        value={cfg.autoAlign ? Math.max(1, autoIdxList.length) : cfg.grid.cols}
+                        disabled={cfg.autoAlign}
+                        hint={cfg.autoAlign ? `對位模式自動 = ${autoIdxList.length || 0} 欄` : undefined}
                         onChange={(v) => setGrid("cols", Math.max(1, parseInt(v) || 1))} />
                       <NumberInput label="列 rows" step={1} value={cfg.grid.rows}
                         onChange={(v) => setGrid("rows", Math.max(1, parseInt(v) || 1))} />
@@ -749,35 +2680,32 @@
                   <div className="border-t pt-3">
                     <div className="text-sm font-semibold mb-2">Excel 配置</div>
                     <div className="space-y-2">
-                      <label className="flex flex-col text-xs text-slate-600">
-                        起始 cell
-                        <input value={cfg.excel.startCell}
-                          onChange={(e) => setCfg((c) => ({ ...c, excel: { ...c.excel, startCell: e.target.value } }))}
-                          className="border rounded px-2 py-1 text-sm mt-1 font-mono" placeholder="B5" />
-                      </label>
-                      <div className="grid grid-cols-2 gap-2">
-                        <NumberInput label="每列圖數" step={1} value={cfg.excel.imgsPerRow}
-                          onChange={(v) => setCfg((c) => ({ ...c, excel: { ...c.excel, imgsPerRow: Math.max(1, parseInt(v) || 1) } }))} />
-                        <NumberInput label="列間距 (空 row)" step={1} value={cfg.excel.gapRows}
-                          onChange={(v) => setCfg((c) => ({ ...c, excel: { ...c.excel, gapRows: Math.max(0, parseInt(v) || 0) } }))} />
-                      </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <NumberInput label="每張圖跨欄" step={1} value={cfg.excel.cellCols}
-                          onChange={(v) => setCfg((c) => ({ ...c, excel: { ...c.excel, cellCols: Math.max(1, parseInt(v) || 1) } }))} />
-                        <NumberInput label="每張圖跨列" step={1} value={cfg.excel.cellRows}
-                          onChange={(v) => setCfg((c) => ({ ...c, excel: { ...c.excel, cellRows: Math.max(1, parseInt(v) || 1) } }))} />
-                      </div>
-                      <label className="flex flex-col text-xs text-slate-600">
-                        SN 寫入欄（留空=不寫）
-                        <input value={cfg.excel.snCol}
-                          onChange={(e) => setCfg((c) => ({ ...c, excel: { ...c.excel, snCol: e.target.value } }))}
-                          className="border rounded px-2 py-1 text-sm mt-1 font-mono" placeholder="A" />
-                      </label>
-                      <div className="text-[10px] text-slate-400">
-                        SN 字串從檔名 pattern「{cfg.label.pattern}」抽取
-                      </div>
+                      {!cfg.snMatchMode && (
+                        <>
+                          <label className="flex flex-col text-xs text-slate-600">
+                            起始 cell
+                            <input value={cfg.excel.startCell}
+                              onChange={(e) => setCfg((c) => ({ ...c, excel: { ...c.excel, startCell: e.target.value } }))}
+                              className="border rounded px-2 py-1 text-sm mt-1 font-mono" placeholder="B5" />
+                          </label>
+                          <NumberInput label="每列圖數" step={1}
+                            value={cfg.autoAlign ? Math.max(1, autoIdxList.length) : cfg.excel.imgsPerRow}
+                            disabled={cfg.autoAlign}
+                            hint={cfg.autoAlign ? `對位模式自動 = ${autoIdxList.length || 0} 欄` : undefined}
+                            onChange={(v) => setCfg((c) => ({ ...c, excel: { ...c.excel, imgsPerRow: Math.max(1, parseInt(v) || 1) } }))} />
+                          <label className="flex flex-col text-xs text-slate-600">
+                            SN 寫入欄（留空=不寫）
+                            <input value={cfg.excel.snCol}
+                              onChange={(e) => setCfg((c) => ({ ...c, excel: { ...c.excel, snCol: e.target.value } }))}
+                              className="border rounded px-2 py-1 text-sm mt-1 font-mono" placeholder="A" />
+                          </label>
+                          <div className="text-[10px] text-slate-400">
+                            SN 字串從檔名 pattern「{cfg.label.pattern}」抽取
+                          </div>
+                        </>
+                      )}
 
-                      <div className="mt-2 pt-2 border-t">
+                      <div className={cfg.snMatchMode ? "" : "mt-2 pt-2 border-t"}>
                         <div className="text-xs text-slate-600 mb-1">圖片填法</div>
                         <div className="flex text-xs border rounded overflow-hidden">
                           {[
@@ -792,6 +2720,13 @@
                             </button>
                           ))}
                         </div>
+                        {cfg.excel.imgFit === "contain" && (
+                          <div className="mt-2">
+                            <NumberInput label="留白" suffix="%" step={1} value={cfg.excel.containInset ?? 5}
+                              onChange={(v) => setCfg((c) => ({ ...c, excel: { ...c.excel, containInset: Math.max(0, Math.min(45, parseFloat(v) || 0)) } }))} />
+                            <div className="text-[10px] text-slate-400 mt-1">contain 模式下每邊留白佔 cell 寬高的百分比</div>
+                          </div>
+                        )}
                       </div>
                       <label className="flex items-center gap-2 text-xs text-slate-700 mt-2 pt-2 border-t">
                         <input type="checkbox" checked={cfg.excel.embedInCell}
@@ -805,6 +2740,7 @@
                   </div>
                 )}
 
+                {!cfg.snMatchMode && (
                 <div className="border-t pt-3">
                   <label className="flex items-center gap-2 text-sm font-semibold">
                     <input type="checkbox" checked={cfg.label.enabled}
@@ -813,23 +2749,44 @@
                   </label>
                   {cfg.label.enabled && (
                     <div className="mt-2 space-y-2">
-                      <div>
-                        <label className="text-xs text-slate-600">檔名 pattern</label>
-                        <input value={cfg.label.pattern}
-                          onChange={(e) => setCfg((c) => ({ ...c, label: { ...c.label, pattern: e.target.value } }))}
-                          className="mt-1 w-full border rounded px-2 py-1 text-sm font-mono" />
-                        <div className="text-[10px] text-slate-400 mt-1">
-                          例：<code>{"{group}-{idx}"}</code> 套用 <code>2EG-A.jpg</code> → <b>2EG</b>
-                        </div>
-                      </div>
+                      <SnPatternPicker
+                        cfgLabel={cfg.label}
+                        autoAlign={cfg.autoAlign}
+                        setCfg={setCfg}
+                        firstFile={orderedFiles[0]}
+                        allFiles={orderedFiles}
+                        perColCrop={cfg.autoAlign && cfg.cropMode === "per-col"}
+                        onOpenIdxCrop={(idxKey) => {
+                          setCropIdxKey(idxKey);
+                          setCropOpen(true);
+                        }}
+                      />
                       <NumberInput label="字體" suffix="pt" step={1} value={cfg.label.font_pt}
                         onChange={(v) => setCfg((c) => ({ ...c, label: { ...c.label, font_pt: v } }))} />
                       <div className="text-[10px] text-slate-400">
-                        X 位置請用預覽下方的「SN X」stepper；標籤寬度自動 = SN X → 第一張圖左緣
+                        X 位置請用預覽下方的「SN X」stepper（與圖片 X 獨立，不連動）
                       </div>
+                      {mode === "slides" && (
+                        <div className="pt-2 border-t">
+                          <label className="flex items-center gap-2 text-xs text-slate-700">
+                            <input type="checkbox" checked={cfg.slidesSn.inCell}
+                              onChange={(e) => setCfg((c) => ({ ...c, slidesSn: { ...c.slidesSn, inCell: e.target.checked } }))} />
+                            <span>SN 寫入表格儲存格（非浮動文字）</span>
+                          </label>
+                          {cfg.slidesSn.inCell && (
+                            <div className="grid grid-cols-2 gap-2 mt-2">
+                              <NumberInput label="SN 第幾欄" step={1} value={cfg.slidesSn.col}
+                                onChange={(v) => setCfg((c) => ({ ...c, slidesSn: { ...c.slidesSn, col: Math.max(1, parseInt(v) || 1) } }))} />
+                              <NumberInput label="從第幾列起" step={1} value={cfg.slidesSn.rowStart}
+                                onChange={(v) => setCfg((c) => ({ ...c, slidesSn: { ...c.slidesSn, rowStart: Math.max(1, parseInt(v) || 1) } }))} />
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
+                )}
 
                 <div className="border-t pt-3">
                   <div className="flex items-center justify-between mb-1">
@@ -868,61 +2825,287 @@
               </div>
             </div>
 
-            {/* 中欄：檔案清單 */}
-            <div className="col-span-3 bg-white rounded-lg shadow flex flex-col min-h-0">
+            {/* 中欄：檔案清單。背景只區分兩個 top-level mode */}
+            <div className={`col-span-3 rounded-lg shadow flex flex-col min-h-0 transition-colors ${
+              cfg.snMatchMode ? "bg-purple-50/40 ring-1 ring-purple-200" : "bg-slate-50 ring-1 ring-slate-300"
+            }`}>
+              {/* 排列方式：兩階層模式切換 */}
+              <div className="p-2 border-b">
+                <div className="text-[10px] text-slate-500 mb-1 font-semibold">分群方式</div>
+                {/* Top level: 依檔名 / 依範本 SN */}
+                <div className="grid grid-cols-2 gap-1">
+                  <button onClick={() => switchMode(false)}
+                    className={`px-2 py-1.5 rounded border text-xs flex items-center justify-center gap-1 ${
+                      !cfg.snMatchMode
+                        ? "bg-slate-700 text-white border-slate-700 shadow"
+                        : "bg-white text-slate-600 border-slate-300 hover:bg-slate-50"
+                    }`}>
+                    📷 依檔名
+                  </button>
+                  <button onClick={() => switchMode(true)}
+                    className={`px-2 py-1.5 rounded border text-xs flex items-center justify-center gap-1 ${
+                      cfg.snMatchMode
+                        ? "bg-purple-700 text-white border-purple-800 shadow"
+                        : "bg-white text-slate-600 border-slate-300 hover:bg-purple-50"
+                    }`}>
+                    📋 依範本 SN
+                  </button>
+                </div>
+                <div className="text-[10px] text-slate-500 mt-1">
+                  {cfg.snMatchMode
+                    ? "範本 SN 決定列；每個資料夾對應一欄"
+                    : "從一個資料夾上傳一批圖、依檔名分群"}
+                </div>
+
+                {/* Sub-toggle: 圖片驅動模式下選排版邏輯 */}
+                {!cfg.snMatchMode && (
+                  <div className="mt-2 pt-2 border-t">
+                    <div className="text-[10px] text-slate-500 mb-1">每群圖數來源</div>
+                    <div className="grid grid-cols-2 gap-1">
+                      <button onClick={() => setCfg((c) => ({ ...c, autoAlign: false }))}
+                        className={`px-2 py-1 rounded border text-xs ${
+                          !cfg.autoAlign
+                            ? "bg-slate-400 text-white border-slate-500"
+                            : "bg-white text-slate-600 border-slate-300 hover:bg-slate-50"
+                        }`}>
+                        依順序
+                      </button>
+                      <button onClick={() => setCfg((c) => ({ ...c, autoAlign: true }))}
+                        className={`px-2 py-1 rounded border text-xs ${
+                          cfg.autoAlign
+                            ? "bg-slate-400 text-white border-slate-500"
+                            : "bg-white text-slate-600 border-slate-300 hover:bg-slate-50"
+                        }`}>
+                        依檔名 idx
+                      </button>
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-1">
+                      {cfg.autoAlign
+                        ? "依檔名 idx 對位、缺照片留空。拖曳/排序對欄位無效"
+                        : "照清單順序依序填入；可拖曳排序"}
+                    </div>
+                  </div>
+                )}
+              </div>
+
               <div className="p-3 border-b flex items-center justify-between">
                 <div className="text-sm font-semibold">
                   檔案 <span className="text-slate-400 font-normal">({orderedFiles.length})</span>
+                  {selectedPaths.length > 0 && (
+                    <span className="text-emerald-600 font-normal ml-1">· 選 {selectedPaths.length}</span>
+                  )}
                 </div>
-                <button onClick={resetSort} disabled={files.length === 0}
-                  title="依檔名 A→Z 排序"
-                  className="text-xs border rounded px-2 py-0.5 disabled:opacity-40 hover:bg-slate-100">
-                  A→Z
-                </button>
+                <div className="flex gap-1 items-center">
+                  {/* 依檔名 idx 或 範本 SN 模式 才有「裁剪設定方式」toggle (有 column 概念) */}
+                  {(cfg.autoAlign || cfg.snMatchMode) && (
+                    <div className="flex border rounded overflow-hidden text-[10px]" title="裁剪設定方式">
+                      <button onClick={() => setCfg((c) => ({ ...c, cropMode: "global" }))}
+                        className={`px-1.5 py-0.5 ${cfg.cropMode !== "per-col" ? "bg-slate-700 text-white" : "bg-white hover:bg-slate-100"}`}>
+                        統一
+                      </button>
+                      <button onClick={() => setCfg((c) => ({ ...c, cropMode: "per-col" }))}
+                        className={`px-1.5 py-0.5 ${cfg.cropMode === "per-col" ? "bg-slate-700 text-white" : "bg-white hover:bg-slate-100"}`}>
+                        各欄
+                      </button>
+                    </div>
+                  )}
+                  {/* 全局 ✂️：永遠顯示；各欄模式下 disabled */}
+                  {(() => {
+                    const isPerCol = cfg.cropMode === "per-col";
+                    const noFiles = cfg.snMatchMode
+                      ? !cfg.sources.some((s) => s.files?.length)
+                      : orderedFiles.length === 0;
+                    return (
+                      <button
+                        onClick={() => {
+                          const repFile = cfg.snMatchMode
+                            ? cfg.sources.flatMap((s) => s.files || [])[0]
+                            : orderedFiles[0];
+                          if (!repFile) return;
+                          if (!selected) setSelected(repFile.path);
+                          setCropOpen(true);
+                        }}
+                        disabled={isPerCol || noFiles}
+                        title={isPerCol
+                          ? "目前是「各欄」模式，請於各欄的 ✂️ 設定"
+                          : "對選中的圖框出裁剪區域，套用到所有圖"}
+                        className={`text-xs border rounded px-2 py-0.5 disabled:opacity-40 hover:bg-slate-100 ${cfg.crop?.enabled && !isPerCol ? "bg-emerald-100 border-emerald-400 text-emerald-800" : ""}`}>
+                        ✂️ {!isPerCol && cfg.crop?.enabled ? "裁剪 ON" : "設定裁剪"}
+                      </button>
+                    );
+                  })()}
+                  {!cfg.snMatchMode && (
+                    <button onClick={resetSort} disabled={files.length === 0}
+                      title="依檔名 A→Z 排序"
+                      className="text-xs border rounded px-2 py-0.5 disabled:opacity-40 hover:bg-slate-100">
+                      A→Z
+                    </button>
+                  )}
+                </div>
               </div>
-              <div className="flex-1 overflow-y-auto p-2 space-y-1">
+              <div ref={listRef} className={`flex-1 overflow-y-auto p-2 ${cfg.autoAlign ? "space-y-2" : "space-y-1"}`}
+                onClick={(e) => { if (e.target === e.currentTarget) { setSelectedPaths([]); setSelected(null); } }}
+                onDragOver={onListDragOver}
+                onDragEnd={() => { setDragOverIdx(null); stopAutoScroll(); }}
+                onDragLeave={(e) => { if (e.target === e.currentTarget) { setDragOverIdx(null); stopAutoScroll(); } }}>
+
+                {cfg.snMatchMode ? (
+                  <SnMatchMatrix
+                    cfg={cfg}
+                    snList={snList}
+                    selected={selected}
+                    setSelected={setSelected}
+                    thumbUrl={thumbUrl}
+                    perColCrop={cfg.cropMode === "per-col"}
+                    selectedCell={selectedCell}
+                    setSelectedCell={setSelectedCell}
+                    setSelectedPaths={setSelectedPaths}
+                    onOpenCrop={(sid) => {
+                      const s = cfg.sources.find((x) => x.id === sid);
+                      if (!s?.files?.length) { setStatus("先上傳此來源的圖片"); return; }
+                      setCropSourceId(sid);
+                      setSelected(s.files[0].path);
+                      setCropOpen(true);
+                    }}
+                  />
+                ) : <>
                 {orderedFiles.length === 0 && (
                   <div className="text-xs text-slate-400 text-center py-8">
-                    指定資料夾後按「掃描」
+                    上傳圖片資料夾後顯示
                   </div>
                 )}
-                {orderedFiles.map((f, idx) => (
-                  <div key={f.path}
-                    onClick={() => {
-                      setSelected(f.path);
-                      setCurrentPage(Math.floor(idx / Math.max(1, cfg.grid.cols * cfg.grid.rows)));
-                    }}
-                    className={`flex items-center gap-2 rounded p-1 cursor-pointer ${
-                      selected === f.path ? "bg-emerald-50 ring-1 ring-emerald-300" : "hover:bg-slate-50"
-                    }`}>
-                    <div className="text-xs text-slate-400 w-6 text-right tabular-nums">{idx + 1}</div>
-                    <img src={`/api/thumb?path=${encodeURIComponent(f.path)}&size=80`}
-                      className="w-10 h-10 object-cover border rounded" />
-                    <div className="flex-1 min-w-0 text-xs truncate" title={f.name}>{f.name}</div>
-                    <div className="flex flex-col">
-                      <button onClick={(e) => { e.stopPropagation(); moveBy(f.path, -1); }}
-                        disabled={idx === 0}
-                        className="text-[10px] leading-none px-1 disabled:opacity-30 hover:bg-slate-200 rounded">▲</button>
-                      <button onClick={(e) => { e.stopPropagation(); moveBy(f.path, +1); }}
-                        disabled={idx === orderedFiles.length - 1}
-                        className="text-[10px] leading-none px-1 disabled:opacity-30 hover:bg-slate-200 rounded">▼</button>
+                {cfg.autoAlign && orderedFiles.length > 0 ? (() => {
+                  const idxList = detectIdxList(orderedFiles, cfg.label.pattern, cfg.label.idxSort || "auto", cfg.label.idxOrder || []);
+                  const cols = Math.max(1, idxList.length);
+                  const rows = buildRows(orderedFiles, cfg.label.pattern, idxList, true);
+                  const showPerColCrop = cfg.cropMode === "per-col";
+                  return <>
+                    {/* 各欄獨立 模式：欄位 + ✂️ 標頭列 */}
+                    {showPerColCrop && (
+                      <div className="border border-sky-300 rounded bg-sky-50 p-2 sticky top-0 z-10">
+                        <div className="text-[10px] text-sky-800 font-semibold mb-1">各欄獨立裁剪</div>
+                        <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
+                          {idxList.map((idxKey, ci) => {
+                            const idxCrop = (cfg.label.idxCrops || {})[idxKey];
+                            const cropOn = idxCrop?.enabled;
+                            return (
+                              <button key={idxKey}
+                                onClick={() => { setCropIdxKey(idxKey); setCropOpen(true); }}
+                                title={`設定欄「${idxKey}」的裁剪區域`}
+                                className={`px-1 py-0.5 rounded border text-xs font-mono ${cropOn ? "bg-emerald-100 border-emerald-400 text-emerald-800" : "bg-white border-sky-300 text-sky-700 hover:bg-sky-100"}`}>
+                                {idxKey} ✂️
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  {rows.map((row, rIdx) => (
+                    <div key={row.group}
+                      draggable
+                      onDragStart={(e) => onCardDragStart(e, row.group)}
+                      onDragOver={(e) => { e.preventDefault(); if (dragOverIdx !== rIdx) setDragOverIdx(rIdx); }}
+                      onDrop={(e) => onCardDrop(e, row.group)}
+                      style={{ boxShadow: dragOverIdx === rIdx ? "inset 0 2px 0 0 #0284c7" : "" }}
+                      className="border border-sky-200 rounded bg-white p-2 cursor-grab active:cursor-grabbing">
+                      <div className="flex items-center gap-1 mb-1.5">
+                        <span className="text-slate-400">⠿</span>
+                        <span className="text-xs font-semibold text-sky-800">{row.group || <span className="text-amber-600">未分組</span>}</span>
+                        <span className="text-[10px] text-slate-400 ml-auto">第 {rIdx + 1} 列</span>
+                      </div>
+                      <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
+                        {row.cells.map((f, ci) => {
+                          const colLabel = idxList[ci] || String(ci + 1);
+                          const isCellSel = selectedCell?.r === rIdx && selectedCell?.c === ci;
+                          if (!f) {
+                            return (
+                              <div key={ci} data-r={rIdx} data-c={ci}
+                                onClick={() => { setSelectedCell({ r: rIdx, c: ci }); setSelected(null); setSelectedPaths([]); }}
+                                className={`aspect-square border-2 ${isCellSel ? "border-emerald-500 ring-2 ring-emerald-300" : "border-dashed border-slate-300"} bg-slate-50 rounded flex flex-col items-center justify-center text-slate-400 cursor-pointer`}>
+                                <div className="text-[10px] font-mono">{colLabel}</div>
+                                <div className="text-[10px]">空</div>
+                              </div>
+                            );
+                          }
+                          const isSel = selectedPaths.includes(f.path) || isCellSel;
+                          return (
+                            <div key={ci} data-r={rIdx} data-c={ci}
+                              onClick={(e) => { onItemClick(e, f.path, orderedFiles.indexOf(f)); setSelectedCell({ r: rIdx, c: ci }); }}
+                              draggable={false}
+                              title={f.name}
+                              className={`aspect-square rounded overflow-hidden border cursor-pointer relative ${
+                                isSel ? "ring-2 ring-emerald-500 border-emerald-500" : "border-slate-200 hover:border-slate-400"
+                              }`}>
+                              <img src={thumbUrl(f.path, 120, showPerColCrop ? ((cfg.label.idxCrops || {})[idxList[ci]] || null) : undefined)}
+                                className="w-full h-full object-cover pointer-events-none" />
+                              <div className="absolute bottom-0 left-0 right-0 text-[9px] text-center bg-black/50 text-white py-0.5 font-mono">{colLabel}</div>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))}
+                  </>;
+                })() : orderedFiles.map((f, idx) => {
+                  const isSel = selectedPaths.includes(f.path);
+                  return (
+                    <div key={f.path}
+                      data-idx={idx}
+                      draggable
+                      onDragStart={(e) => onItemDragStart(e, f.path)}
+                      onDragOver={(e) => { e.preventDefault(); if (dragOverIdx !== idx) setDragOverIdx(idx); }}
+                      onDrop={(e) => onItemDrop(e, f.path)}
+                      onClick={(e) => onItemClick(e, f.path, idx)}
+                      style={{ boxShadow: dragOverIdx === idx ? "inset 0 2px 0 0 #059669" : "" }}
+                      className={`flex items-center gap-2 rounded p-1 cursor-pointer select-none ${
+                        isSel ? "bg-emerald-100 ring-1 ring-emerald-400" : "hover:bg-slate-50"
+                      }`}>
+                      <div className="text-xs text-slate-400 w-6 text-right tabular-nums">{idx + 1}</div>
+                      <img src={thumbUrl(f.path, 80)}
+                        className="w-10 h-10 object-cover border rounded pointer-events-none" />
+                      <div className="flex-1 min-w-0 text-xs truncate" title={f.name}>{f.name}</div>
+                      <div className="text-slate-300 text-xs pr-1" title="拖曳排序">⋮⋮</div>
+                    </div>
+                  );
+                })}
+                {/* 拖到最底：放在清單末端的 drop zone */}
+                <div
+                  onDragOver={(e) => { e.preventDefault(); setDragOverIdx(9999); }}
+                  onDrop={(e) => cfg.autoAlign ? onCardDrop(e, null) : onItemDrop(e, null)}
+                  style={{ height: 12, boxShadow: dragOverIdx === 9999 ? `inset 0 2px 0 0 ${cfg.autoAlign ? "#0284c7" : "#059669"}` : "" }} />
+                </>}
               </div>
-              {selected && (
-                <div className="border-t p-2 flex gap-1 text-xs">
-                  <button onClick={() => moveTop(selected)}
-                    className="flex-1 border rounded py-1 hover:bg-slate-100">置頂</button>
-                  <button onClick={() => moveBottom(selected)}
-                    className="flex-1 border rounded py-1 hover:bg-slate-100">置底</button>
+              {orderedFiles.length > 0 && (
+                <div className="border-t p-2 space-y-1">
+                  {!cfg.autoAlign && (
+                    <div className="flex gap-1 text-xs">
+                      <button onClick={() => moveSelected(-1)} disabled={!selPathsOrFallback().length}
+                        className="flex-1 border rounded py-1 hover:bg-slate-100 disabled:opacity-40">▲ 上移</button>
+                      <button onClick={() => moveSelected(1)} disabled={!selPathsOrFallback().length}
+                        className="flex-1 border rounded py-1 hover:bg-slate-100 disabled:opacity-40">▼ 下移</button>
+                      <button onClick={moveTop} disabled={!selPathsOrFallback().length}
+                        className="flex-1 border rounded py-1 hover:bg-slate-100 disabled:opacity-40">置頂</button>
+                      <button onClick={moveBottom} disabled={!selPathsOrFallback().length}
+                        className="flex-1 border rounded py-1 hover:bg-slate-100 disabled:opacity-40">置底</button>
+                    </div>
+                  )}
+                  <button onClick={deleteSelected} disabled={!selPathsOrFallback().length}
+                    title="Delete / Backspace 鍵也可刪除"
+                    className="w-full border border-red-300 text-red-600 rounded py-1 text-xs hover:bg-red-50 disabled:opacity-40">
+                    刪除選取 ({selPathsOrFallback().length})
+                  </button>
+                  <div className="text-[10px] text-slate-400 text-center">
+                    {cfg.autoAlign
+                      ? "拖曳 SN 卡片＝改列順序 · 點圖＝選取 · Del／⌫ 刪除"
+                      : "Shift＝範圍選取 · ⌘/Ctrl＝多選 · 拖曳＝排序 · Del／⌫ 刪除"}
+                  </div>
                 </div>
               )}
             </div>
 
             {/* 右欄：預覽 */}
             <div className="col-span-6 min-h-0">
-              <div className="bg-white rounded-lg shadow p-4 h-full overflow-auto">
+              <div className="bg-white rounded-lg shadow p-4 h-full flex flex-col min-h-0">
                 {(() => {
                   const total = Math.max(1, pages.length);
                   const pi = Math.min(currentPage, total - 1);
@@ -942,10 +3125,18 @@
                   };
                   return (
                     <>
-                      <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
-                        <div className="text-sm text-slate-500">
+                      <div className="flex items-center justify-between gap-2 flex-wrap pb-2 mb-2 border-b border-slate-100 shrink-0">
+                        <div className="text-sm text-slate-500 flex items-center gap-2">
                           預覽
-                          <span className="ml-3 text-[10px] text-slate-400">Shift＝粗調 · Alt＝微調</span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
+                            cfg.snMatchMode ? "bg-purple-100 text-purple-700 border-purple-300"
+                              : "bg-slate-100 text-slate-600 border-slate-300"
+                          }`}>
+                            {cfg.snMatchMode ? "📋 依範本 SN" : cfg.autoAlign ? "📷 依檔名 · idx" : "📷 依檔名 · 順序"}
+                          </span>
+                          {mode === "slides" && (
+                            <span className="ml-1 text-[10px] text-slate-400" title="Stepper ◀▶ 操作">Shift＝粗調 · Alt＝微調</span>
+                          )}
                         </div>
                         <div className="flex items-center gap-2 text-sm">
                           {/* zoom 控制 */}
@@ -973,11 +3164,11 @@
                           )}
                         </div>
                       </div>
-                      <div ref={stageWrapRef} style={{ overflow: "auto" }}>
+                      <div ref={stageWrapRef} className="flex-1 min-h-0" style={{ overflow: "auto" }}>
                        <div style={{ zoom: zoom, MozTransform: `scale(${zoom})`, MozTransformOrigin: "top left" }}>
 
                       {mode === "excel" && (
-                        <ExcelPreview grid={xlGrid} cfg={cfg} orderedFiles={orderedFiles} selected={selected} />
+                        <ExcelPreview grid={xlGrid} cfg={cfg} orderedFiles={orderedFiles} selected={selected} thumbUrl={thumbUrl} snList={snList} />
                       )}
                       {mode === "slides" && (
                       <div className="flex gap-3 items-start justify-center">
@@ -1028,9 +3219,10 @@
                           }
                           return (
                             <img key={i}
-                              src={`/api/thumb?path=${encodeURIComponent(pl.path)}&size=400`}
-                              style={style}
-                              className={selected === pl.path ? "ring-2 ring-emerald-500" : "border border-slate-300"} />
+                              src={thumbUrl(pl.path, 400, pl._crop)}
+                              data-preview-path={pl.path}
+                              style={{ ...style, scrollMargin: 30 }}
+                              className={selected === pl.path ? "ring-4 ring-emerald-500 shadow-[0_0_18px_4px_rgba(16,185,129,0.7)] z-10 relative" : "border border-slate-300"} />
                           );
                         })}
                           </div>

@@ -22,6 +22,7 @@ class CellPlacement:
     span_rows: int = 1
     text: str | None = None
     font_pt: float = 12.0
+    crop: dict | None = None  # per-placement crop (overrides global crop kwarg)
 
 
 # Excel 像素換算
@@ -32,6 +33,10 @@ def excel_col_to_px(w: float, mdw: float = 7.0) -> float:
 
 def excel_row_to_px(h: float) -> float:
     return h * 4 / 3
+
+
+# contain 模式四邊留白比例預設值 (每邊佔 cell 的 5%)；可由呼叫端覆寫
+_DEFAULT_CONTAIN_INSET = 0.05
 
 
 def _default_mdw(wb) -> float:
@@ -89,6 +94,63 @@ def _stretch_resize(img_path: Path, target_w: float, target_h: float, tmp_dir: P
         return out
 
 
+def _apply_crop(img_path: Path, crop: dict | None, tmp_dir: Path) -> Path:
+    """依相對比例 crop (left/top/right/bottom in 0..1) 裁圖；無效或全圖時直接回傳原 path。"""
+    if not crop or not crop.get("enabled"):
+        return img_path
+    l = max(0.0, min(1.0, float(crop.get("left", 0.0))))
+    t = max(0.0, min(1.0, float(crop.get("top", 0.0))))
+    r = max(0.0, min(1.0, float(crop.get("right", 1.0))))
+    b = max(0.0, min(1.0, float(crop.get("bottom", 1.0))))
+    if r <= l or b <= t:
+        return img_path
+    if abs(l) < 1e-6 and abs(t) < 1e-6 and abs(r - 1.0) < 1e-6 and abs(b - 1.0) < 1e-6:
+        return img_path
+    with PILImage.open(img_path) as im:
+        iw, ih = im.size
+        box = (int(round(l * iw)), int(round(t * ih)),
+               int(round(r * iw)), int(round(b * ih)))
+        cropped = im.crop(box)
+        if cropped.mode == "P":
+            cropped = cropped.convert("RGBA" if "transparency" in cropped.info else "RGB")
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        suffix = img_path.suffix.lower() or ".png"
+        out = tmp_dir / f"_crop_user_{img_path.stem}_{box[0]}_{box[1]}_{box[2]}_{box[3]}{suffix}"
+        save_kwargs = {}
+        if cropped.mode == "RGBA" and suffix not in (".png",):
+            cropped = cropped.convert("RGB")
+        cropped.save(out, **save_kwargs)
+        return out
+
+
+def _pad_contain(img_path: Path, inset: float, tmp_dir: Path) -> Path:
+    """在圖片四周加不透明白色留白：原始圖佔最終畫布的 (1 - 2*inset) 比例。"""
+    with PILImage.open(img_path) as im:
+        # 一律轉成 RGB 並用不透明白底，避免 Excel 把透明區當 cell 背景
+        if im.mode != "RGB":
+            if im.mode == "P":
+                im = im.convert("RGBA" if "transparency" in im.info else "RGB")
+            if im.mode == "RGBA":
+                bg = PILImage.new("RGB", im.size, (255, 255, 255))
+                bg.paste(im, mask=im.split()[-1])
+                im = bg
+            else:
+                im = im.convert("RGB")
+        iw, ih = im.size
+        denom = max(0.1, 1.0 - 2.0 * inset)
+        cw = max(iw + 2, int(round(iw / denom)))
+        ch = max(ih + 2, int(round(ih / denom)))
+        canvas = PILImage.new("RGB", (cw, ch), (255, 255, 255))
+        ox = (cw - iw) // 2
+        oy = (ch - ih) // 2
+        canvas.paste(im, (ox, oy))
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        # 用 PNG 確保品質；ext 統一 .png 以便 _inject_richvalue 處理
+        out = tmp_dir / f"_pad_{img_path.stem}_{int(inset*1000)}.png"
+        canvas.save(out, "PNG")
+        return out
+
+
 def _cover_crop(img_path: Path, target_w: float, target_h: float, tmp_dir: Path) -> Path:
     """等比放大圖片直到至少有一邊貼齊 cell 大小，超出的部分 center-crop 掉。"""
     target_w, target_h = max(1, int(round(target_w))), max(1, int(round(target_h)))
@@ -121,6 +183,8 @@ def write_xlsx(
     embed_in_cell: bool = False,
     lock_images: bool = True,
     img_fit: str = "cover",
+    contain_inset: float = _DEFAULT_CONTAIN_INSET,
+    crop: dict | None = None,
 ) -> Path:
     """Embed images either as floating drawings (default) or as cell content (DISPIMG).
 
@@ -128,7 +192,8 @@ def write_xlsx(
     / resized / selected, mimicking cell-embedded behavior visually.
     """
     if embed_in_cell:
-        return _write_xlsx_in_cell(placements, out_path, template, sheet_name, img_fit=img_fit)
+        return _write_xlsx_in_cell(placements, out_path, template, sheet_name,
+                                   img_fit=img_fit, contain_inset=contain_inset, crop=crop)
 
     if template and Path(template).is_file():
         wb = load_workbook(str(template))
@@ -150,11 +215,14 @@ def write_xlsx(
         if p.path is None or not Path(p.path).is_file():
             continue
 
+        # 先套用裁剪（per-placement 優先，否則用全域 crop kwarg）
+        src_path = _apply_crop(Path(p.path), p.crop or crop, out_path.parent / "_crops")
+
         target_w, target_h = _placement_pixel_size(ws, p, mdw)
 
         if img_fit == "fill":
             # TwoCellAnchor 拉伸到 cell 範圍 (會變形)
-            img = XLImage(str(p.path))
+            img = XLImage(str(src_path))
             img.anchor = TwoCellAnchor(
                 _from=AnchorMarker(col=p.col - 1, colOff=0, row=p.row - 1, rowOff=0),
                 to=AnchorMarker(col=p.col - 1 + p.span_cols, colOff=0,
@@ -163,18 +231,21 @@ def write_xlsx(
             )
             ws._images.append(img)
         elif img_fit == "contain":
-            # 保長寬比、完整放入 cell；置中 (上下/左右白邊均分)
-            with PILImage.open(p.path) as im:
+            # 保長寬比、放入 cell 並四邊留白置中
+            with PILImage.open(src_path) as im:
                 iw, ih = im.size
             aspect = ih / iw if iw else 1.0
-            fit_w = target_w
+            inset = max(0.0, min(0.45, contain_inset))
+            avail_w = target_w * (1 - 2 * inset)
+            avail_h = target_h * (1 - 2 * inset)
+            fit_w = avail_w
             fit_h = fit_w * aspect
-            if fit_h > target_h and target_h > 0:
-                fit_h = target_h
-                fit_w = fit_h / aspect if aspect else target_w
+            if fit_h > avail_h and avail_h > 0:
+                fit_h = avail_h
+                fit_w = fit_h / aspect if aspect else avail_w
             col_off_px = max(0.0, (target_w - fit_w) / 2)
             row_off_px = max(0.0, (target_h - fit_h) / 2)
-            img = XLImage(str(p.path))
+            img = XLImage(str(src_path))
             img.anchor = OneCellAnchor(
                 _from=AnchorMarker(
                     col=p.col - 1, colOff=int(round(pixels_to_EMU(col_off_px))),
@@ -188,7 +259,7 @@ def write_xlsx(
             ws._images.append(img)
         else:
             # cover (default)：保長寬比、center-crop、剛好填滿 cell
-            cropped = _cover_crop(Path(p.path), target_w, target_h, out_path.parent / "_crops")
+            cropped = _cover_crop(src_path, target_w, target_h, out_path.parent / "_crops")
             img = XLImage(str(cropped))
             img.width = int(round(target_w))
             img.height = int(round(target_h))
@@ -255,6 +326,8 @@ def _write_xlsx_in_cell(
     template: Path | None,
     sheet_name: str | None,
     img_fit: str = "contain",
+    contain_inset: float = _DEFAULT_CONTAIN_INSET,
+    crop: dict | None = None,
 ) -> Path:
     """Embed images as cell content using Microsoft Excel 365 RichValue schema.
 
@@ -294,13 +367,18 @@ def _write_xlsx_in_cell(
         if p.path is None or not Path(p.path).is_file():
             continue
         # 依 img_fit 預處理圖片：Excel embed 模式預設 contain，所以 cover/fill 都要 PIL 先處理
-        src_path = Path(p.path)
+        src_path = _apply_crop(Path(p.path), p.crop or crop, out_path.parent / "_crops")
         if img_fit in ("cover", "fill"):
             tw, th = _placement_pixel_size(ws, p, mdw)
             tmp_dir = out_path.parent / "_crops"
             src_path = (_cover_crop if img_fit == "cover" else _stretch_resize)(
                 src_path, tw, th, tmp_dir
             )
+        elif img_fit == "contain":
+            inset = max(0.0, min(0.45, contain_inset))
+            if inset > 0:
+                tmp_dir = out_path.parent / "_crops"
+                src_path = _pad_contain(src_path, inset, tmp_dir)
         ext = src_path.suffix.lower() or ".png"
         media_name = f"image_rv{len(image_records) + 1}{ext}"
         image_records.append((src_path, media_name))
