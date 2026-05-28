@@ -1932,24 +1932,6 @@
         return j.path;
       };
 
-      const useDefaultTemplate = async () => {
-        if (!ws) return;
-        setBusy(true); setStatus("套用預設範本…");
-        try {
-          const r = await fetch("/api/template/default", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ workspace: ws }),
-          });
-          const j = await r.json();
-          if (!r.ok) throw new Error(j.error || "失敗");
-          setTplPath(j.path);
-          setTplName(j.name || "default.pptx");
-          await doLoadTemplate(j.path);
-        } catch (e) { setStatus("錯誤: " + e.message); }
-        finally { setBusy(false); }
-      };
-
       // 已有 server-side 範本 path → 依副檔名觸發 slides / excel 對應的後處理
       const loadTemplateByPath = async (path, name) => {
         if (!path) return;
@@ -2522,10 +2504,6 @@
                     <button onClick={() => tplInputRef.current?.click()}
                       className={`flex-1 border rounded px-2 py-1 text-sm text-left truncate ${dragTpl ? "border-emerald-500 bg-emerald-50" : "hover:bg-slate-100"}`}>
                       📤 {tplName || (tplPath ? tplPath.split("/").pop() : (dragTpl ? "放開以上傳…" : "上傳 / 拖入範本…"))}
-                    </button>
-                    <button onClick={useDefaultTemplate} title="使用預設範本"
-                      className="border rounded px-2 py-1 text-xs hover:bg-slate-100">
-                      預設
                     </button>
                     <input ref={tplInputRef} type="file"
                       accept=".pptx,.key,.xlsx,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.apple.keynote,application/zip"
