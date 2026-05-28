@@ -17,7 +17,7 @@ except ImportError as e:
         "mcp package not installed. Run: pip install -e \".[mcp]\""
     ) from e
 
-from .paste_job import run_paste_job
+from .paste_job import run_paste_job, run_paste_job_ibp
 
 
 mcp = FastMCP("img-batch-paster")
@@ -67,6 +67,32 @@ def paste_images_to_pptx(
         gap_y_cm=gap_y_cm,
     )
     return str(out)
+
+
+@mcp.tool()
+def paste_with_ibp(
+    ibp_path: str,
+    image_folder: str,
+    output_path: str,
+) -> str:
+    """Replay a saved .ibp config bundle against a new folder of images.
+
+    The .ibp is a zip created from the web UI ("📁 配置 → 匯出 .ibp"), containing
+    the recipe (grid, pattern, slide dims) and optionally a .pptx template.
+
+    Only "依檔名 + 依順序" mode + .pptx output is supported here. Configs using
+    依檔名 idx 對位, 依範本 SN, .xlsx, or .key output will raise an error —
+    use the web UI for those.
+
+    Args:
+        ibp_path: Absolute path to a .ibp file.
+        image_folder: Absolute path to a folder of images to paste.
+        output_path: Absolute path where the .pptx will be written.
+
+    Returns:
+        Absolute path string of the generated .pptx.
+    """
+    return str(run_paste_job_ibp(ibp_path, image_folder, output_path))
 
 
 def main() -> None:
