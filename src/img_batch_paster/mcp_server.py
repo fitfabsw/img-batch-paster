@@ -78,19 +78,28 @@ def paste_with_ibp(
     """Replay a saved .ibp config bundle against a new folder of images.
 
     The .ibp is a zip created from the web UI ("📁 配置 → 匯出 .ibp"), containing
-    the recipe (grid, pattern, slide dims) and optionally a .pptx template.
+    the recipe (grid, pattern, slide dims) and optionally a template file.
 
-    Only "依檔名 + 依順序" mode + .pptx output is supported here. Configs using
-    依檔名 idx 對位, 依範本 SN, .xlsx, or .key output will raise an error —
-    use the web UI for those.
+    Supported modes:
+      - 依檔名 + 依順序 (autoAlign=False) — files chunked linearly into rows
+      - 依檔名 idx 對位 (autoAlign=True) — idx in filename picks the column
+
+    Supported outputs (decided by output_path extension):
+      - .pptx
+      - .key  (macOS only; conversion via Keynote.app)
+      - .xlsx
+
+    Not supported (raises a clear error):
+      - 依範本 SN 多 source 模式 (snMatchMode=True) — needs different signature
+        to pass multiple source folders + per-source crop. Use the web UI.
 
     Args:
         ibp_path: Absolute path to a .ibp file.
         image_folder: Absolute path to a folder of images to paste.
-        output_path: Absolute path where the .pptx will be written.
+        output_path: Absolute path where the output (.pptx/.key/.xlsx) is written.
 
     Returns:
-        Absolute path string of the generated .pptx.
+        Absolute path string of the generated file.
     """
     return str(run_paste_job_ibp(ibp_path, image_folder, output_path))
 
