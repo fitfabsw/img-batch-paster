@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import io
+import re
 import shutil
 import tempfile
 import uuid
 import json
 from pathlib import Path
+
+
+def _natural_key(name: str):
+    """自然排序 key：把檔名數字段當數字比，讓 QN2 排在 QN10 前面。"""
+    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", name)]
 
 import click
 from flask import Flask, jsonify, request, send_file, send_from_directory
@@ -48,7 +54,7 @@ def api_scan():
         return jsonify({"error": f"資料夾不存在: {folder}"}), 400
 
     files = []
-    for entry in sorted(folder.iterdir()):
+    for entry in sorted(folder.iterdir(), key=lambda p: _natural_key(p.name)):
         if not entry.is_file() or entry.suffix.lower() not in exts:
             continue
         try:

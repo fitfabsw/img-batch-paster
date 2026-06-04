@@ -2508,7 +2508,10 @@
       };
       const resetSort = () => {
         pushHistory("A→Z 排序");
-        setOrder([...files].sort((a, b) => a.name.localeCompare(b.name)).map((f) => f.path));
+        // 自然排序：數字段當數字比，QN2 在 QN10 前面（非純字典序）
+        setOrder([...files]
+          .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }))
+          .map((f) => f.path));
         setSelectedPaths([]);
       };
 
