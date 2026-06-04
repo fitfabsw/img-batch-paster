@@ -32,6 +32,8 @@
         gap:   { x: 2, y: 3 },
         cols: 3,
         rows: 3,
+        rowH: 0,    // 固定列高 (% of slide height)；0=依圖片比例自動 (舊行為)。套用表格時設此值
+        areaW: 0,   // 圖片區總寬 (% of slide width)；>0 時水平等距分佈(含外緣)。套用表格時設此值
       },
       label: {
         enabled: true,
@@ -337,6 +339,11 @@
         ? detectIdxList(orderedFiles, label.pattern, label.idxSort || "auto", label.idxOrder || [])
         : cols;
 
+      // 表格模式 (套用表格後)：列高鎖死 (cellH) + 圖片區總寬 (areaW)
+      // → 每列 N 張圖：同尺寸保比例、水平等距(含外緣 d)、垂直置中(上下 h 相等)
+      const cellH = grid.rowH > 0 ? H * grid.rowH / 100 : null;
+      const areaW = grid.areaW > 0 ? W * grid.areaW / 100 : null;
+
       const allRows = buildRows(orderedFiles, label.pattern, colsArg, autoAlign);
       const pages = [];
       for (let p = 0; p < allRows.length; p += rowsPerPage) {
@@ -346,8 +353,8 @@
         let rowIdxInPage = 0;
         for (const { group, cells } of pageRows) {
           const anchor = cells.find((c) => c);
-          const aspect = anchor && anchor.h && anchor.w ? anchor.h / anchor.w : 0.75;
-          const row_h = w * aspect;
+          const anchorAspect = anchor && anchor.h && anchor.w ? anchor.h / anchor.w : 0.75;
+          const row_h = cellH != null ? cellH : w * anchorAspect;   // 固定列高 or 依比例
           if (label && label.enabled) {
             const lx_cm = W * label.x / 100;
             const lw_cm = W * (label.width || 12) / 100;
@@ -358,12 +365,31 @@
             });
           }
           rowIdxInPage++;
-          cells.forEach((f, ci) => {
-            if (!f) return;  // 缺的照片留空，不遞補
-            placements.push({
-              path: f.path, x_cm: ox + ci * (w + gx), y_cm: cur_y, w_cm: w, h_cm: row_h,
+
+          if (cellH != null && areaW != null) {
+            // 表格模式：圖寬=「尺寸」(w，你控制)，保比例算高；間距=「間距X」(gx，你控制)
+            // 整組水平置中(外緣相等)、每張垂直置中。套用表格時已給好預設 w/gx。
+            let imgW = w, imgH = w * anchorAspect;
+            if (imgH > cellH) { imgH = cellH; imgW = cellH / anchorAspect; }   // 別超過列高
+            const groupW = cols * imgW + (cols - 1) * gx;
+            const leadMargin = (areaW - groupW) / 2;                            // 整組置中 → 左右外緣相等
+            const topMargin = (cellH - imgH) / 2;                               // 垂直置中(上下相等)
+            cells.forEach((f, ci) => {
+              if (!f) return;
+              placements.push({
+                path: f.path,
+                x_cm: ox + leadMargin + ci * (imgW + gx),
+                y_cm: cur_y + topMargin,
+                w_cm: imgW, h_cm: imgH,
+              });
             });
-          });
+          } else {
+            // 舊行為：邊到邊、列高依比例
+            cells.forEach((f, ci) => {
+              if (!f) return;  // 缺的照片留空，不遞補
+              placements.push({ path: f.path, x_cm: ox + ci * (w + gx), y_cm: cur_y, w_cm: w, h_cm: row_h });
+            });
+          }
           cur_y += row_h + gy;
         }
         pages.push(placements);
@@ -1824,6 +1850,8 @@
       const [xlGrid, setXlGrid] = useState(null);
       const [tableInfo, setTableInfo] = useState(null);   // pptx/key 範本表格資訊
       const [tableInfoLoading, setTableInfoLoading] = useState(false);
+      const [tblSkipCols, setTblSkipCols] = useState(1);  // 套用表格時略過左側幾欄（標籤欄）
+      const [tblSkipRows, setTblSkipRows] = useState(1);  // 套用表格時略過頂部幾列（表頭）
       const [dragTpl, setDragTpl] = useState(false);
       const [dragImg, setDragImg] = useState(false);
       const [cropOpen, setCropOpen] = useState(false);
@@ -2278,6 +2306,59 @@
 
       // 換範本時清掉舊表格資訊
       useEffect(() => { setTableInfo(null); }, [tplPath]);
+
+      // 套用表格：用表格座標填「位置 + 圖片區總寬」，圖片欄數/列數「跟隨使用者左側設定」
+      // （表格常把多張圖放在一個寬的合併欄，欄數看不出來，所以用使用者的 cols 平分）
+      const applyTable = (t) => {
+        if (!tableInfo) return;
+        const W = tableInfo.slide.width_cm, H = tableInfo.slide.height_cm;
+        const cw = t.col_widths_cm || [], rh = t.row_heights_cm || [];
+        const sc = Math.max(0, Math.min(t.cols - 1, tblSkipCols));
+        const sr = Math.max(0, Math.min(t.rows - 1, tblSkipRows));
+        // ⚠ 實測：LibreOffice / PowerPoint 渲染表格以「列高加總」為準，忽略 graphicFrame 高度。
+        //   所以用 sumRH(列高加總) 當有效表格高、各列用原始列高(不縮放)。欄寬同理用加總。
+        const sumRH = rh.reduce((a, b) => a + b, 0) || t.height_cm;
+        const labelW = cw.slice(0, sc).reduce((a, b) => a + b, 0);
+        const imgAreaW = Math.max(0.1, cw.slice(sc).reduce((a, b) => a + b, 0));
+        const headerH = rh.slice(0, sr).reduce((a, b) => a + b, 0);   // 不縮放
+        const imgLeft = t.left_cm + labelW;
+        const imgTop = t.top_cm + headerH;
+        // 圖片列高：用「(列高加總 − 表頭) ÷ 圖片列數」平分（不縮放，對齊實際渲染）
+        const imageRows = Math.max(1, t.rows - sr);
+        const imgRowH = (sumRH - headerH) / imageRows;
+        const pct = (v) => Math.round(v * 100) / 100;
+        pushHistory("套用表格");
+        setCfg((c) => {
+          const cols = Math.max(1, c.grid.cols);          // 跟隨使用者「欄」設定
+          // 預設：圖高填 ~88% 列高 → 反推圖寬(保比例)；剩餘空間均分成等距(含外緣)
+          const firstFile = orderedFiles && orderedFiles[0];
+          const aspect0 = firstFile && firstFile.h && firstFile.w ? firstFile.h / firstFile.w : 0.62;
+          let dImgW = (imgRowH * 0.88) / aspect0;
+          const slotW0 = imgAreaW / cols;
+          if (dImgW > slotW0 * 0.96) dImgW = slotW0 * 0.96;
+          const dGap = Math.max(0, (imgAreaW - cols * dImgW) / (cols + 1));
+          return {
+            ...c,
+            slide: { width_cm: W, height_cm: H },
+            grid: {
+              ...c.grid,
+              origin: { x: pct(imgLeft / W * 100), y: pct(imgTop / H * 100) },
+              width: pct(dImgW / W * 100),       // 預設圖寬(尺寸)，可調
+              areaW: pct(imgAreaW / W * 100),    // 圖片區總寬 → 整組置中
+              gap: { x: pct(dGap / W * 100), y: 0 },  // 預設等距(間距X)，可調
+              rowH: pct(imgRowH / H * 100),   // 鎖死列高 → 圖片保比例、垂直置中、貼齊表格列
+              // cols / rows 都不動 → 完全跟隨左側面板「每頁網格」設定
+            },
+            label: {
+              ...c.label,
+              enabled: sc > 0,
+              x: pct(t.left_cm / W * 100),
+              width: pct(labelW / W * 100),
+            },
+          };
+        });
+        setStatus(`已套用表格位置/列高。欄、列數請用左側「每頁網格」設定（此表格有 ${Math.max(1, t.rows - sr)} 個圖片列）`);
+      };
 
       // drag-drop handlers
       const onDropTemplate = async (e) => {
@@ -3454,15 +3535,33 @@
                               <div className="text-xs text-amber-600">此範本沒有偵測到表格</div>
                             ) : (
                               <div className="space-y-2">
-                                <div className="text-[10px] text-slate-500">
-                                  投影片 {tableInfo.slide.width_cm} × {tableInfo.slide.height_cm} cm
+                                <div className="flex items-center gap-3 text-[10px] text-slate-500 flex-wrap">
+                                  <span>投影片 {tableInfo.slide.width_cm} × {tableInfo.slide.height_cm} cm</span>
+                                  <label className="flex items-center gap-1">略過左側
+                                    <input type="number" min="0" value={tblSkipCols}
+                                      onChange={(e) => setTblSkipCols(Math.max(0, parseInt(e.target.value) || 0))}
+                                      className="w-10 border rounded px-1 py-0.5" /> 欄(標籤)</label>
+                                  <label className="flex items-center gap-1">略過頂部
+                                    <input type="number" min="0" value={tblSkipRows}
+                                      onChange={(e) => setTblSkipRows(Math.max(0, parseInt(e.target.value) || 0))}
+                                      className="w-10 border rounded px-1 py-0.5" /> 列(表頭)</label>
                                 </div>
                                 {tableInfo.tables.map((t, ti) => (
                                   <div key={ti} className="border rounded p-2 bg-slate-50 text-xs">
-                                    <div className="font-medium text-slate-700 mb-1">
-                                      表格 {ti + 1}（slide {t.slide + 1}）· <b className="text-emerald-700">{t.rows} 列 × {t.cols} 欄</b>
+                                    <div className="flex items-center justify-between mb-1">
+                                      <div className="font-medium text-slate-700">
+                                        表格 {ti + 1}（slide {t.slide + 1}）· <b className="text-emerald-700">{t.rows} 列 × {t.cols} 欄</b>
+                                      </div>
+                                      <button onClick={() => applyTable(t)}
+                                        className="text-[11px] px-2 py-0.5 border rounded bg-emerald-600 text-white hover:bg-emerald-700"
+                                        title="用此表格座標自動設定網格（圖片自動貼進格子）">
+                                        ✓ 套用此表格
+                                      </button>
                                     </div>
-                                    <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px] text-slate-600">
+                                    <div className="text-[10px] text-slate-500">
+                                      → 套用後對齊表格位置/列高；欄、列數用左側「每頁網格」設定（此表格 {Math.max(1, t.rows - Math.min(t.rows - 1, tblSkipRows))} 個圖片列，目前面板 {cfg.grid.cols} 欄 × {cfg.grid.rows} 列）
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px] text-slate-600 mt-1">
                                       <div>位置：left {t.left_cm}, top {t.top_cm} cm</div>
                                       <div>大小：{t.width_cm} × {t.height_cm} cm</div>
                                       <div className="col-span-2 font-mono text-[10px] text-slate-500">欄寬 [{t.col_widths_cm.join(", ")}]</div>
