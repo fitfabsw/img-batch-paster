@@ -2247,11 +2247,16 @@
         const ext = (path.split(".").pop() || "").toLowerCase();
         const newMode = ext === "xlsx" ? "excel" : "slides";
         setMode(newMode);
+        // 輸出格式預設跟著「原始範本副檔名」走：匯入 .key → 輸出 .key、.pptx → .pptx、.xlsx → .xlsx
+        // (.key 上傳會被轉成 .pptx，所以 path 副檔名不可靠 → 用原始檔名 name 判斷)
+        const nameExt = (name || "").split(".").pop().toLowerCase();
+        const outExt = ["pptx", "key", "xlsx"].includes(nameExt)
+          ? nameExt : (newMode === "excel" ? "xlsx" : "pptx");
         setCfg((c) => ({
           ...c,
           output: {
             ...c.output,
-            path: (c.output.path || "out").replace(/\.(pptx|key|xlsx)$/i, "") + (newMode === "excel" ? ".xlsx" : ".pptx"),
+            path: (c.output.path || "out").replace(/\.(pptx|key|xlsx)$/i, "") + "." + outExt,
             template: path,
           },
         }));
