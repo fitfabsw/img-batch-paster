@@ -1686,7 +1686,9 @@
       const aspectOf = (pl) => {
         const f = fileByPath[pl.path];
         if (!f || !f.w || !f.h) return 0.75;
-        const c = pl._crop;
+        // 與 thumbUrl 同一套裁切解析：_crop===undefined → 回退全域 cfg.crop；null → 明確不裁切
+        // （統一裁切+依檔名 模式 placement 無 _crop，否則 aspectOf 用原圖比例、縮圖卻已裁切 → 完整貼邊≠等高對齊）
+        const c = pl._crop === undefined ? cfg.crop : pl._crop;
         if (c && c.enabled) {
           const cw = Math.max(0.01, (c.right - c.left)) * f.w;
           const ch = Math.max(0.01, (c.bottom - c.top)) * f.h;
