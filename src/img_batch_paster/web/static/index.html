@@ -325,7 +325,8 @@
     }
 
     // 把 rows 依「每頁 rows」切成多頁；每頁從 origin 重新計算
-    function computePages(slide, grid, orderedFiles, label, autoAlign) {
+    function computePages(slide, grid, orderedFiles, label, autoAlign,
+                          effAspect = (f) => (f && f.h && f.w ? f.h / f.w : 0.75)) {
       if (!orderedFiles || orderedFiles.length === 0) return [];
       const W = slide.width_cm, H = slide.height_cm;
       const ox = W * grid.origin.x / 100;
@@ -355,7 +356,7 @@
         let rowIdxInPage = 0;
         for (const { group, cells } of pageRows) {
           const anchor = cells.find((c) => c);
-          const anchorAspect = anchor && anchor.h && anchor.w ? anchor.h / anchor.w : 0.75;
+          const anchorAspect = effAspect(anchor);   // 有效比例(含裁切) → 不被拉伸
           const row_h = cellH != null ? cellH : w * anchorAspect;   // 固定列高 or 依比例
           if (label && label.enabled) {
             const lx_cm = W * label.x / 100;
@@ -369,18 +370,22 @@
           rowIdxInPage++;
 
           if (cellH != null && areaW != null) {
-            // 智能排列：圖寬=「尺寸」(w，唯一要調的)，保比例算高；間距自動均分(含外緣)；垂直置中
-            let imgW = w, imgH = w * anchorAspect;
-            if (imgH > cellH) { imgH = cellH; imgW = cellH / anchorAspect; }   // 別超過列高
-            const d = Math.max(0, (areaW - layoutCols * imgW) / (layoutCols + 1));  // 等距(含外緣)
-            const topMargin = (cellH - imgH) / 2;                               // 垂直置中(上下相等)
+            // 智能排列：以 anchor 有效比例算「格子框」(box)；間距自動均分；
+            // 每張圖在 box 內 contain 保「自己的有效比例」(裁切後也不拉伸；各欄不同裁切也對)
+            let boxW = w, boxH = w * anchorAspect;
+            if (boxH > cellH) { boxH = cellH; boxW = cellH / anchorAspect; }
+            const d = Math.max(0, (areaW - layoutCols * boxW) / (layoutCols + 1));  // 等距(含外緣)
             cells.forEach((f, ci) => {
               if (!f) return;
+              const asp = effAspect(f);
+              let iw = boxW, ih = boxW * asp;
+              if (ih > boxH) { ih = boxH; iw = boxH / asp; }   // contain 保比例
+              const boxX = ox + d + ci * (boxW + d);
               placements.push({
                 path: f.path,
-                x_cm: ox + d + ci * (imgW + d),
-                y_cm: cur_y + topMargin,
-                w_cm: imgW, h_cm: imgH,
+                x_cm: boxX + (boxW - iw) / 2,    // box 內水平置中
+                y_cm: cur_y + (cellH - ih) / 2,  // 格內垂直置中
+                w_cm: iw, h_cm: ih,
               });
             });
           } else {
@@ -2382,6 +2387,27 @@
       };
       const smartOn = cfg.grid.rowH > 0 && cfg.grid.areaW > 0;
 
+      // 有效比例：考慮裁切後的長寬比 (全域 cfg.crop 或 各欄 idxCrops)，避免圖被拉伸
+      const cropOfFile = (f) => {
+        if (!f) return null;
+        if (cfg.autoAlign && cfg.cropMode === "per-col") {
+          const { idx } = extractGroupIdx(f.name || "", cfg.label.pattern);
+          const c = (cfg.label.idxCrops || {})[String(idx)];
+          return c && c.enabled ? c : null;
+        }
+        return cfg.crop && cfg.crop.enabled ? cfg.crop : null;
+      };
+      const effAspect = (f) => {
+        if (!f || !f.w || !f.h) return 0.75;
+        let asp = f.h / f.w;
+        const c = cropOfFile(f);
+        if (c) {
+          const cw = (c.right - c.left), ch = (c.bottom - c.top);
+          if (cw > 0 && ch > 0) asp = (f.h * ch) / (f.w * cw);
+        }
+        return asp;
+      };
+
       // 預設 ON：表格讀到後、若還沒套過且目前非智能模式，自動套用智能排列 (一次)
       useEffect(() => {
         if (!autoAppliedRef.current && !smartOn && tableInfo && (tableInfo.tables || []).length > 0) {
@@ -2393,10 +2419,7 @@
       //   smartHeightFillW = grid.width%，使圖高=格高 (= 填滿格高 100%)
       //   smartMaxWidthPct = grid.width 上限 = min(填滿格高, N欄填滿圖片區)；超過沒意義
       //   smartFillRatio   = 目前 grid.width 對應的「填滿格高 %」(顯示用)
-      const _smartAspect = (() => {
-        const f = (orderedFiles || [])[0];
-        return f && f.h && f.w ? f.h / f.w : 0.62;
-      })();
+      const _smartAspect = effAspect((orderedFiles || [])[0]) || 0.62;   // 含裁切的有效比例
       const smartHeightFillW = smartOn
         ? Math.round((cfg.slide.height_cm * cfg.grid.rowH / 100 / _smartAspect) / cfg.slide.width_cm * 100 * 100) / 100
         : 100;
@@ -2571,7 +2594,7 @@
               crop: perColIdxCrop ? null : cfg.crop,
             });
           } else {
-            const pages = computePages(cfg.slide, cfg.grid, arr, cfg.label, cfg.autoAlign)
+            const pages = computePages(cfg.slide, cfg.grid, arr, cfg.label, cfg.autoAlign, effAspect)
               .map((page) => page.map(attachIdxCrop));
             if (pages.length === 0) throw new Error("沒有可匯出的圖片");
             setStatus(`匯出中… (${pages.length} 頁)`);
@@ -2785,18 +2808,13 @@
       const STAGE_W = 640;
       const scale = STAGE_W / cfg.slide.width_cm;
       const stageH = cfg.slide.height_cm * scale;
-      const _pagesRaw = computePages(cfg.slide, cfg.grid, orderedFiles, cfg.label, cfg.autoAlign);
-      // 依檔名 idx + 各欄獨立：對每個 placement 注入 per-idx crop（沒設定者 _crop=null）
-      const pages = (cfg.autoAlign && cfg.cropMode === "per-col") ? (() => {
-        const idxCrops = cfg.label.idxCrops || {};
-        return _pagesRaw.map((page) => page.map((pl) => {
-          if (!pl.path) return pl;
-          const f = orderedFiles.find((x) => x.path === pl.path);
-          const { idx } = f ? extractGroupIdx(f.name || "", cfg.label.pattern) : { idx: null };
-          const c = idx != null ? idxCrops[String(idx)] : null;
-          return { ...pl, _crop: c?.enabled ? c : null };
-        }));
-      })() : _pagesRaw;
+      const _pagesRaw = computePages(cfg.slide, cfg.grid, orderedFiles, cfg.label, cfg.autoAlign, effAspect);
+      // 每個 placement 注入「解析後的裁切」(全域 cfg.crop 或 各欄 idxCrops) → 預覽縮圖才會裁切、且不被拉伸
+      const pages = _pagesRaw.map((page) => page.map((pl) => {
+        if (!pl.path) return pl;
+        const f = orderedFiles.find((x) => x.path === pl.path);
+        return { ...pl, _crop: cropOfFile(f) };
+      }));
       const imgW_cm = cfg.slide.width_cm * cfg.grid.width / 100;
       const firstAnchor = orderedFiles[0];
       const previewH_cm = firstAnchor && firstAnchor.w ? imgW_cm * (firstAnchor.h / firstAnchor.w) : null;
