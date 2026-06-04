@@ -3258,6 +3258,8 @@
                             : orderedFiles[0];
                           if (!repFile) return;
                           if (!selected) setSelected(repFile.path);
+                          setCropSourceId(null);   // 確保走「全域」分支 (清掉殘留的來源/欄裁切目標)
+                          setCropIdxKey(null);
                           setCropOpen(true);
                         }}
                         disabled={isPerCol || noFiles}
