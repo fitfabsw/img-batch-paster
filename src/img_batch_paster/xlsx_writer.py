@@ -242,13 +242,22 @@ def write_xlsx(
         target_w, target_h = _placement_pixel_size(ws, p, mdw)
 
         if img_fit == "fill":
-            # TwoCellAnchor 拉伸到 cell 範圍 (會變形)
+            # 拉伸到 cell 範圍 (會變形)；四邊等量留白置中
+            inset = max(0.0, min(0.45, contain_inset))
+            fit_w = target_w * (1 - 2 * inset)
+            fit_h = target_h * (1 - 2 * inset)
+            col_off_px = max(0.0, (target_w - fit_w) / 2)
+            row_off_px = max(0.0, (target_h - fit_h) / 2)
             img = XLImage(str(src_path))
-            img.anchor = TwoCellAnchor(
-                _from=AnchorMarker(col=p.col - 1, colOff=0, row=p.row - 1, rowOff=0),
-                to=AnchorMarker(col=p.col - 1 + p.span_cols, colOff=0,
-                                row=p.row - 1 + p.span_rows, rowOff=0),
-                editAs="oneCell",
+            img.anchor = OneCellAnchor(
+                _from=AnchorMarker(
+                    col=p.col - 1, colOff=int(round(pixels_to_EMU(col_off_px))),
+                    row=p.row - 1, rowOff=int(round(pixels_to_EMU(row_off_px))),
+                ),
+                ext=XDRPositiveSize2D(
+                    cx=int(round(pixels_to_EMU(fit_w))),
+                    cy=int(round(pixels_to_EMU(fit_h))),
+                ),
             )
             ws._images.append(img)
         elif img_fit in ("contain", "contain_align"):
@@ -400,6 +409,11 @@ def _write_xlsx_in_cell(
             src_path = (_cover_crop if img_fit == "cover" else _stretch_resize)(
                 src_path, tw, th, tmp_dir
             )
+            # 拉伸 + 留白：拉伸後四周補白，DISPIMG 填滿 cell 時內容即內縮置中
+            if img_fit == "fill":
+                inset = max(0.0, min(0.45, contain_inset))
+                if inset > 0:
+                    src_path = _pad_contain(src_path, inset, tmp_dir)
         elif img_fit in ("contain", "contain_align"):
             # embed-in-cell（DISPIMG）由 Excel 控制 cell 內縮放，無法做跨欄等高；
             # contain_align 在此退化為 contain（補白），不致破圖。

@@ -66,7 +66,7 @@
         gapRows: 0,
         snCol: "A",
         embedInCell: false,
-        imgFit: "contain", // cover (裁切填滿) | contain (完整留白) | fill (拉伸)
+        imgFit: "contain", // cover (裁切填滿) | contain (完整貼邊) | fill (拉伸)
         containInset: 5,   // contain 模式四邊留白百分比 (%)
       },
       output: { path: "./out.pptx", template: null },
@@ -1676,7 +1676,7 @@
       // 圖片填法 + contain_align 每列共同高度（與後端 xlsx_writer 演算法一致）
       const fit = cfg.excel?.imgFit || "cover";
       const insetPct = Math.max(0, Math.min(45, cfg.excel?.containInset ?? 5));
-      const inset = (fit === "contain" || fit === "contain_align") ? insetPct / 100 : 0;
+      const inset = (fit === "contain" || fit === "contain_align" || fit === "fill") ? insetPct / 100 : 0;
 
       // 用後端給的原始 w/h + 裁剪比例「同步」算出 aspect（ih/iw），不依賴瀏覽器載入
       const fileByPath = {};
@@ -3052,8 +3052,7 @@
                         <div className="text-xs text-slate-600 mb-1">圖片填法</div>
                         <div className="flex text-xs border rounded overflow-hidden">
                           {[
-                            { v: "cover", label: "裁切填滿" },
-                            { v: "contain", label: "完整留白" },
+                            { v: "contain", label: "完整貼邊" },
                             { v: "contain_align", label: "等高對齊" },
                             { v: "fill", label: "拉伸" },
                           ].map((opt) => (
@@ -3064,14 +3063,16 @@
                             </button>
                           ))}
                         </div>
-                        {(cfg.excel.imgFit === "contain" || cfg.excel.imgFit === "contain_align") && (
+                        {(cfg.excel.imgFit === "contain" || cfg.excel.imgFit === "contain_align" || cfg.excel.imgFit === "fill") && (
                           <div className="mt-2">
                             <NumberInput label="留白" suffix="%" step={1} value={cfg.excel.containInset ?? 5}
                               onChange={(v) => setCfg((c) => ({ ...c, excel: { ...c.excel, containInset: Math.max(0, Math.min(45, parseFloat(v) || 0)) } }))} />
                             <div className="text-[10px] text-slate-400 mt-1">
                               {cfg.excel.imgFit === "contain_align"
                                 ? "等高對齊：同列圖片縮到相同高度、保比例、上下緣對齊"
-                                : "contain 模式下每邊留白佔 cell 寬高的百分比"}
+                                : cfg.excel.imgFit === "fill"
+                                ? "拉伸模式下圖片變形填滿，四邊留白佔 cell 寬高的百分比"
+                                : "完整貼邊模式下每邊留白佔 cell 寬高的百分比"}
                             </div>
                           </div>
                         )}
