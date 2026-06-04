@@ -390,10 +390,19 @@
               xacc += widths[ci] + d;   // 缺圖也佔位 → 跨列欄對齊
             });
           } else {
-            // 舊行為：邊到邊、列高依比例
+            // 非智能：邊到邊、列高依 anchor 比例。每張圖在 (w × row_h) 內 contain 保「自己的有效比例」
+            // → 各欄獨立裁切時也不被拉伸 (均勻圖 = 填滿，行為不變)
             cells.forEach((f, ci) => {
               if (!f) return;  // 缺的照片留空，不遞補
-              placements.push({ path: f.path, x_cm: ox + ci * (w + gx), y_cm: cur_y, w_cm: w, h_cm: row_h });
+              const asp = effAspect(f);
+              let iw = w, ih = w * asp;
+              if (ih > row_h) { ih = row_h; iw = row_h / asp; }   // contain 保比例
+              const cellX = ox + ci * (w + gx);
+              placements.push({
+                path: f.path,
+                x_cm: cellX + (w - iw) / 2, y_cm: cur_y + (row_h - ih) / 2,   // 格內置中
+                w_cm: iw, h_cm: ih,
+              });
             });
           }
           cur_y += row_h + gy;
