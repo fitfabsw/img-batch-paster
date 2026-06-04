@@ -995,17 +995,7 @@
 
       return (
         <div className="space-y-3">
-          {/* 分群方式：依分隔符 / 依位置 */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-600">分群方式</span>
-            <div className="flex border rounded overflow-hidden text-xs">
-              <button onClick={() => switchMode("delim")}
-                className={`px-2 py-0.5 ${splitMode !== "pos" ? "bg-slate-700 text-white" : "hover:bg-slate-100"}`}>依分隔符</button>
-              <button onClick={() => switchMode("pos")}
-                className={`px-2 py-0.5 ${splitMode === "pos" ? "bg-slate-700 text-white" : "hover:bg-slate-100"}`}>依位置</button>
-            </div>
-          </div>
-
+          {/* 「依位置」模式 UI 暫時隱藏 (code 保留)；分群一律走依分隔符 */}
           {splitMode !== "pos" && (
             <div className="flex items-center gap-2">
               <span className="text-xs text-slate-600">分隔符</span>
