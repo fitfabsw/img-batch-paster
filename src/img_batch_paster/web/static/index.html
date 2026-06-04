@@ -370,23 +370,24 @@
           rowIdxInPage++;
 
           if (cellH != null && areaW != null) {
-            // 智能排列：以 anchor 有效比例算「格子框」(box)；間距自動均分；
-            // 每張圖在 box 內 contain 保「自己的有效比例」(裁切後也不拉伸；各欄不同裁切也對)
-            let boxW = w, boxH = w * anchorAspect;
-            if (boxH > cellH) { boxH = cellH; boxW = cellH / anchorAspect; }
-            const d = Math.max(0, (areaW - layoutCols * boxW) / (layoutCols + 1));  // 等距(含外緣)
+            // 智能排列：統一高度 H (所有圖同高，capped 格高)；各欄寬度依「各自的有效比例(含裁切)」
+            // → 同欄裁切一致 → 欄寬一致跨列對齊；各欄不同裁切時高度仍統一、不拉伸。
+            let H = w * anchorAspect;
+            if (H > cellH) H = cellH;
+            // 各欄寬度：有圖用其有效比例；缺圖用 anchor 比例佔位 (維持欄對齊)
+            const widths = cells.map((f) => H / (f ? effAspect(f) : anchorAspect));
+            const sumW = widths.reduce((a, b) => a + b, 0);
+            const d = Math.max(0, (areaW - sumW) / (layoutCols + 1));   // 等距(含外緣)
+            let xacc = ox + d;
             cells.forEach((f, ci) => {
-              if (!f) return;
-              const asp = effAspect(f);
-              let iw = boxW, ih = boxW * asp;
-              if (ih > boxH) { ih = boxH; iw = boxH / asp; }   // contain 保比例
-              const boxX = ox + d + ci * (boxW + d);
-              placements.push({
-                path: f.path,
-                x_cm: boxX + (boxW - iw) / 2,    // box 內水平置中
-                y_cm: cur_y + (cellH - ih) / 2,  // 格內垂直置中
-                w_cm: iw, h_cm: ih,
-              });
+              if (f) {
+                placements.push({
+                  path: f.path,
+                  x_cm: xacc, y_cm: cur_y + (cellH - H) / 2,   // 垂直置中、統一高度
+                  w_cm: widths[ci], h_cm: H,
+                });
+              }
+              xacc += widths[ci] + d;   // 缺圖也佔位 → 跨列欄對齊
             });
           } else {
             // 舊行為：邊到邊、列高依比例
