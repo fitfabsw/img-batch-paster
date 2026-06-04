@@ -2438,6 +2438,12 @@
       const smartFillRatio = smartOn && smartHeightFillW > 0
         ? Math.round(cfg.grid.width / smartHeightFillW * 100)
         : 100;
+      // 智能模式：grid.width 若超過上限 (裁切/比例變動後可能發生) → 自動夾回，避免「填滿格高」>100% 與溢出
+      useEffect(() => {
+        if (smartOn && isFinite(smartMaxWidthPct) && cfg.grid.width > smartMaxWidthPct + 0.01) {
+          setGrid("width", smartMaxWidthPct);
+        }
+      }, [smartOn, smartMaxWidthPct, cfg.grid.width]);
 
       // drag-drop handlers
       const onDropTemplate = async (e) => {
