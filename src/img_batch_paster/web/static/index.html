@@ -338,6 +338,8 @@
       const colsArg = autoAlign
         ? detectIdxList(orderedFiles, label.pattern, label.idxSort || "auto", label.idxOrder || [])
         : cols;
+      // 版面實際欄數：對位模式用偵測到的 idx 欄數，否則用 grid.cols
+      const layoutCols = Array.isArray(colsArg) ? Math.max(1, colsArg.length) : cols;
 
       // 表格模式 (套用表格後)：列高鎖死 (cellH) + 圖片區總寬 (areaW)
       // → 每列 N 張圖：同尺寸保比例、水平等距(含外緣 d)、垂直置中(上下 h 相等)
@@ -371,7 +373,7 @@
             // 整組水平置中(外緣相等)、每張垂直置中。套用表格時已給好預設 w/gx。
             let imgW = w, imgH = w * anchorAspect;
             if (imgH > cellH) { imgH = cellH; imgW = cellH / anchorAspect; }   // 別超過列高
-            const groupW = cols * imgW + (cols - 1) * gx;
+            const groupW = layoutCols * imgW + (layoutCols - 1) * gx;
             const leadMargin = (areaW - groupW) / 2;                            // 整組置中 → 左右外緣相等
             const topMargin = (cellH - imgH) / 2;                               // 垂直置中(上下相等)
             cells.forEach((f, ci) => {
@@ -2205,6 +2207,13 @@
           return next;
         });
       };
+
+      // idx 對位模式：把 grid.cols 同步成偵測到的欄數，讓「面板顯示＝實際值＝版面用的」一致
+      useEffect(() => {
+        if (cfg.autoAlign && autoIdxList.length > 0 && cfg.grid.cols !== autoIdxList.length) {
+          setGrid("cols", autoIdxList.length);
+        }
+      }, [cfg.autoAlign, autoIdxList.length, cfg.grid.cols]);
 
       const pick = async (kind, prompt, extensions, defaultPath) => {
         const r = await fetch("/api/pick", {
