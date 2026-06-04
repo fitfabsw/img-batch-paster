@@ -36,6 +36,8 @@
       label: {
         enabled: true,
         pattern: "{group}-{idx}",
+        splitMode: "delim",        // 分群方式：delim=依分隔符 / pos=依固定位置
+        splitPos: null,            // pos 模式：SN 取前幾個字（null=用字母/數字邊界自動偵測）
         delim: "-",                // 分段點選用的分隔符
         roles: ["sn", "idx"],      // 各段角色：sn | idx | skip
         rawMode: false,            // true=直接編輯 pattern, false=分段點選
@@ -207,9 +209,13 @@
     function patternToRegex(pattern, groupCapture = "(.+?)", idxCapture = "(.+?)") {
       // 用佔位符暫存避免被字面 escape 影響
       const G = "G", I = "I", S = "S";
-      let p = pattern.replace(/\{group\}/g, G).replace(/\{idx\}/g, I).replace(/\{skip\}/g, S);
+      // {group:N} = 固定取前 N 個字當 SN（依位置模式）
+      let fixedLen = null;
+      let p = pattern.replace(/\{group:(\d+)\}/g, (_, n) => { fixedLen = +n; return G; });
+      p = p.replace(/\{group\}/g, G).replace(/\{idx\}/g, I).replace(/\{skip\}/g, S);
       p = p.replace(/[.+?^$()|\[\]\\]/g, "\\$&");
-      p = p.replace(new RegExp(G, "g"), groupCapture)
+      const gCap = fixedLen != null ? `(.{${fixedLen}})` : groupCapture;
+      p = p.replace(new RegExp(G, "g"), gCap)
            .replace(new RegExp(I, "g"), idxCapture)
            .replace(new RegExp(S, "g"), ".+?");
       return p;
@@ -227,7 +233,7 @@
 
     // 嚴格版：match 不到回傳 null（給 UI 統計用）
     function tryExtract(filename, pattern) {
-      if (!pattern || !pattern.includes("{group}")) return null;
+      if (!pattern || !pattern.includes("{group")) return null;
       const stem = filename.replace(/\.[^./]+$/, "");
       try {
         const m = stem.match(new RegExp("^" + patternToRegex(pattern) + "$"));
@@ -815,6 +821,18 @@
       const snIdx = roles.indexOf("sn");
       const idxIdx = roles.indexOf("idx");
 
+      // ── 依位置模式（無分隔符，固定取前 N 個字當 SN）──
+      const splitMode = cfgLabel.splitMode || "delim";
+      // 預設切點：字母/數字邊界（結尾連續數字之前）→ SN 長度
+      const autoPos = (() => {
+        const m = firstStem.match(/^(.*?)(\d+)$/);
+        if (m && m[1].length) return m[1].length;
+        return Math.max(1, Math.ceil((firstStem.length || 2) / 2));
+      })();
+      const posMax = Math.max(1, (firstStem.length || 1) - 1);
+      const posN = Math.max(1, Math.min(posMax, cfgLabel.splitPos ?? autoPos));
+      const buildPosPattern = (n) => (autoAlign ? `{group:${n}}{idx}` : `{group:${n}}{skip}`);
+
       // 沒勾「依檔名對位」時，idx 角色視為 skip（既不出現在 pattern、也不擋 SN 選取）
       const effRole = (i) => {
         const r = roles[i] || "skip";
@@ -832,16 +850,25 @@
       const updateLabel = (patch) =>
         setCfg((c) => ({ ...c, label: { ...c.label, ...patch } }));
 
-      // 檔案 / 分隔符 變動時自動同步 pattern + roles 長度
+      // 檔案 / 分隔符 變動時自動同步 pattern + roles 長度（僅依分隔符模式）
       useEffect(() => {
-        if (cfgLabel.rawMode) return;
+        if (cfgLabel.rawMode || splitMode === "pos") return;
         if (!segs.length) return;
         const targetPattern = buildPattern(roles);
         const rolesChanged = (cfgLabel.roles || []).length !== roles.length;
         if (targetPattern !== cfgLabel.pattern || rolesChanged) {
           updateLabel({ pattern: targetPattern, roles });
         }
-      }, [firstStem, delim, cfgLabel.rawMode, autoAlign]);
+      }, [firstStem, delim, cfgLabel.rawMode, autoAlign, splitMode]);
+
+      // 依位置模式：保持 pattern = {group:N}{idx|skip}
+      useEffect(() => {
+        if (splitMode !== "pos" || !firstStem) return;
+        const want = buildPosPattern(posN);
+        if (want !== cfgLabel.pattern || cfgLabel.splitPos == null) {
+          updateLabel({ splitPos: posN, pattern: want });
+        }
+      }, [splitMode, posN, autoAlign, firstStem]);
 
       // SN 列：點 chip = 設為 SN；點已選的 = 取消；該段已是 idx (且對位啟用中) 則禁用
       const toggleSn = (i) => {
@@ -869,7 +896,21 @@
         updateLabel({ delim: d, roles: newRoles, pattern, rawMode: false });
       };
 
-      const hasSn = snIdx >= 0;
+      const switchMode = (mode) => {
+        if (mode === splitMode) return;
+        if (mode === "pos") {
+          const n = cfgLabel.splitPos ?? autoPos;
+          updateLabel({ splitMode: "pos", splitPos: n, pattern: buildPosPattern(n), rawMode: false });
+        } else {
+          updateLabel({ splitMode: "delim", pattern: buildPattern(roles), rawMode: false });
+        }
+      };
+      const setPos = (n) => {
+        const v = Math.max(1, Math.min(posMax, n));
+        updateLabel({ splitMode: "pos", splitPos: v, pattern: buildPosPattern(v) });
+      };
+
+      const hasSn = splitMode === "pos" ? !!firstStem : snIdx >= 0;
       const preview = firstFile && hasSn ? tryExtract(firstFile.name, cfgLabel.pattern) : null;
 
       let okCount = 0;
@@ -913,23 +954,83 @@
 
       return (
         <div className="space-y-3">
+          {/* 分群方式：依分隔符 / 依位置 */}
           <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-600">分隔符</span>
+            <span className="text-xs text-slate-600">分群方式</span>
             <div className="flex border rounded overflow-hidden text-xs">
-              {DELIMS.map((d) => (
-                <button key={d.v}
-                  onClick={() => onDelimChange(d.v)}
-                  className={`px-2 py-0.5 ${delim === d.v ? "bg-slate-700 text-white" : "hover:bg-slate-100"}`}>
-                  {d.label}
-                </button>
-              ))}
+              <button onClick={() => switchMode("delim")}
+                className={`px-2 py-0.5 ${splitMode !== "pos" ? "bg-slate-700 text-white" : "hover:bg-slate-100"}`}>依分隔符</button>
+              <button onClick={() => switchMode("pos")}
+                className={`px-2 py-0.5 ${splitMode === "pos" ? "bg-slate-700 text-white" : "hover:bg-slate-100"}`}>依位置</button>
             </div>
           </div>
 
+          {splitMode !== "pos" && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-600">分隔符</span>
+              <div className="flex border rounded overflow-hidden text-xs">
+                {DELIMS.map((d) => (
+                  <button key={d.v}
+                    onClick={() => onDelimChange(d.v)}
+                    className={`px-2 py-0.5 ${delim === d.v ? "bg-slate-700 text-white" : "hover:bg-slate-100"}`}>
+                    {d.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {!firstFile ? (
             <div className="text-xs text-slate-400 border rounded p-2 bg-slate-50">
-              請先上傳圖片，再點選哪一段是 SN
+              請先上傳圖片，再設定 SN 取法
             </div>
+          ) : splitMode === "pos" ? (
+            <>
+              <div>
+                <div className="text-xs text-slate-700 mb-1">
+                  <b>SN 取前幾個字？</b>
+                  <span className="text-[10px] text-slate-400 ml-1">範例 <span className="font-mono">{firstFile.name}</span></span>
+                </div>
+                {/* 視覺化切點：綠=SN，藍=其餘（對位數字） */}
+                <div className="flex flex-wrap items-center gap-0.5 font-mono text-sm mb-2 select-none">
+                  {firstStem.split("").map((ch, i) => (
+                    <React.Fragment key={i}>
+                      {i === posN && <span className="inline-block w-1 bg-rose-500 rounded" style={{ height: "1.4em" }} title="切點"></span>}
+                      <span className={`px-1 py-0.5 rounded ${i < posN ? "bg-emerald-100 text-emerald-800" : "bg-sky-100 text-sky-800"}`}>{ch === " " ? "␣" : ch}</span>
+                    </React.Fragment>
+                  ))}
+                </div>
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-xs text-slate-600">SN 取前</span>
+                  <button onClick={() => setPos(posN - 1)} className="border rounded w-6 h-6 text-sm hover:bg-slate-100">−</button>
+                  <span className="font-mono text-sm w-6 text-center">{posN}</span>
+                  <button onClick={() => setPos(posN + 1)} className="border rounded w-6 h-6 text-sm hover:bg-slate-100">+</button>
+                  <span className="text-xs text-slate-600">個字</span>
+                  <button onClick={() => setPos(autoPos)} className="ml-2 text-[10px] px-2 py-0.5 border rounded text-slate-600 hover:bg-slate-100" title="字母/數字邊界自動偵測">自動 ({autoPos})</button>
+                </div>
+                <div className="text-xs p-2 border rounded bg-emerald-50">
+                  抽出 SN：<b className="font-mono text-emerald-800">{preview ? preview.group : "(無法抽出)"}</b>
+                  {autoAlign && <span className="ml-3">對位欄：<b className="font-mono text-sky-800">{preview && preview.idx != null ? preview.idx : "(無)"}</b></span>}
+                  <div className="text-[10px] text-slate-500 mt-0.5">
+                    {okCount === total
+                      ? `全部 ${total} 個檔案皆可抽出 ✓`
+                      : `${okCount} / ${total} 個檔案可抽出${okCount < total ? "（其餘以原檔名顯示）" : ""}`}
+                  </div>
+                </div>
+              </div>
+              {autoAlign && (
+                <div className="pt-2 border-t bg-sky-50 -mx-1 px-2 py-2 rounded space-y-2">
+                  <div className="text-xs text-sky-800 font-semibold">🎯 對位欄位（切點後的數字自動展開）</div>
+                  <IdxColumnsEditor
+                    label={cfgLabel}
+                    allFiles={allFiles}
+                    updateLabel={updateLabel}
+                    perColCrop={perColCrop}
+                    onOpenIdxCrop={onOpenIdxCrop}
+                  />
+                </div>
+              )}
+            </>
           ) : (
             <>
               <div>
