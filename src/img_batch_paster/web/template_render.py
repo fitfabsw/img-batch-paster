@@ -45,8 +45,12 @@ def render_first_slide(pptx_path: Path) -> Path:
     if out_png.exists():
         return out_png
 
-    # macOS: 優先用 Keynote (daemon-warm 後可以 ~1-2s)
-    if _sys.platform == "darwin":
+    # macOS: 預設用 LibreOffice 渲染 preview（穩定）。
+    # Keynote 14.2 的 AppleScript document scripting 壞掉（count of documents / front
+    # document 都回 -1708/-1728），會卡滿 60s timeout 才 fallback，preview 因此慢到 1 分鐘。
+    # 要重新啟用 Keynote 渲染（速度較快但需 Keynote 能被 AppleScript 控）設 IBP_PREVIEW_KEYNOTE=1。
+    import os as _os
+    if _sys.platform == "darwin" and _os.environ.get("IBP_PREVIEW_KEYNOTE") == "1":
         try:
             from ..keynote_export import render_pptx_via_keynote
             kn_png = render_pptx_via_keynote(pptx_path)
@@ -56,7 +60,7 @@ def render_first_slide(pptx_path: Path) -> Path:
         except Exception as _e:
             print(f"[render] Keynote fallback → LO: {_e}", file=_sys.stderr)
 
-    # fallback: LibreOffice
+    # LibreOffice 渲染
     soffice = (
         shutil.which("soffice")
         or ("/usr/local/bin/soffice" if Path("/usr/local/bin/soffice").exists() else None)
