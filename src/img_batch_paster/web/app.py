@@ -343,6 +343,47 @@ def api_template_load():
     })
 
 
+@app.post("/api/template/table-info")
+def api_template_table_info():
+    """讀取 .pptx 範本中所有表格的幾何（列/欄/位置/各欄寬/各列高），供自動貼圖用。
+    .key 範本在上傳時已轉成 .pptx，故此處一律吃 .pptx 路徑。"""
+    from pptx import Presentation
+    from pptx.util import Emu
+    data = request.get_json(force=True)
+    path = Path(data["path"]).expanduser().resolve()
+    if not path.is_file():
+        return jsonify({"error": f"檔案不存在: {path}"}), 400
+    if path.suffix.lower() != ".pptx":
+        return jsonify({"error": f"只能讀 .pptx 表格（.key 上傳時會自動轉檔），目前: {path.suffix}"}), 400
+    try:
+        prs = Presentation(str(path))
+    except Exception as e:
+        return jsonify({"error": f"無法讀取簡報: {e}"}), 500
+    sw, sh = Emu(prs.slide_width).cm, Emu(prs.slide_height).cm
+    tables = []
+    for si, slide in enumerate(prs.slides):
+        for shp in slide.shapes:
+            if not getattr(shp, "has_table", False):
+                continue
+            t = shp.table
+            tables.append({
+                "slide": si,
+                "name": shp.name,
+                "rows": len(t.rows),
+                "cols": len(t.columns),
+                "left_cm": round(Emu(shp.left).cm, 2),
+                "top_cm": round(Emu(shp.top).cm, 2),
+                "width_cm": round(Emu(shp.width).cm, 2),
+                "height_cm": round(Emu(shp.height).cm, 2),
+                "col_widths_cm": [round(Emu(c.width).cm, 2) for c in t.columns],
+                "row_heights_cm": [round(Emu(r.height).cm, 2) for r in t.rows],
+            })
+    return jsonify({
+        "slide": {"width_cm": round(sw, 2), "height_cm": round(sh, 2)},
+        "tables": tables,
+    })
+
+
 @app.post("/api/template/excel-grid")
 def api_template_excel_grid():
     """Return cell-grid structure of an .xlsx template for frontend preview."""

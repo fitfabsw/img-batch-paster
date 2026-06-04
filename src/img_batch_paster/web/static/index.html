@@ -1822,6 +1822,8 @@
       const [tpl, setTpl] = useState(null);
       const [mode, setMode] = useState("slides");
       const [xlGrid, setXlGrid] = useState(null);
+      const [tableInfo, setTableInfo] = useState(null);   // pptx/key 範本表格資訊
+      const [tableInfoLoading, setTableInfoLoading] = useState(false);
       const [dragTpl, setDragTpl] = useState(false);
       const [dragImg, setDragImg] = useState(false);
       const [cropOpen, setCropOpen] = useState(false);
@@ -2253,6 +2255,29 @@
         } catch (e) { setStatus("錯誤: " + e.message); }
         finally { setBusy(false); }
       };
+
+      // 讀取 pptx/key 範本中的表格幾何（列/欄/位置/各欄寬列高）
+      const loadTableInfo = async () => {
+        if (!tplPath) { setStatus("請先上傳範本"); return; }
+        setTableInfoLoading(true);
+        try {
+          const r = await fetch("/api/template/table-info", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path: tplPath }),
+          });
+          const j = await r.json();
+          if (!r.ok) throw new Error(j.error || "讀取失敗");
+          setTableInfo(j);
+          setStatus(j.tables?.length ? `偵測到 ${j.tables.length} 個表格` : "此範本沒有表格");
+        } catch (e) {
+          setTableInfo({ tables: [], error: e.message });
+          setStatus("讀取表格失敗: " + e.message);
+        } finally { setTableInfoLoading(false); }
+      };
+
+      // 換範本時清掉舊表格資訊
+      useEffect(() => { setTableInfo(null); }, [tplPath]);
 
       // drag-drop handlers
       const onDropTemplate = async (e) => {
@@ -3411,6 +3436,45 @@
                       )}
                        </div>
                       </div>
+
+                      {/* 表格資訊（pptx/key 範本）— 讀範本裡的表格幾何，為自動貼圖鋪路 */}
+                      {mode === "slides" && (
+                        <div className="mt-3 pt-3 border-t border-slate-100 shrink-0">
+                          <div className="flex items-center gap-2 mb-2">
+                            <button onClick={loadTableInfo} disabled={!tplPath || tableInfoLoading}
+                              className="text-xs px-2.5 py-1 border rounded bg-slate-700 text-white hover:bg-slate-800 disabled:opacity-40">
+                              {tableInfoLoading ? "讀取中…" : "📐 讀取表格資訊"}
+                            </button>
+                            <span className="text-[10px] text-slate-400">讀範本投影片裡的表格列/欄數與位置</span>
+                          </div>
+                          {tableInfo && (
+                            tableInfo.error ? (
+                              <div className="text-xs text-rose-600">{tableInfo.error}</div>
+                            ) : (tableInfo.tables || []).length === 0 ? (
+                              <div className="text-xs text-amber-600">此範本沒有偵測到表格</div>
+                            ) : (
+                              <div className="space-y-2">
+                                <div className="text-[10px] text-slate-500">
+                                  投影片 {tableInfo.slide.width_cm} × {tableInfo.slide.height_cm} cm
+                                </div>
+                                {tableInfo.tables.map((t, ti) => (
+                                  <div key={ti} className="border rounded p-2 bg-slate-50 text-xs">
+                                    <div className="font-medium text-slate-700 mb-1">
+                                      表格 {ti + 1}（slide {t.slide + 1}）· <b className="text-emerald-700">{t.rows} 列 × {t.cols} 欄</b>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px] text-slate-600">
+                                      <div>位置：left {t.left_cm}, top {t.top_cm} cm</div>
+                                      <div>大小：{t.width_cm} × {t.height_cm} cm</div>
+                                      <div className="col-span-2 font-mono text-[10px] text-slate-500">欄寬 [{t.col_widths_cm.join(", ")}]</div>
+                                      <div className="col-span-2 font-mono text-[10px] text-slate-500">列高 [{t.row_heights_cm.join(", ")}]</div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )
+                          )}
+                        </div>
+                      )}
                     </>
                   );
                 })()}
