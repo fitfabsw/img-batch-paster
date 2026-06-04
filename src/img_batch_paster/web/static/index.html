@@ -1642,6 +1642,42 @@
       const alignToFlex = { left: "flex-start", center: "center", right: "flex-end" };
       const vAlignToFlex = { top: "flex-start", center: "center", middle: "center", bottom: "flex-end" };
 
+      // 圖片填法 + contain_align 每列共同高度（與後端 xlsx_writer 演算法一致）
+      const fit = cfg.excel?.imgFit || "cover";
+      const insetPct = Math.max(0, Math.min(45, cfg.excel?.containInset ?? 5));
+      const inset = (fit === "contain" || fit === "contain_align") ? insetPct / 100 : 0;
+
+      // 用後端給的原始 w/h + 裁剪比例「同步」算出 aspect（ih/iw），不依賴瀏覽器載入
+      const fileByPath = {};
+      (orderedFiles || []).forEach((f) => { fileByPath[f.path] = f; });
+      const aspectOf = (pl) => {
+        const f = fileByPath[pl.path];
+        if (!f || !f.w || !f.h) return 0.75;
+        const c = pl._crop;
+        if (c && c.enabled) {
+          const cw = Math.max(0.01, (c.right - c.left)) * f.w;
+          const ch = Math.max(0.01, (c.bottom - c.top)) * f.h;
+          return cw ? ch / cw : 0.75;
+        }
+        return f.h / f.w;
+      };
+
+      const rowCommonH = {};
+      if (fit === "contain_align") {
+        for (const pl of placements) {
+          if (pl.text != null || !pl.path) continue;
+          const ci = pl.col - 1, ri = pl.row - 1;
+          if (ci < 0 || ri < 0 || ci >= grid.cols.length || ri >= grid.rows.length) continue;
+          const cw = (cumX[ci + pl.span_cols] || cumX[grid.cols.length]) - cumX[ci];
+          const ch = (cumY[ri + pl.span_rows] || cumY[grid.rows.length]) - cumY[ri];
+          const aspect = aspectOf(pl);
+          const availW = cw * (1 - 2 * inset), availH = ch * (1 - 2 * inset);
+          let fh = availW * aspect;
+          if (fh > availH) fh = availH;
+          rowCommonH[pl.row] = rowCommonH[pl.row] == null ? fh : Math.min(rowCommonH[pl.row], fh);
+        }
+      }
+
       return (
         <div className="border rounded-lg bg-white">
           <div style={{ position: "relative", width: totalW + HEADER_W, height: totalH + HEADER_H }}>
@@ -1729,9 +1765,24 @@
                   }}>{pl.text}</div>
                 );
               }
-              const fit = cfg.excel?.imgFit || "cover";
-              const insetPct = Math.max(0, Math.min(45, cfg.excel?.containInset ?? 5));
-              const inset = fit === "contain" ? insetPct / 100 : 0;  // 四邊留白
+              const ringCls = selected === pl.path ? "ring-4 ring-emerald-500 shadow-[0_0_18px_4px_rgba(16,185,129,0.7)] z-10" : "";
+              if (fit === "contain_align") {
+                // 等高對齊：該列共同高度，寬度依 aspect（同步算、不溢出），置中
+                const aspect = aspectOf(pl);
+                const fitH = rowCommonH[pl.row] || (h * (1 - 2 * inset));
+                const fitW = aspect ? fitH / aspect : w * (1 - 2 * inset);
+                return (
+                  <img key={`my-${i}`} src={thumbUrl(pl.path, 400, pl._crop)}
+                    data-preview-path={pl.path}
+                    style={{
+                      position: "absolute",
+                      left: x + (w - fitW) / 2, top: y + (h - fitH) / 2,
+                      width: fitW, height: fitH, objectFit: "contain",
+                      scrollMargin: 30,
+                    }}
+                    className={ringCls} />
+                );
+              }
               return (
                 <img key={`my-${i}`}
                   src={thumbUrl(pl.path, 400, pl._crop)}
@@ -1743,7 +1794,7 @@
                     objectFit: fit,
                     scrollMargin: 30,
                   }}
-                  className={selected === pl.path ? "ring-4 ring-emerald-500 shadow-[0_0_18px_4px_rgba(16,185,129,0.7)] z-10" : ""} />
+                  className={ringCls} />
               );
             })}
           </div>
@@ -2812,6 +2863,7 @@
                           {[
                             { v: "cover", label: "裁切填滿" },
                             { v: "contain", label: "完整留白" },
+                            { v: "contain_align", label: "等高對齊" },
                             { v: "fill", label: "拉伸" },
                           ].map((opt) => (
                             <button key={opt.v}
@@ -2821,11 +2873,15 @@
                             </button>
                           ))}
                         </div>
-                        {cfg.excel.imgFit === "contain" && (
+                        {(cfg.excel.imgFit === "contain" || cfg.excel.imgFit === "contain_align") && (
                           <div className="mt-2">
                             <NumberInput label="留白" suffix="%" step={1} value={cfg.excel.containInset ?? 5}
                               onChange={(v) => setCfg((c) => ({ ...c, excel: { ...c.excel, containInset: Math.max(0, Math.min(45, parseFloat(v) || 0)) } }))} />
-                            <div className="text-[10px] text-slate-400 mt-1">contain 模式下每邊留白佔 cell 寬高的百分比</div>
+                            <div className="text-[10px] text-slate-400 mt-1">
+                              {cfg.excel.imgFit === "contain_align"
+                                ? "等高對齊：同列圖片縮到相同高度、保比例、上下緣對齊"
+                                : "contain 模式下每邊留白佔 cell 寬高的百分比"}
+                            </div>
                           </div>
                         )}
                       </div>

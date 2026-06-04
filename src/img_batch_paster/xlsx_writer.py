@@ -204,6 +204,27 @@ def write_xlsx(
 
     mdw = _default_mdw(wb)
 
+    # contain_align（維持比例·等高）：先算每列的共同高度 = 該列各圖 contain 高度的最小值
+    # 之後該列每張圖都縮到此高度（保比例、寬度隨之），讓同列圖片上下緣對齊。
+    row_common_h: dict[int, float] = {}
+    if img_fit == "contain_align":
+        _inset = max(0.0, min(0.45, contain_inset))
+        for p in placements:
+            if p.text is not None or p.path is None or not Path(p.path).is_file():
+                continue
+            _src = _apply_crop(Path(p.path), p.crop or crop, out_path.parent / "_crops")
+            _tw, _th = _placement_pixel_size(ws, p, mdw)
+            with PILImage.open(_src) as _im:
+                _iw, _ih = _im.size
+            _aspect = _ih / _iw if _iw else 1.0
+            _avail_w = _tw * (1 - 2 * _inset)
+            _avail_h = _th * (1 - 2 * _inset)
+            _fh = _avail_w * _aspect
+            if _fh > _avail_h and _avail_h > 0:
+                _fh = _avail_h
+            cur = row_common_h.get(p.row)
+            row_common_h[p.row] = _fh if cur is None else min(cur, _fh)
+
     for p in placements:
         cell = ws.cell(row=p.row, column=p.col)
         if p.text is not None:
@@ -230,19 +251,24 @@ def write_xlsx(
                 editAs="oneCell",
             )
             ws._images.append(img)
-        elif img_fit == "contain":
+        elif img_fit in ("contain", "contain_align"):
             # 保長寬比、放入 cell 並四邊留白置中
             with PILImage.open(src_path) as im:
                 iw, ih = im.size
             aspect = ih / iw if iw else 1.0
             inset = max(0.0, min(0.45, contain_inset))
-            avail_w = target_w * (1 - 2 * inset)
-            avail_h = target_h * (1 - 2 * inset)
-            fit_w = avail_w
-            fit_h = fit_w * aspect
-            if fit_h > avail_h and avail_h > 0:
-                fit_h = avail_h
-                fit_w = fit_h / aspect if aspect else avail_w
+            if img_fit == "contain_align" and p.row in row_common_h:
+                # 等高：用該列共同高度，寬度依比例
+                fit_h = row_common_h[p.row]
+                fit_w = fit_h / aspect if aspect else target_w * (1 - 2 * inset)
+            else:
+                avail_w = target_w * (1 - 2 * inset)
+                avail_h = target_h * (1 - 2 * inset)
+                fit_w = avail_w
+                fit_h = fit_w * aspect
+                if fit_h > avail_h and avail_h > 0:
+                    fit_h = avail_h
+                    fit_w = fit_h / aspect if aspect else avail_w
             col_off_px = max(0.0, (target_w - fit_w) / 2)
             row_off_px = max(0.0, (target_h - fit_h) / 2)
             img = XLImage(str(src_path))
@@ -374,7 +400,9 @@ def _write_xlsx_in_cell(
             src_path = (_cover_crop if img_fit == "cover" else _stretch_resize)(
                 src_path, tw, th, tmp_dir
             )
-        elif img_fit == "contain":
+        elif img_fit in ("contain", "contain_align"):
+            # embed-in-cell（DISPIMG）由 Excel 控制 cell 內縮放，無法做跨欄等高；
+            # contain_align 在此退化為 contain（補白），不致破圖。
             inset = max(0.0, min(0.45, contain_inset))
             if inset > 0:
                 tmp_dir = out_path.parent / "_crops"
