@@ -369,18 +369,16 @@
           rowIdxInPage++;
 
           if (cellH != null && areaW != null) {
-            // 表格模式：圖寬=「尺寸」(w，你控制)，保比例算高；間距=「間距X」(gx，你控制)
-            // 整組水平置中(外緣相等)、每張垂直置中。套用表格時已給好預設 w/gx。
+            // 智能排列：圖寬=「尺寸」(w，唯一要調的)，保比例算高；間距自動均分(含外緣)；垂直置中
             let imgW = w, imgH = w * anchorAspect;
             if (imgH > cellH) { imgH = cellH; imgW = cellH / anchorAspect; }   // 別超過列高
-            const groupW = layoutCols * imgW + (layoutCols - 1) * gx;
-            const leadMargin = (areaW - groupW) / 2;                            // 整組置中 → 左右外緣相等
+            const d = Math.max(0, (areaW - layoutCols * imgW) / (layoutCols + 1));  // 等距(含外緣)
             const topMargin = (cellH - imgH) / 2;                               // 垂直置中(上下相等)
             cells.forEach((f, ci) => {
               if (!f) return;
               placements.push({
                 path: f.path,
-                x_cm: ox + leadMargin + ci * (imgW + gx),
+                x_cm: ox + d + ci * (imgW + d),
                 y_cm: cur_y + topMargin,
                 w_cm: imgW, h_cm: imgH,
               });
@@ -2366,8 +2364,37 @@
             },
           };
         });
-        setStatus(`已套用表格位置/列高。欄、列數請用左側「每頁網格」設定（此表格有 ${Math.max(1, t.rows - sr)} 個圖片列）`);
+        setStatus(`智能排列已開啟。欄、列數請用左側「每頁網格」設定（此表格有 ${Math.max(1, t.rows - sr)} 個圖片列）`);
       };
+
+      // 關閉智能排列：rowH/areaW 歸 0 → 回到一般(依比例堆疊)模式
+      const clearTable = () => {
+        pushHistory("關閉智能排列");
+        setCfg((c) => ({ ...c, grid: { ...c.grid, rowH: 0, areaW: 0 } }));
+        setStatus("智能排列已關閉");
+      };
+      const smartOn = cfg.grid.rowH > 0 && cfg.grid.areaW > 0;
+      // 智能模式換算：
+      //   smartHeightFillW = grid.width%，使圖高=格高 (= 填滿格高 100%)
+      //   smartMaxWidthPct = grid.width 上限 = min(填滿格高, N欄填滿圖片區)；超過沒意義
+      //   smartFillRatio   = 目前 grid.width 對應的「填滿格高 %」(顯示用)
+      const _smartAspect = (() => {
+        const f = (orderedFiles || [])[0];
+        return f && f.h && f.w ? f.h / f.w : 0.62;
+      })();
+      const smartHeightFillW = smartOn
+        ? Math.round((cfg.slide.height_cm * cfg.grid.rowH / 100 / _smartAspect) / cfg.slide.width_cm * 100 * 100) / 100
+        : 100;
+      const smartMaxWidthPct = (() => {
+        if (!smartOn) return Infinity;
+        const areaW = cfg.slide.width_cm * cfg.grid.areaW / 100;
+        const cols = cfg.autoAlign ? Math.max(1, autoIdxList.length) : Math.max(1, cfg.grid.cols);
+        const widthFillW = areaW / cols / cfg.slide.width_cm * 100;   // N欄填滿時的 grid.width%
+        return Math.round(Math.min(smartHeightFillW, widthFillW) * 100) / 100;
+      })();
+      const smartFillRatio = smartOn && smartHeightFillW > 0
+        ? Math.round(cfg.grid.width / smartHeightFillW * 100)
+        : 100;
 
       // drag-drop handlers
       const onDropTemplate = async (e) => {
@@ -3447,8 +3474,10 @@
                       )}
                       {mode === "slides" && (
                       <div className="flex gap-3 items-start justify-center">
-                        {/* 垂直軸 stepper：Y 起點、垂直 gap */}
-                        <div className="flex flex-col gap-5 pt-1">
+                        {/* 垂直軸 stepper：Y 起點、垂直 gap。智能排列模式自動鎖定 →
+                            用 visibility:hidden 隱形但保留版面寬度，避免切換時舞台 re-fit 改變大小 */}
+                        <div className="flex flex-col gap-5 pt-1"
+                             style={smartOn ? { visibility: "hidden" } : undefined}>
                           <Stepper label="Y 起" orient="v" value={cfg.grid.origin.y}
                             onChange={(v) => setGrid("origin.y", v)} />
                           <Stepper label="間距Y" orient="v" value={cfg.grid.gap.y}
@@ -3502,21 +3531,33 @@
                         })}
                           </div>
 
-                          {/* 舞台下方：水平軸 stepper (max-width 鎖住，不讓 SN X 把父欄撐寬) */}
+                          {/* 舞台下方：水平軸 stepper。智能排列模式只留「尺寸」(其餘自動) */}
                           <div className="flex gap-x-5 gap-y-10 mt-3 justify-center flex-wrap"
                                style={{ maxWidth: STAGE_W }}>
-                            <Stepper label="X 起" orient="h" value={cfg.grid.origin.x}
-                              onChange={(v) => setGrid("origin.x", v)} />
+                            {!smartOn && (
+                              <Stepper label="X 起" orient="h" value={cfg.grid.origin.x}
+                                onChange={(v) => setGrid("origin.x", v)} />
+                            )}
                             <div className="relative">
-                              <Stepper label="尺寸" orient="h" value={cfg.grid.width}
-                                onChange={(v) => setGrid("width", v)} />
+                              {smartOn ? (
+                                <Stepper label="填滿格高" orient="h" step={2} value={smartFillRatio}
+                                  onChange={(r) => {
+                                    const rr = Math.max(5, Math.min(100, r));
+                                    setGrid("width", Math.min(Math.round(rr / 100 * smartHeightFillW * 100) / 100, smartMaxWidthPct));
+                                  }} />
+                              ) : (
+                                <Stepper label="尺寸" orient="h" value={cfg.grid.width}
+                                  onChange={(v) => setGrid("width", v)} />
+                              )}
                               <div className="absolute left-0 right-0 top-full text-[10px] text-slate-400 text-center mt-1 pointer-events-none">
-                                按比例縮放
+                                {smartOn ? "100% = 圖高填滿格高" : "按比例縮放"}
                               </div>
                             </div>
-                            <Stepper label="間距X" orient="h" value={cfg.grid.gap.x}
-                              onChange={(v) => setGrid("gap.x", v)} />
-                            {cfg.label.enabled && (
+                            {!smartOn && (
+                              <Stepper label="間距X" orient="h" value={cfg.grid.gap.x}
+                                onChange={(v) => setGrid("gap.x", v)} />
+                            )}
+                            {!smartOn && cfg.label.enabled && (
                               <Stepper label="SN X" orient="h" value={cfg.label.x}
                                 onChange={(v) => setCfg((c) => ({ ...c, label: { ...c.label, x: v } }))} />
                             )}
@@ -3561,14 +3602,16 @@
                                       <div className="font-medium text-slate-700">
                                         表格 {ti + 1}（slide {t.slide + 1}）· <b className="text-emerald-700">{t.rows} 列 × {t.cols} 欄</b>
                                       </div>
-                                      <button onClick={() => applyTable(t)}
-                                        className="text-[11px] px-2 py-0.5 border rounded bg-emerald-600 text-white hover:bg-emerald-700"
-                                        title="用此表格座標自動設定網格（圖片自動貼進格子）">
-                                        ✓ 套用此表格
+                                      <button onClick={() => smartOn ? clearTable() : applyTable(t)}
+                                        className={`text-[11px] px-2 py-0.5 border rounded ${smartOn
+                                          ? "bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-700"
+                                          : "bg-white text-emerald-700 border-emerald-400 hover:bg-emerald-50"}`}
+                                        title="智能排列：圖片依此表格自動對齊格子。再按一次關閉">
+                                        {smartOn ? "✓ 智能排列中（關閉）" : "✨ 智能排列"}
                                       </button>
                                     </div>
                                     <div className="text-[10px] text-slate-500">
-                                      → 套用後對齊表格位置/列高；欄、列數用左側「每頁網格」設定（此表格 {Math.max(1, t.rows - Math.min(t.rows - 1, tblSkipRows))} 個圖片列，目前面板 {cfg.grid.cols} 欄 × {cfg.grid.rows} 列）
+                                      → 智能排列：圖片自動對齊表格格子（位置/列高/間距全自動，只需調「尺寸」）。欄、列數用左側「每頁網格」（此表格 {Math.max(1, t.rows - Math.min(t.rows - 1, tblSkipRows))} 個圖片列，目前面板 {cfg.grid.cols} 欄 × {cfg.grid.rows} 列）
                                     </div>
                                     <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px] text-slate-600 mt-1">
                                       <div>位置：left {t.left_cm}, top {t.top_cm} cm</div>
