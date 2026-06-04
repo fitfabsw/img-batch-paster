@@ -1681,6 +1681,8 @@
       // 用後端給的原始 w/h + 裁剪比例「同步」算出 aspect（ih/iw），不依賴瀏覽器載入
       const fileByPath = {};
       (orderedFiles || []).forEach((f) => { fileByPath[f.path] = f; });
+      // SN 對照模式：圖片在 cfg.sources[].files，需一併納入才能算出裁剪後 aspect（否則回退 0.75 → contain 高度不齊）
+      (cfg.sources || []).forEach((s) => (s.files || []).forEach((f) => { fileByPath[f.path] = f; }));
       const aspectOf = (pl) => {
         const f = fileByPath[pl.path];
         if (!f || !f.w || !f.h) return 0.75;

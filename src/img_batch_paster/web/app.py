@@ -218,7 +218,12 @@ def api_upload_source():
             continue
         target = folder / name
         f.save(str(target))
-        saved_files.append({"name": name, "path": str(target)})
+        try:
+            with Image.open(target) as im:
+                w, h = im.size
+        except Exception:
+            w, h = 0, 0
+        saved_files.append({"name": name, "path": str(target), "w": w, "h": h})
     return jsonify({"folder": str(folder), "count": len(saved_files), "files": saved_files})
 
 
