@@ -2387,6 +2387,12 @@
         setStatus(`偵測到表格 ${L(d.region.minC)}${d.region.minR}:${L(d.region.maxC)}${d.region.maxR} → 起始 ${d.startCell}、SN 欄 ${d.snCol}`);
       }, [xlGrid]);
 
+      // 「依順序」已移除：依檔名(非 snMatch)固定用 idx 對位。自我修復——若舊 session / 舊
+      // recipe 讓 autoAlign=false，強制回 true，否則「對位用哪一段?」欄位定義 UI 會消失且無 toggle 可救。
+      useEffect(() => {
+        if (!cfg.snMatchMode && !cfg.autoAlign) setCfg((c) => ({ ...c, autoAlign: true }));
+      }, [cfg.snMatchMode, cfg.autoAlign]);
+
       // 套用表格：用表格座標填「位置 + 圖片區總寬」，圖片欄數/列數「跟隨使用者左側設定」
       // （表格常把多張圖放在一個寬的合併欄，欄數看不出來，所以用使用者的 cols 平分）
       const applyTable = (t, scOverride, srOverride) => {
