@@ -40,7 +40,11 @@ def _ws_dir(ws: str) -> Path | None:
 
 @app.get("/")
 def index():
-    return send_from_directory(STATIC_DIR, "index.html")
+    # no-store：HTML 內含整個 no-build app，禁止瀏覽器快取才不會卡在舊版（/static 的
+    # React/Babel 大檔仍照常快取，不受影響）。免去每次改版都要手動硬重整。
+    resp = send_from_directory(STATIC_DIR, "index.html")
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 @app.post("/api/scan")
