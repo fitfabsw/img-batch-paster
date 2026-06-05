@@ -172,6 +172,45 @@
       return { col, row: parseInt(m[2], 10) };
     }
 
+    // 從 xlsx grid 偵測表格位置 → 推得「起始 cell + SN 寫入欄」(比照 ppt/key 的 applyTable)
+    //   範圍：框線 borders 的包圍盒（無框線則用有文字 cell 的包圍盒）
+    //   表頭列：從頂端起、含文字的連續列；第一欄當 SN/標籤欄(skipCols=1)
+    function detectExcelTable(grid) {
+      if (!grid) return null;
+      const borders = grid.borders || [];
+      const cells = grid.cells || [];
+      const bbox = (arr) => {
+        if (!arr.length) return null;
+        let minR = Infinity, maxR = -Infinity, minC = Infinity, maxC = -Infinity;
+        for (const b of arr) {
+          if (b.r < minR) minR = b.r; if (b.r > maxR) maxR = b.r;
+          if (b.c < minC) minC = b.c; if (b.c > maxC) maxC = b.c;
+        }
+        return { minR, maxR, minC, maxC };
+      };
+      const box = bbox(borders) || bbox(cells);
+      if (!box) return null;
+      const { minR, maxR, minC, maxC } = box;
+      const textRows = new Set(
+        cells.filter((c) => c.text != null && String(c.text).trim() !== "").map((c) => c.r)
+      );
+      let skipRows = 0;
+      while (minR + skipRows <= maxR && textRows.has(minR + skipRows)) skipRows++;
+      if (minR + skipRows > maxR) skipRows = Math.max(0, maxR - minR); // 至少留 1 列放圖
+      const skipCols = 1; // 第一欄當 SN/標籤欄
+      const startColIdx = Math.min(maxC, minC + skipCols);
+      const startRowIdx = minR + skipRows;
+      const letterOf = (ci) => ((grid.cols || [])[ci - 1] || {}).letter || null;
+      const snCol = letterOf(minC);
+      const startColL = letterOf(startColIdx);
+      if (!snCol || !startColL) return null;
+      return {
+        snCol, startCell: `${startColL}${startRowIdx}`,
+        imgsPerRow: Math.max(1, maxC - startColIdx + 1),
+        region: box,
+      };
+    }
+
     // 計算 Excel 的儲存格 placements
     function computeExcelCells(excel, label, orderedFiles, autoAlign) {
       if (!orderedFiles || orderedFiles.length === 0) return [];
@@ -2327,13 +2366,27 @@
 
       // 換範本時：清掉舊資訊、重設 auto-apply 旗標、自動讀新範本的表格 (slides + pptx)
       const autoAppliedRef = useRef(false);
+      const excelAutoRef = useRef(false);   // xlsx 表格偵測：每個範本只自動套一次
       useEffect(() => {
         autoAppliedRef.current = false;
+        excelAutoRef.current = false;
         setTableInfo(null);
         if (tplPath && mode === "slides" && /\.pptx$/i.test(tplPath)) {
           loadTableInfo();
         }
       }, [tplPath, mode]);
+
+      // xlsx：grid 載入後自動偵測表格位置 → 預設「起始 cell + SN 寫入欄」(每範本一次，比照 ppt/key)
+      useEffect(() => {
+        if (!xlGrid) { excelAutoRef.current = false; return; }
+        if (excelAutoRef.current || cfg.snMatchMode) return;
+        const d = detectExcelTable(xlGrid);
+        if (!d) return;
+        excelAutoRef.current = true;
+        setCfg((c) => ({ ...c, excel: { ...c.excel, startCell: d.startCell, snCol: d.snCol, imgsPerRow: d.imgsPerRow } }));
+        const L = (ci) => ((xlGrid.cols || [])[ci - 1] || {}).letter || "";
+        setStatus(`偵測到表格 ${L(d.region.minC)}${d.region.minR}:${L(d.region.maxC)}${d.region.maxR} → 起始 ${d.startCell}、SN 欄 ${d.snCol}`);
+      }, [xlGrid]);
 
       // 套用表格：用表格座標填「位置 + 圖片區總寬」，圖片欄數/列數「跟隨使用者左側設定」
       // （表格常把多張圖放在一個寬的合併欄，欄數看不出來，所以用使用者的 cols 平分）
@@ -3027,26 +3080,28 @@
                     <div className="space-y-2">
                       {!cfg.snMatchMode && (
                         <>
-                          <label className="flex flex-col text-xs text-slate-600">
-                            起始 cell
-                            <input value={cfg.excel.startCell}
-                              onChange={(e) => setCfg((c) => ({ ...c, excel: { ...c.excel, startCell: e.target.value } }))}
-                              className="border rounded px-2 py-1 text-sm mt-1 font-mono" placeholder="B5" />
-                          </label>
+                          <div className="flex gap-2">
+                            <label className="flex flex-col text-xs text-slate-600 flex-1">
+                              起始 cell
+                              <input value={cfg.excel.startCell}
+                                onChange={(e) => setCfg((c) => ({ ...c, excel: { ...c.excel, startCell: e.target.value } }))}
+                                className="border rounded px-2 py-1 text-sm mt-1 font-mono" placeholder="B5" />
+                            </label>
+                            <label className="flex flex-col text-xs text-slate-600 flex-1">
+                              SN 寫入欄（留空=不寫）
+                              <input value={cfg.excel.snCol}
+                                onChange={(e) => setCfg((c) => ({ ...c, excel: { ...c.excel, snCol: e.target.value } }))}
+                                className="border rounded px-2 py-1 text-sm mt-1 font-mono" placeholder="A" />
+                            </label>
+                          </div>
+                          <div className="text-[10px] text-slate-400">
+                            SN 字串從檔名 pattern「{cfg.label.pattern}」抽取
+                          </div>
                           <NumberInput label="每列圖數" step={1}
                             value={cfg.autoAlign ? Math.max(1, autoIdxList.length) : cfg.excel.imgsPerRow}
                             disabled={cfg.autoAlign}
                             hint={cfg.autoAlign ? `對位模式自動 = ${autoIdxList.length || 0} 欄` : undefined}
                             onChange={(v) => setCfg((c) => ({ ...c, excel: { ...c.excel, imgsPerRow: Math.max(1, parseInt(v) || 1) } }))} />
-                          <label className="flex flex-col text-xs text-slate-600">
-                            SN 寫入欄（留空=不寫）
-                            <input value={cfg.excel.snCol}
-                              onChange={(e) => setCfg((c) => ({ ...c, excel: { ...c.excel, snCol: e.target.value } }))}
-                              className="border rounded px-2 py-1 text-sm mt-1 font-mono" placeholder="A" />
-                          </label>
-                          <div className="text-[10px] text-slate-400">
-                            SN 字串從檔名 pattern「{cfg.label.pattern}」抽取
-                          </div>
                         </>
                       )}
 
