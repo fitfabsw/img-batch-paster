@@ -48,16 +48,20 @@ cd ~/img-batch-paster
 push 到 GitHub 後：
 
 ```bash
-./deploy/deploy.sh
+BRANCH=feat-A ./deploy/deploy.sh     # 部署交付主線 feat-A（目前最新功能在這）
+./deploy/deploy.sh                   # 不指定 = 預設 main（注意：main 可能落後 feat-A）
 ```
 
-預設目標 `cpdx_sw@10.35.36.168:~/img-batch-paster`；覆蓋：
+⚠ `feat-A` 為交付主線、尚未 merge 進 `main`。要部署最新功能請用 `BRANCH=feat-A`，
+直到 feat-A 併入 main 為止。
+
+預設目標 `cpdx_sw@10.35.36.168:~/img-batch-paster`；目標 / 路徑 / branch 皆可覆蓋：
 
 ```bash
-SSH_TARGET=cpdx_sw@10.35.36.168 REMOTE_DIR='~/img-batch-paster' ./deploy/deploy.sh
+SSH_TARGET=cpdx_sw@10.35.36.168 REMOTE_DIR='~/img-batch-paster' BRANCH=feat-A ./deploy/deploy.sh
 ```
 
-腳本會在遠端 `git pull` → `pip install -e .` → `launchctl kickstart -k` 重啟 → 健康檢查。
+腳本會在遠端 `git fetch` → `checkout $BRANCH` → `git pull --rebase` → `pip install -e .` → `launchctl kickstart -k` 重啟 → 健康檢查。
 
 ## 操作指令（在 mac mini 上）
 
