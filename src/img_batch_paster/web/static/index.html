@@ -536,8 +536,6 @@
             <div className="flex flex-wrap gap-1 items-center">
               {idxList.map((s, i) => {
                 const isEmpty = customMode && !fromFiles.includes(s);
-                const idxCrop = (label.idxCrops || {})[s];
-                const cropOn = perColCrop && idxCrop?.enabled;
                 return (
                   <div key={s + i}
                     draggable
@@ -551,13 +549,6 @@
                               : "bg-white border-sky-300 text-sky-800"
                     } ${hoverIdx === i ? "ring-2 ring-sky-400" : ""}`}>
                     {s}
-                    {perColCrop && onOpenIdxCrop && (
-                      <button onClick={(e) => { e.stopPropagation(); onOpenIdxCrop(s); }}
-                        title={cropOn ? `已設定此欄裁剪` : "設定此欄裁剪"}
-                        className={`text-[10px] px-1 rounded ${cropOn ? "bg-emerald-100 text-emerald-700 border border-emerald-300" : "hover:bg-slate-100"}`}>
-                        ✂️
-                      </button>
-                    )}
                     {customMode && (
                       <button onClick={() => removeChip(i)}
                         className="text-slate-400 hover:text-red-600 text-[10px] leading-none"
