@@ -50,7 +50,7 @@
         width: 12,        // SN box 固定寬度 (% of slide width)，與圖片 X 解耦
         font_pt: 18,
       },
-      autoAlign: false,   // 依檔名 group+idx 對位 (缺的照片留空)
+      autoAlign: true,    // 依檔名 group+idx 對位 (固定；「依順序」模式已移除)
       snMatchMode: false, // SN 對照模式：從範本讀 SN list、每個 SN 從多來源資料夾找對應圖
       snSource: { col: "A", rowStart: 2 },  // SN 在範本的哪一欄、從第幾列開始
       sources: [          // SN 對照模式專用：多個來源資料夾 (每元素: {id, name, folder, files, targetCol, crop})
@@ -135,7 +135,7 @@
       if (!recipe || typeof recipe !== "object") return currentCfg;
       return {
         ...currentCfg,
-        autoAlign: !!recipe.mode?.autoAlign,
+        autoAlign: true,   // 「依順序」已移除：固定用 idx 對位（忽略舊 recipe 的 autoAlign:false）
         snMatchMode: !!recipe.mode?.snMatchMode,
         cropMode: recipe.cropMode || "global",
         label: { ...currentCfg.label, ...(recipe.label || {}) },
@@ -1351,8 +1351,7 @@
           <h3 className="text-sm font-semibold text-slate-800 mt-3 mb-1">兩種分群方式</h3>
           <ul className="list-disc ml-5 space-y-1 mb-3">
             <li>
-              <b>📷 依檔名</b>：上傳<u>一個資料夾</u>的圖片，由檔名規則 (group/idx) 分群，再依
-              <code className="px-1 bg-slate-100 rounded text-[12px]">依順序</code> 或
+              <b>📷 依檔名</b>：上傳<u>一個資料夾</u>的圖片，由檔名規則 (group/idx) 分群，依
               <code className="px-1 bg-slate-100 rounded text-[12px]">依檔名 idx</code> 對位填入。
             </li>
             <li>
@@ -3263,33 +3262,10 @@
                     : "從一個資料夾上傳一批圖、依檔名分群"}
                 </div>
 
-                {/* Sub-toggle: 圖片驅動模式下選排版邏輯 */}
+                {/* 依檔名 固定用 idx 對位（「依順序」模式已移除） */}
                 {!cfg.snMatchMode && (
-                  <div className="mt-2 pt-2 border-t">
-                    <div className="text-[10px] text-slate-500 mb-1">每群圖數來源</div>
-                    <div className="grid grid-cols-2 gap-1">
-                      <button onClick={() => setCfg((c) => ({ ...c, autoAlign: false }))}
-                        className={`px-2 py-1 rounded border text-xs ${
-                          !cfg.autoAlign
-                            ? "bg-slate-400 text-white border-slate-500"
-                            : "bg-white text-slate-600 border-slate-300 hover:bg-slate-50"
-                        }`}>
-                        依順序
-                      </button>
-                      <button onClick={() => setCfg((c) => ({ ...c, autoAlign: true }))}
-                        className={`px-2 py-1 rounded border text-xs ${
-                          cfg.autoAlign
-                            ? "bg-slate-400 text-white border-slate-500"
-                            : "bg-white text-slate-600 border-slate-300 hover:bg-slate-50"
-                        }`}>
-                        依檔名 idx
-                      </button>
-                    </div>
-                    <div className="text-[10px] text-slate-500 mt-1">
-                      {cfg.autoAlign
-                        ? "依檔名 idx 對位、缺照片留空。拖曳/排序對欄位無效"
-                        : "照清單順序依序填入；可拖曳排序"}
-                    </div>
+                  <div className="mt-2 pt-2 border-t text-[10px] text-slate-500">
+                    依檔名 idx 對位、缺照片留空。拖曳/排序對欄位無效
                   </div>
                 )}
               </div>
