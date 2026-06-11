@@ -583,8 +583,9 @@
               <div className="space-y-0.5 mt-1">
                 {unmapped.length > 0 && (
                   <div className="text-[10px] text-amber-700">
-                    ⚠ 檔名中有 {unmapped.length} 個 idx 不在欄位清單，這些圖不會貼入（要納入請＋新增或按「依檔名」）：
-                    <span className="font-mono">{unmapped.join(", ")}</span>
+                    ⚠ 無對應欄位、不貼入：
+                    <span className="font-mono font-semibold">{unmapped.join(", ")}</span>
+                    <span className="text-slate-400 ml-1">（按「依檔名」納入）</span>
                   </div>
                 )}
                 <div className="flex gap-2 text-[10px] flex-wrap">
