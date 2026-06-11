@@ -1839,26 +1839,26 @@
           onTouchStart={(e) => { e.preventDefault(); startHold(dir, e.touches[0] || {}); }}
           onTouchEnd={stopHold}
           title="Shift=粗(×5) / Alt=細(×0.2) / 長按連續"
-          className="w-12 h-10 flex items-center justify-center hover:bg-slate-200 text-slate-700 select-none">
+          className="w-9 h-9 flex items-center justify-center hover:bg-slate-200 text-slate-700 select-none">
           {children}
         </button>
       );
 
       // 顯示數字 — 固定寬度避免 layout shift
       const display = (
-        <div className={`text-center text-xs ${isH ? "w-20" : "w-12"} flex flex-col justify-center`}
-          style={{ minHeight: 40 }}>
+        <div className={`text-center text-xs ${isH ? "w-14" : "w-10"} flex flex-col justify-center`}
+          style={{ minHeight: 36 }}>
           <div className="text-[10px] text-slate-400 leading-none mb-0.5">{label}</div>
           {editing ? (
             <input autoFocus type="number" step={step} value={value}
               onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
               onBlur={() => setEditing(false)}
               onKeyDown={(e) => { if (e.key === "Enter") setEditing(false); }}
-              className="w-16 mx-auto border rounded px-1 text-xs text-center" />
+              className="w-12 mx-auto border rounded px-1 text-xs text-center" />
           ) : (
             <button onClick={() => setEditing(true)}
-              className="tabular-nums font-medium hover:underline">
-              {value}<span className="text-slate-400 text-[10px]">{suffix}</span>
+              className="tabular-nums font-medium hover:underline text-[11px]">
+              {Math.round((value || 0) * 10) / 10}<span className="text-slate-400 text-[10px]">{suffix}</span>
             </button>
           )}
         </div>
@@ -1867,7 +1867,7 @@
       return (
         <div className={`bg-slate-50 border border-slate-300 rounded-lg shadow-sm overflow-hidden ${isH
             ? "flex items-center"
-            : "flex flex-col items-center w-12"}`}>
+            : "flex flex-col items-center w-10"}`}>
           <Btn dir={-1}>{isH ? "◀" : "▲"}</Btn>
           {display}
           <Btn dir={+1}>{isH ? "▶" : "▼"}</Btn>
@@ -2220,10 +2220,10 @@
           if (mode === "excel" && xlGrid) {
             contentW = xlGrid.cols.reduce((a, c) => a + c.w_px, 0) + 40;
           } else if (mode === "slides") {
-            contentW = 720;
+            contentW = 656;   // 舞台寬(640)+小邊距；Y stepper 已移進舞台、不再額外佔寬
           }
           if (contentW > 0) {
-            setZoom(Math.min(1, Math.max(0.3, containerW / contentW)));
+            setZoom(Math.min(2.2, Math.max(0.3, containerW / contentW)));   // 允許放大填滿寬欄
           }
         };
         recompute();
@@ -3897,16 +3897,7 @@
                         <ExcelPreview grid={xlGrid} cfg={cfg} orderedFiles={orderedFiles} selected={selected} thumbUrl={thumbUrl} snList={snList} />
                       )}
                       {tplPath && mode === "slides" && (
-                      <div className="flex gap-3 items-start justify-center">
-                        {/* 垂直軸 stepper：Y 起點、垂直 gap。智能排列模式自動鎖定 →
-                            用 visibility:hidden 隱形但保留版面寬度，避免切換時舞台 re-fit 改變大小 */}
-                        <div className="flex flex-col gap-5 pt-1"
-                             style={smartOn ? { visibility: "hidden" } : undefined}>
-                          <Stepper label="Y 起" orient="v" value={cfg.grid.origin.y}
-                            onChange={(v) => setGrid("origin.y", v)} />
-                          <Stepper label="間距Y" orient="v" value={cfg.grid.gap.y}
-                            onChange={(v) => setGrid("gap.y", v)} />
-                        </div>
+                      <div className="relative flex justify-center">
 
                         {/* 舞台 + 下方水平 stepper */}
                         <div>
@@ -3922,6 +3913,32 @@
                                 <div className="text-sm text-slate-700 font-medium px-4 text-center max-w-[80%]">
                                   {status || "處理中…"}
                                 </div>
+                              </div>
+                            )}
+                            {/* Y 軸 stepper：浮在投影片左緣「裡面」、半透明、hover 變實心；智能排列時 Y 鎖定 → 不顯示。
+                                反向縮放 scale(1/zoom) 抵銷舞台 zoom → 不論放大多少都維持正常大小。 */}
+                            {!smartOn && (
+                              <div className="absolute left-1 top-1/2 z-20 flex flex-col gap-4 opacity-25 hover:opacity-100 transition-opacity"
+                                style={{ transform: `translateY(-50%) scale(${1 / (zoom || 1)})`, transformOrigin: "left center" }}>
+                                <Stepper label="Y 起" orient="v" value={cfg.grid.origin.y}
+                                  onChange={(v) => setGrid("origin.y", v)} />
+                                <Stepper label="間距Y" orient="v" value={cfg.grid.gap.y}
+                                  onChange={(v) => setGrid("gap.y", v)} />
+                              </div>
+                            )}
+                            {/* X 軸微調 stepper：浮在投影片底緣「裡面」、半透明、hover 變實心；仿 Y 軸。
+                                X 起 / 間距X / SN X 三項；尺寸主控制留在舞台下方。智能排列時鎖定 → 不顯示。 */}
+                            {!smartOn && (
+                              <div className="absolute bottom-1 left-1/2 z-20 flex gap-4 opacity-25 hover:opacity-100 transition-opacity"
+                                style={{ transform: `translateX(-50%) scale(${1 / (zoom || 1)})`, transformOrigin: "bottom center" }}>
+                                {cfg.label.enabled && (
+                                  <Stepper label="SN X" orient="h" value={cfg.label.x}
+                                    onChange={(v) => setCfg((c) => ({ ...c, label: { ...c.label, x: v } }))} />
+                                )}
+                                <Stepper label="X 起" orient="h" value={cfg.grid.origin.x}
+                                  onChange={(v) => setGrid("origin.x", v)} />
+                                <Stepper label="間距X" orient="h" value={cfg.grid.gap.x}
+                                  onChange={(v) => setGrid("gap.x", v)} />
                               </div>
                             )}
                         {pagePls.map((pl, i) => {
@@ -3955,13 +3972,9 @@
                         })}
                           </div>
 
-                          {/* 舞台下方：水平軸 stepper。智能排列模式只留「尺寸」(其餘自動) */}
-                          <div className="flex gap-x-5 gap-y-10 mt-3 justify-center flex-wrap"
-                               style={{ maxWidth: STAGE_W }}>
-                            {!smartOn && (
-                              <Stepper label="X 起" orient="h" value={cfg.grid.origin.x}
-                                onChange={(v) => setGrid("origin.x", v)} />
-                            )}
+                          {/* 舞台下方：只留「尺寸／填滿格高」主控制——OFF/ON 同位置同大小。
+                              X 起 / 間距X / SN X 已浮入預覽底緣。 */}
+                          <div className="flex justify-center mt-3">
                             <div className="relative">
                               {smartOn ? (
                                 <Stepper label="填滿格高" orient="h" step={2} value={smartFillRatio}
@@ -3977,14 +3990,6 @@
                                 {smartOn ? "100% = 圖高填滿格高" : "按比例縮放"}
                               </div>
                             </div>
-                            {!smartOn && (
-                              <Stepper label="間距X" orient="h" value={cfg.grid.gap.x}
-                                onChange={(v) => setGrid("gap.x", v)} />
-                            )}
-                            {!smartOn && cfg.label.enabled && (
-                              <Stepper label="SN X" orient="h" value={cfg.label.x}
-                                onChange={(v) => setCfg((c) => ({ ...c, label: { ...c.label, x: v } }))} />
-                            )}
                           </div>
                         </div>
                       </div>
