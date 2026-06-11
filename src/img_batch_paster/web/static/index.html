@@ -2102,6 +2102,50 @@
       );
     }
 
+    // 慶祝 / 成功 toast（A 魔法時刻 · B 價值量化 · C 匯出成功）
+    function Toast({ toast, onClose }) {
+      const theme = ({ magic: "from-violet-600 to-indigo-600", success: "from-emerald-600 to-teal-600" })[toast.kind] || "from-slate-700 to-slate-800";
+      return (
+        <div className="fixed top-4 z-[60]" style={{ left: "50%", transform: "translateX(-50%)", animation: "ibpToast .25s ease" }}>
+          <style>{`@keyframes ibpToast{from{opacity:0;transform:translate(-50%,-8px)}to{opacity:1;transform:translate(-50%,0)}}`}</style>
+          <div className={`flex items-center gap-3 px-4 py-2.5 rounded-xl shadow-2xl text-white bg-gradient-to-r ${theme}`}>
+            <div>
+              <div className="text-sm font-semibold">{toast.title}</div>
+              {toast.sub && <div className="text-[12px] text-white/85">{toast.sub}</div>}
+            </div>
+            <button onClick={onClose} className="text-white/70 hover:text-white text-lg leading-none ml-1">×</button>
+          </div>
+        </div>
+      );
+    }
+
+    // ① 空狀態引導（first-run）
+    function WelcomeHero() {
+      const Step = ({ n, icon, t }) => (
+        <div className="flex flex-col items-center gap-1">
+          <div className="w-12 h-12 rounded-2xl bg-white shadow flex items-center justify-center text-xl">{icon}</div>
+          <div className="text-xs font-medium text-slate-600"><span className="text-indigo-500 font-bold mr-0.5">{n}.</span>{t}</div>
+        </div>
+      );
+      return (
+        <div className="absolute inset-0 flex items-center justify-center p-6 bg-gradient-to-b from-slate-50 to-white">
+          <div className="text-center max-w-md">
+            <div className="text-5xl mb-3">🖼️✨</div>
+            <div className="text-xl font-bold text-slate-800 mb-1">把整批照片一鍵貼進範本</div>
+            <div className="text-sm text-slate-500 mb-5">拖一個<b>範本</b>和<b>圖片資料夾</b>進來，程式會自動對齊、排版。</div>
+            <div className="flex items-center justify-center gap-5 mb-5">
+              <Step n="1" icon="📄" t="上傳範本" />
+              <span className="text-slate-300 text-lg">→</span>
+              <Step n="2" icon="🖼️" t="上傳圖片" />
+              <span className="text-slate-300 text-lg">→</span>
+              <Step n="3" icon="📤" t="匯出" />
+            </div>
+            <div className="text-[12px] text-slate-400">範本支援 .pptx / .key / .xlsx · 由左側面板拖入或點擊上傳</div>
+          </div>
+        </div>
+      );
+    }
+
     function App() {
       const [cfg, setCfg] = useState(DEFAULTS);
       const [files, setFiles] = useState([]);          // 原始檔案清單（由後端掃描）
@@ -2143,6 +2187,14 @@
       const [configMenuOpen, setConfigMenuOpen] = useState(false);
       const [helpOpen, setHelpOpen] = useState(false);
       const [shortcutsOpen, setShortcutsOpen] = useState(false);
+      const [toast, setToast] = useState(null);              // {kind,title,sub}
+      const toastTimerRef = useRef(null);
+      const magicRef = useRef(false);
+      const showToast = (t) => {
+        setToast(t);
+        if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = setTimeout(() => setToast(null), t.hold || 4200);
+      };
       const [snList, setSnList] = useState([]);  // [{ sn, row }] from /api/template/sn-list
       const [ws, setWs] = useState("");
       const [zoom, setZoom] = useState(1);
@@ -2213,6 +2265,18 @@
         const map = new Map(files.map((f) => [f.path, f]));
         return order.map((p) => map.get(p)).filter(Boolean);
       }, [files, order]);
+
+      // ✨ 魔法時刻（A）+ 價值量化（B）：範本+圖片就緒、自動對齊好 → 慶祝（每批一次）
+      useEffect(() => {
+        const n = orderedFiles.length;
+        if (n > 0 && tplPath && !magicRef.current) {
+          magicRef.current = true;
+          const mins = Math.max(1, Math.round(n * 20 / 60));
+          showToast({ kind: "magic", title: `✨ ${n} 張已自動對齊範本！`, sub: `預估省下 ~${mins} 分鐘手動拖放` });
+        } else if (n === 0) {
+          magicRef.current = false;
+        }
+      }, [orderedFiles.length, tplPath]);
 
       // 鏡像目前所有可 undo 的 state，給 pushHistory / undo / redo 用
       const stateRef = useRef({});
@@ -2949,6 +3013,7 @@
             a.download = "";
             document.body.appendChild(a); a.click(); a.remove();
             setStatus(`✓ 已產出 ${j.pages} 頁，已開始下載`);
+            showToast({ kind: "success", title: "✓ 已下載！", sub: `${j.pages} 頁完成 · 換一批圖、用同設定可再匯出` });
           } else {
             setStatus(`✓ 已輸出 ${j.pages} 頁: ${j.output}`);
           }
@@ -3183,6 +3248,7 @@
         <div className="max-w-[1600px] mx-auto p-4 h-screen flex flex-col">
           {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />}
           {shortcutsOpen && <ShortcutsModal onClose={() => setShortcutsOpen(false)} />}
+          {toast && <Toast toast={toast} onClose={() => setToast(null)} />}
           {cropOpen && cropTargetFile && (
             <CropEditor
               file={cropTargetFile}
@@ -3819,13 +3885,14 @@
                           )}
                         </div>
                       </div>
-                      <div ref={stageWrapRef} className="flex-1 min-h-0" style={{ overflow: "auto" }}>
+                      <div ref={stageWrapRef} className="flex-1 min-h-0 relative" style={{ overflow: "auto" }}>
+                       {!tplPath && <WelcomeHero />}
                        <div style={{ zoom: zoom, MozTransform: `scale(${zoom})`, MozTransformOrigin: "top left" }}>
 
-                      {mode === "excel" && (
+                      {tplPath && mode === "excel" && (
                         <ExcelPreview grid={xlGrid} cfg={cfg} orderedFiles={orderedFiles} selected={selected} thumbUrl={thumbUrl} snList={snList} />
                       )}
-                      {mode === "slides" && (
+                      {tplPath && mode === "slides" && (
                       <div className="flex gap-3 items-start justify-center">
                         {/* 垂直軸 stepper：Y 起點、垂直 gap。智能排列模式自動鎖定 →
                             用 visibility:hidden 隱形但保留版面寬度，避免切換時舞台 re-fit 改變大小 */}
