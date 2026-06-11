@@ -221,6 +221,18 @@
       };
     }
 
+    // 從 ppt/key 表格資訊偵測「表頭列數 + 標籤欄 + SN 寫入位置」（比照 detectExcelTable）
+    function detectSlidesTable(t) {
+      if (!t || !t.rows || !t.cols) return null;
+      const rows = t.rows, cols = t.cols;
+      const textRows = new Set((t.cells || []).map((c) => c.r));
+      let skipRows = 0;
+      while (skipRows < rows - 1 && textRows.has(skipRows + 1)) skipRows++;
+      if (skipRows === 0) skipRows = 1;     // 無文字也假設 1 表頭列
+      const skipCols = 1;                   // 第一欄當標籤/SN 欄（同 xlsx 慣例）
+      return { skipRows, skipCols, snCol: 1, snRowStart: skipRows + 1 };
+    }
+
     // 計算 Excel 的儲存格 placements
     function computeExcelCells(excel, label, orderedFiles, autoAlign) {
       if (!orderedFiles || orderedFiles.length === 0) return [];
@@ -2423,6 +2435,9 @@
         return d && Array.isArray(d.headerCols) ? d.headerCols : [];
       }, [xlGrid]);
 
+      // ppt/key 範本表格（給 SN 寫入儲存格的 max / 範圍提示用）
+      const slidesTbl = (mode === "slides" && tableInfo && !tableInfo.error) ? (tableInfo.tables || [])[0] : null;
+
       // 套用表格：用表格座標填「位置 + 圖片區總寬」，圖片欄數/列數「跟隨使用者左側設定」
       // （表格常把多張圖放在一個寬的合併欄，欄數看不出來，所以用使用者的 cols 平分）
       const applyTable = (t, scOverride, srOverride) => {
@@ -2509,7 +2524,16 @@
       useEffect(() => {
         if (!autoAppliedRef.current && !smartOn && tableInfo && (tableInfo.tables || []).length > 0) {
           autoAppliedRef.current = true;
-          applyTable(tableInfo.tables[0]);
+          const t0 = tableInfo.tables[0];
+          const d = detectSlidesTable(t0);   // 自動偵測表頭列 / 標籤欄 → 預設 略過 + SN 寫入位置
+          if (d) {
+            setTblSkipCols(d.skipCols);
+            setTblSkipRows(d.skipRows);
+            setCfg((c) => ({ ...c, slidesSn: { ...c.slidesSn, col: d.snCol, rowStart: d.snRowStart } }));
+            applyTable(t0, d.skipCols, d.skipRows);
+          } else {
+            applyTable(t0);
+          }
         }
       }, [tableInfo]);
       // 智能模式換算：
@@ -3220,12 +3244,13 @@
                             <>
                               <div className="grid grid-cols-2 gap-2 mt-2">
                                 <NumberInput label="SN 第幾欄" step={1} value={cfg.slidesSn.col}
-                                  onChange={(v) => setCfg((c) => ({ ...c, slidesSn: { ...c.slidesSn, col: Math.max(1, parseInt(v) || 1) } }))} />
+                                  onChange={(v) => setCfg((c) => ({ ...c, slidesSn: { ...c.slidesSn, col: Math.max(1, Math.min(slidesTbl ? slidesTbl.cols : 9999, parseInt(v) || 1)) } }))} />
                                 <NumberInput label="從第幾列起" step={1} value={cfg.slidesSn.rowStart}
-                                  onChange={(v) => setCfg((c) => ({ ...c, slidesSn: { ...c.slidesSn, rowStart: Math.max(1, parseInt(v) || 1) } }))} />
+                                  onChange={(v) => setCfg((c) => ({ ...c, slidesSn: { ...c.slidesSn, rowStart: Math.max(1, Math.min(slidesTbl ? slidesTbl.rows : 9999, parseInt(v) || 1)) } }))} />
                               </div>
                               <div className="text-[10px] text-slate-400 mt-1">
                                 此設定只影響<b>匯出檔</b>（把 SN 寫進範本表格的儲存格）；預覽不會顯示。
+                                {slidesTbl && <span className="ml-1">· 此範本表格 <b>{slidesTbl.cols} 欄 × {slidesTbl.rows} 列</b></span>}
                               </div>
                             </>
                           )}
@@ -3716,12 +3741,12 @@
                             {tbl && smartOn && (
                               <div className="flex items-center gap-2 text-[10px] text-slate-400">
                                 <label className="flex items-center gap-1">略過左側
-                                  <input type="number" min="0" value={tblSkipCols}
-                                    onChange={(e) => { const v = Math.max(0, parseInt(e.target.value) || 0); setTblSkipCols(v); applyTable(tbl, v, tblSkipRows); }}
+                                  <input type="number" min="0" max={Math.max(0, tbl.cols - 1)} value={tblSkipCols}
+                                    onChange={(e) => { const v = Math.max(0, Math.min(tbl.cols - 1, parseInt(e.target.value) || 0)); setTblSkipCols(v); applyTable(tbl, v, tblSkipRows); }}
                                     className="w-9 border rounded px-1 py-0.5" />欄</label>
                                 <label className="flex items-center gap-1">頂部
-                                  <input type="number" min="0" value={tblSkipRows}
-                                    onChange={(e) => { const v = Math.max(0, parseInt(e.target.value) || 0); setTblSkipRows(v); applyTable(tbl, tblSkipCols, v); }}
+                                  <input type="number" min="0" max={Math.max(0, tbl.rows - 1)} value={tblSkipRows}
+                                    onChange={(e) => { const v = Math.max(0, Math.min(tbl.rows - 1, parseInt(e.target.value) || 0)); setTblSkipRows(v); applyTable(tbl, tblSkipCols, v); }}
                                     className="w-9 border rounded px-1 py-0.5" />列</label>
                               </div>
                             )}

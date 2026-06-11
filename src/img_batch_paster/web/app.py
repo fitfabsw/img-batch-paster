@@ -375,6 +375,16 @@ def api_template_table_info():
             if not getattr(shp, "has_table", False):
                 continue
             t = shp.table
+            # 有文字的儲存格（1-based），供前端自動偵測表頭列 / 標籤欄
+            cells = []
+            for ri in range(len(t.rows)):
+                for ci in range(len(t.columns)):
+                    try:
+                        txt = t.cell(ri, ci).text.strip()
+                    except Exception:
+                        txt = ""
+                    if txt:
+                        cells.append({"r": ri + 1, "c": ci + 1, "text": txt})
             tables.append({
                 "slide": si,
                 "name": shp.name,
@@ -386,6 +396,7 @@ def api_template_table_info():
                 "height_cm": round(Emu(shp.height).cm, 2),
                 "col_widths_cm": [round(Emu(c.width).cm, 2) for c in t.columns],
                 "row_heights_cm": [round(Emu(r.height).cm, 2) for r in t.rows],
+                "cells": cells,
             })
     return jsonify({
         "slide": {"width_cm": round(sw, 2), "height_cm": round(sh, 2)},
