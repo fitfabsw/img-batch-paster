@@ -462,10 +462,10 @@
       return pages;
     }
 
-    // 對位模式的欄位編輯器：自動偵測 idx 集合 + 排序選項 + 自訂欄位
+    // 對位模式的欄位編輯器：單一可編輯欄位清單（預設自動偵測，可拖曳排序 / ✕移除 / ＋新增 / 🚫忽略；
+    //   依範本表頭 / 依檔名 為重置來源）。已無「自動/自訂」模式切換 —— 編輯時自動轉 idxSort=custom。
     function IdxColumnsEditor({ label, allFiles, updateLabel, perColCrop, onOpenIdxCrop, headerOrder, pushHistory }) {
       const sort = label.idxSort || "auto";
-      const customMode = sort === "custom";
       const idxList = useMemo(
         () => detectIdxList(allFiles || [], label.pattern, sort, label.idxOrder || []),
         [allFiles, label.pattern, sort, label.idxOrder]
@@ -481,14 +481,6 @@
 
       // 欄位編輯前先存 undo 快照（之前缺這個 → 對調/刪欄/新增/重載都無法 undo）
       const editCols = (patch, desc) => { if (pushHistory) pushHistory(desc); updateLabel(patch); };
-
-      const setSort = (s) => {
-        if (s === "custom") {
-          editCols({ idxSort: "custom", idxOrder: idxList.length ? [...idxList] : [...fromFiles] }, "切換欄位排序");
-        } else {
-          editCols({ idxSort: s, idxOrder: [] }, "切換欄位排序");
-        }
-      };
 
       const onChipDragStart = (i) => { dragRef.current = i; };
       const onChipDrop = (toIdx) => {
@@ -533,64 +525,47 @@
         editCols({ idxIgnore: [...cur] }, was ? `取消忽略「${s}」` : `忽略「${s}」`);
       };
 
-      const SORTS = [
-        { v: "auto",   label: "自動" },
-        { v: "custom", label: "自訂" },
-      ];
-
-      // 自訂模式下的異常檢查
-      const unmapped = customMode ? fromFiles.filter((x) => !idxList.includes(x)) : [];
+      // 檔名中有 idx 但不在欄位清單 → 那些圖不貼入（提示使用者）
+      const unmapped = fromFiles.filter((x) => !idxList.includes(x));
 
       return (
         <div>
-          <div className="flex items-center justify-between mb-1">
-            <div className="text-xs text-sky-800 font-semibold">
-              {customMode ? `自訂 ${idxList.length} 欄` : `偵測到 ${idxList.length} 欄`}
-            </div>
-            <div className="flex border rounded overflow-hidden text-[10px]">
-              {SORTS.map((s) => (
-                <button key={s.v} onClick={() => setSort(s.v)}
-                  className={`px-1.5 py-0.5 ${sort === s.v ? "bg-sky-600 text-white" : "bg-white hover:bg-sky-100"}`}>
-                  {s.label}
-                </button>
-              ))}
-            </div>
+          <div className="text-xs text-sky-800 font-semibold mb-1">
+            對位欄位 · {idxList.length} 欄
           </div>
-          {idxList.length === 0 && !customMode ? (
+          {idxList.length === 0 && fromFiles.length === 0 ? (
             <div className="text-[10px] text-amber-700 p-2 bg-amber-50 rounded">
               ⚠ 從現有檔名中找不到 idx 段內容 — 請確認上方分段選取
             </div>
           ) : (
-            <div className="flex flex-wrap gap-1 items-center">
-              {idxList.map((s, i) => {
-                const isEmpty = customMode && !fromFiles.includes(s);
-                const ignored = ignoreSet.has(s);
-                return (
-                  <div key={s + i}
-                    draggable
-                    onDragStart={() => onChipDragStart(i)}
-                    onDragOver={(e) => { e.preventDefault(); if (hoverIdx !== i) setHoverIdx(i); }}
-                    onDrop={() => onChipDrop(i)}
-                    onDragEnd={() => setHoverIdx(-1)}
-                    title={ignored ? "已忽略：此欄留空、不貼圖" : isEmpty ? "此欄沒有對應檔名（將全部留空）" : "可拖曳改變順序"}
-                    className={`flex items-center gap-1 px-2 py-0.5 rounded border text-xs font-mono cursor-grab active:cursor-grabbing ${
-                      ignored ? "bg-amber-50 border-amber-300 text-amber-700"
-                      : isEmpty ? "bg-slate-50 border-dashed border-slate-400 text-slate-500"
-                              : "bg-white border-sky-300 text-sky-800"
-                    } ${hoverIdx === i ? "ring-2 ring-sky-400" : ""}`}>
-                    <span className={ignored ? "line-through" : ""}>{s}</span>
-                    <button onClick={(e) => { e.stopPropagation(); toggleIgnore(s); }}
-                      title={ignored ? "取消忽略（恢復貼此欄圖）" : "忽略此 idx（欄位留空、不貼圖）"}
-                      className={`text-[10px] leading-none ${ignored ? "" : "opacity-40 hover:opacity-100"}`}>🚫</button>
-                    {customMode && (
+            <>
+              <div className="flex flex-wrap gap-1 items-center">
+                {idxList.map((s, i) => {
+                  const isEmpty = !fromFiles.includes(s);
+                  const ignored = ignoreSet.has(s);
+                  return (
+                    <div key={s + i}
+                      draggable
+                      onDragStart={() => onChipDragStart(i)}
+                      onDragOver={(e) => { e.preventDefault(); if (hoverIdx !== i) setHoverIdx(i); }}
+                      onDrop={() => onChipDrop(i)}
+                      onDragEnd={() => setHoverIdx(-1)}
+                      title={ignored ? "已忽略：此欄留空、不貼圖" : isEmpty ? "此欄沒有對應檔名（將全部留空）" : "可拖曳改變順序"}
+                      className={`flex items-center gap-1 px-2 py-0.5 rounded border text-xs font-mono cursor-grab active:cursor-grabbing ${
+                        ignored ? "bg-amber-50 border-amber-300 text-amber-700"
+                        : isEmpty ? "bg-slate-50 border-dashed border-slate-400 text-slate-500"
+                                : "bg-white border-sky-300 text-sky-800"
+                      } ${hoverIdx === i ? "ring-2 ring-sky-400" : ""}`}>
+                      <span className={ignored ? "line-through" : ""}>{s}</span>
+                      <button onClick={(e) => { e.stopPropagation(); toggleIgnore(s); }}
+                        title={ignored ? "取消忽略（恢復貼此欄圖）" : "忽略此 idx（欄位留空、不貼圖）"}
+                        className={`text-[10px] leading-none ${ignored ? "" : "opacity-40 hover:opacity-100"}`}>🚫</button>
                       <button onClick={() => removeChip(i)}
                         className="text-slate-400 hover:text-red-600 text-[10px] leading-none"
                         title="移除此欄">✕</button>
-                    )}
-                  </div>
-                );
-              })}
-              {customMode && (
+                    </div>
+                  );
+                })}
                 <div className="flex items-center gap-1">
                   <input
                     value={newChip}
@@ -604,32 +579,25 @@
                     + 新增
                   </button>
                 </div>
-              )}
-            </div>
-          )}
-          {customMode && (
-            <div className="space-y-0.5 mt-1">
-              {unmapped.length > 0 && (
-                <div className="text-[10px] text-amber-700">
-                  ⚠ 檔名中有 {unmapped.length} 個 idx 不在欄位清單，這些圖不會貼入（要納入請＋新增或按「依檔名」）：
-                  <span className="font-mono">{unmapped.join(", ")}</span>
-                </div>
-              )}
-              <div className="flex gap-2 text-[10px] flex-wrap">
-                {hasHeader && (
-                  <button onClick={loadFromHeader}
-                    className="text-sky-700 hover:underline font-medium">⊞ 依範本表頭</button>
-                )}
-                <button onClick={loadFromFiles}
-                  className="text-sky-700 hover:underline">↻ 依檔名</button>
-                <span className="text-slate-500">拖曳排序 · 🚫 忽略(留空) · 點 ✕ 移除 · Enter 新增</span>
               </div>
-            </div>
-          )}
-          {!customMode && (
-            <div className="text-[10px] text-slate-500 mt-1">
-              欄數 = 偵測值；切「自訂」可定義欄位（含檔名沒出現的）
-            </div>
+              <div className="space-y-0.5 mt-1">
+                {unmapped.length > 0 && (
+                  <div className="text-[10px] text-amber-700">
+                    ⚠ 檔名中有 {unmapped.length} 個 idx 不在欄位清單，這些圖不會貼入（要納入請＋新增或按「依檔名」）：
+                    <span className="font-mono">{unmapped.join(", ")}</span>
+                  </div>
+                )}
+                <div className="flex gap-2 text-[10px] flex-wrap">
+                  {hasHeader && (
+                    <button onClick={loadFromHeader}
+                      className="text-sky-700 hover:underline font-medium">⊞ 依範本表頭</button>
+                  )}
+                  <button onClick={loadFromFiles}
+                    className="text-sky-700 hover:underline">↻ 依檔名</button>
+                  <span className="text-slate-500">拖曳排序 · 🚫 忽略(留空) · 點 ✕ 移除 · Enter 新增</span>
+                </div>
+              </div>
+            </>
           )}
         </div>
       );
