@@ -3217,12 +3217,17 @@
                             <span>SN 寫入表格儲存格（非浮動文字）</span>
                           </label>
                           {cfg.slidesSn.inCell && (
-                            <div className="grid grid-cols-2 gap-2 mt-2">
-                              <NumberInput label="SN 第幾欄" step={1} value={cfg.slidesSn.col}
-                                onChange={(v) => setCfg((c) => ({ ...c, slidesSn: { ...c.slidesSn, col: Math.max(1, parseInt(v) || 1) } }))} />
-                              <NumberInput label="從第幾列起" step={1} value={cfg.slidesSn.rowStart}
-                                onChange={(v) => setCfg((c) => ({ ...c, slidesSn: { ...c.slidesSn, rowStart: Math.max(1, parseInt(v) || 1) } }))} />
-                            </div>
+                            <>
+                              <div className="grid grid-cols-2 gap-2 mt-2">
+                                <NumberInput label="SN 第幾欄" step={1} value={cfg.slidesSn.col}
+                                  onChange={(v) => setCfg((c) => ({ ...c, slidesSn: { ...c.slidesSn, col: Math.max(1, parseInt(v) || 1) } }))} />
+                                <NumberInput label="從第幾列起" step={1} value={cfg.slidesSn.rowStart}
+                                  onChange={(v) => setCfg((c) => ({ ...c, slidesSn: { ...c.slidesSn, rowStart: Math.max(1, parseInt(v) || 1) } }))} />
+                              </div>
+                              <div className="text-[10px] text-slate-400 mt-1">
+                                此設定只影響<b>匯出檔</b>（把 SN 寫進範本表格的儲存格）；預覽不會顯示。
+                              </div>
+                            </>
                           )}
                         </div>
                       )}
