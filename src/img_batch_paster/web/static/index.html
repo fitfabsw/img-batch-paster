@@ -527,6 +527,12 @@
 
       // 檔名中有 idx 但不在欄位清單 → 那些圖不貼入（提示使用者）
       const unmapped = fromFiles.filter((x) => !idxList.includes(x));
+      // 只差大小寫的 idx（如 B / b）：各自成欄、命名不一致，常造成「欄數多一」的困惑 → 只警告、不自動併
+      const caseDupes = (() => {
+        const byLower = {};
+        for (const s of fromFiles) { const k = s.toLowerCase(); (byLower[k] = byLower[k] || []).push(s); }
+        return Object.values(byLower).filter((a) => a.length > 1);
+      })();
 
       return (
         <div>
@@ -581,6 +587,12 @@
                 </div>
               </div>
               <div className="space-y-0.5 mt-1">
+                {caseDupes.length > 0 && (
+                  <div className="text-[10px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
+                    ⚠ 只差大小寫、被當成不同欄(可能是檔名打錯)：
+                    <span className="font-mono font-semibold">{caseDupes.map((a) => a.join(" / ")).join("、")}</span>
+                  </div>
+                )}
                 {unmapped.length > 0 && (
                   <div className="text-[10px] text-amber-700">
                     ⚠ 無對應欄位、不貼入：
