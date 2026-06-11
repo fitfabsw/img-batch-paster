@@ -1365,42 +1365,244 @@
     }
 
     function HelpModal({ onClose }) {
+      const bodyRef = useRef(null);
+      useEffect(() => {
+        const onKey = (e) => { if (e.key === "Escape") { e.preventDefault(); onClose(); } };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+      }, [onClose]);
+      const scrollTo = (id) => {
+        const el = bodyRef.current && bodyRef.current.querySelector("#" + id);
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+      };
+      const Badge = ({ icon, cls }) => (
+        <span className={`inline-flex items-center justify-center w-9 h-9 rounded-xl text-lg shrink-0 ${cls}`}>{icon}</span>
+      );
+      const Pill = ({ children }) => (
+        <span className="inline-block px-1.5 py-px rounded bg-indigo-50 border border-indigo-200 text-indigo-700 text-[12px] font-medium align-middle">{children}</span>
+      );
+      const Key = ({ children }) => (
+        <kbd className="px-1.5 py-0.5 border border-slate-300 rounded bg-slate-50 text-[11px] font-mono">{children}</kbd>
+      );
+      const Step = ({ n, t }) => (
+        <div className="flex-1 bg-white border rounded-lg p-3 text-center">
+          <div className="w-6 h-6 mx-auto rounded-full bg-emerald-600 text-white text-xs font-bold flex items-center justify-center mb-1">{n}</div>
+          <div className="text-xs text-slate-700">{t}</div>
+        </div>
+      );
+      const NameGrid = () => {
+        const ncols = ["A", "B", "C", "D"];
+        const nrows = [
+          { sn: "2EG", have: ["A", "B", "C", "D"] },
+          { sn: "2JG", have: ["A", "C", "D"] },
+          { sn: "2KG", have: ["A", "B", "D"] },
+        ];
+        return (
+          <div className="bg-slate-50 border rounded-lg p-3 my-2">
+            <div className="text-center font-mono text-sm">
+              <span className="text-rose-600 font-bold">2EG</span><span className="text-slate-400">-</span><span className="text-sky-600 font-bold">C</span><span className="text-slate-400">.jpg</span>
+              <span className="font-sans text-[11px] text-slate-400 ml-2">前段＝列、後段＝欄</span>
+            </div>
+            <div className="text-[11px] text-slate-500 text-center my-1">資料夾：<code className="font-mono">2EG-A 2EG-B 2EG-C 2EG-D 2JG-A 2JG-C 2JG-D 2KG-A 2KG-B 2KG-D …</code></div>
+            <table className="mx-auto border-collapse text-[11px]">
+              <tbody>
+                <tr>
+                  <td className="border px-2 py-1 bg-slate-100 text-[10px] text-slate-400">SN＼欄</td>
+                  {ncols.map((c) => (<td key={c} className="border px-5 py-1 text-center font-mono text-sky-700 bg-sky-50 font-bold">{c}</td>))}
+                </tr>
+                {nrows.map((r) => (
+                  <tr key={r.sn}>
+                    <td className="border px-2 py-1 text-center font-mono text-rose-600 bg-rose-50 font-bold">{r.sn}</td>
+                    {ncols.map((c) => (
+                      <td key={c} className="border px-5 py-2 text-center">
+                        {r.have.includes(c) ? <span title={`${r.sn}-${c}`}>🖼</span> : <span className="text-amber-500 text-[10px]">缺→空</span>}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="text-center text-[11px] text-slate-500 mt-2">
+              每張依檔名落到「列 × 欄」；<code className="font-mono">2JG-B</code>、<code className="font-mono">2KG-C</code> 不存在 → 該格<b>留空、不往前補位</b>。
+            </div>
+          </div>
+        );
+      };
+      const FitCompare = () => {
+        const Box = ({ iw, ih }) => (
+          <div className="border border-slate-300 w-[72px] h-14 flex items-center justify-center bg-white shrink-0">
+            <div className="bg-teal-300 rounded-sm" style={{ width: iw, height: ih }} />
+          </div>
+        );
+        const Lab = ({ children }) => (<div className="w-20 shrink-0 text-[12px] text-right pr-2 self-center text-slate-600">{children}</div>);
+        return (
+          <div className="bg-slate-50 border rounded-lg p-3 my-2">
+            <div className="text-[12px] text-slate-600 mb-2">「完整貼邊」與「等高對齊」<b>只在「裁剪 = 各欄獨立」時才有差別</b>（例：A 欄裁成直、B 欄裁成寬）：</div>
+            <div className="flex items-center gap-1 mb-1">
+              <div className="w-20 shrink-0" />
+              <div className="w-[72px] text-center text-[11px] font-mono text-slate-500">A（直）</div>
+              <div className="w-[72px] text-center text-[11px] font-mono text-slate-500">B（寬）</div>
+            </div>
+            <div className="flex items-center gap-1 mb-1">
+              <Lab>完整貼邊</Lab>
+              <Box iw={20} ih={48} /><Box iw={64} ih={26} />
+              <span className="text-[11px] text-slate-500 ml-1">各自貼滿格 → 高度不同</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <Lab>等高對齊</Lab>
+              <Box iw={11} ih={26} /><Box iw={64} ih={26} />
+              <span className="text-[11px] text-slate-500 ml-1">同列縮到等高 → A 變小、上下對齊</span>
+            </div>
+          </div>
+        );
+      };
+      // 完整貼邊 vs 拉伸：同一張（寬）圖在一格內
+      const FillDemo = () => {
+        const Cell = ({ cap, children }) => (
+          <div className="text-center">
+            <div className="border border-slate-300 w-24 h-16 flex items-center justify-center bg-white mx-auto overflow-hidden">{children}</div>
+            <div className="text-[11px] text-slate-600 mt-1">{cap}</div>
+          </div>
+        );
+        return (
+          <div className="flex gap-6 my-2 justify-center">
+            <Cell cap="完整貼邊（整張完整、上下留白）"><div className="bg-teal-300 rounded-sm" style={{ width: 84, height: 24 }} /></Cell>
+            <Cell cap="拉伸（變形填滿、四邊留白）"><div className="bg-teal-300 rounded-sm" style={{ width: 80, height: 48 }} /></Cell>
+          </div>
+        );
+      };
+      // 依範本表頭 vs 依檔名：同一批檔案、欄序不同
+      const OrderRow = ({ label, cols, note, tone }) => (
+        <div className="flex items-center gap-2 my-1 flex-wrap">
+          <div className="w-24 shrink-0 text-[12px] text-right text-slate-600">{label}</div>
+          <div className="flex gap-1">
+            {cols.map((c, i) => (<span key={i} className="w-9 text-center font-mono text-[11px] border rounded bg-white py-0.5 text-slate-600">{c}</span>))}
+            <span className="text-slate-400 self-center">…</span>
+          </div>
+          {note && <span className={`text-[11px] ${tone === "ok" ? "text-emerald-600" : "text-amber-600"}`}>{note}</span>}
+        </div>
+      );
+      const OrderDemo = () => (
+        <div className="bg-indigo-50/60 border border-indigo-200 rounded-lg p-3 my-2">
+          <div className="text-[12px] text-slate-600 mb-1">同一批檔案（後段 idx：BC、C、CCD、D、E…），欄位順序會因模式不同：</div>
+          <OrderRow label="範本表頭" cols={["C", "D", "BC", "E", "CCD"]} />
+          <OrderRow label="⊞ 依範本表頭" cols={["C", "D", "BC", "E", "CCD"]} note="✅ 跟範本欄位完全對齊" tone="ok" />
+          <OrderRow label="↻ 依檔名" cols={["BC", "C", "CCD", "D", "E"]} note="⚠ 字母序，可能跟範本對不上" tone="warn" />
+        </div>
+      );
+      const SnDemo = () => (
+        <div className="bg-slate-50 border rounded-lg p-3 my-2 text-[12px]">
+          <div className="text-slate-500 mb-1">Excel 第一欄是 SN；來源資料夾 A、B 各對應一欄：</div>
+          <table className="border-collapse mx-auto">
+            <tbody>
+              <tr>
+                <td className="border px-2 py-1 bg-slate-100 text-[10px] text-slate-400">SN＼來源</td>
+                <td className="border px-2 py-1 text-center font-mono">A 夾 → 欄 F</td>
+                <td className="border px-2 py-1 text-center font-mono">B 夾 → 欄 G</td>
+              </tr>
+              <tr>
+                <td className="border px-2 py-1 font-mono bg-white">SN001</td>
+                <td className="border px-2 py-1 text-center">A/SN001 🖼</td>
+                <td className="border px-2 py-1 text-center">B/SN001 🖼</td>
+              </tr>
+              <tr>
+                <td className="border px-2 py-1 font-mono bg-white">SN002</td>
+                <td className="border px-2 py-1 text-center">A/SN002 🖼</td>
+                <td className="border px-2 py-1 text-center text-slate-300">缺 → 留空</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      );
+
+      const SECTIONS = [
+        { id: "help-intro", icon: "🎯", cls: "bg-indigo-100 text-indigo-700", title: "這是什麼",
+          body: (<p>把一整批圖片，依 <b>檔名</b> 或 <b>SN</b> 規則，自動貼進 <b>PowerPoint / Keynote / Excel</b> 範本的指定格子，省去逐張手動拖放。</p>) },
+        { id: "help-quick", icon: "🚀", cls: "bg-emerald-100 text-emerald-700", title: "快速上手",
+          body: (<div className="flex gap-2"><Step n="1" t="上傳範本 (.pptx / .key / .xlsx)" /><Step n="2" t="上傳圖片資料夾" /><Step n="3" t="調整對位 → 看預覽 → 匯出" /></div>) },
+        { id: "help-group", icon: "🗂️", cls: "bg-sky-100 text-sky-700", title: "兩種分群方式",
+          body: (<div className="grid grid-cols-2 gap-2">
+            <div className="border rounded-lg p-2"><b>📷 依檔名</b><div className="text-[12px] text-slate-500 mt-0.5">上傳一個資料夾，靠檔名規則分群、對位。</div></div>
+            <div className="border rounded-lg p-2"><b>📋 依範本 SN</b><div className="text-[12px] text-slate-500 mt-0.5">從 Excel 第一欄讀 SN 清單，每欄對應一個來源資料夾。</div></div>
+          </div>) },
+        { id: "help-byname", icon: "📷", cls: "bg-rose-100 text-rose-700", title: "依檔名對位",
+          body: (<>
+            <p>檔名格式 <Pill>{`{前段}-{後段}`}</Pill>，例 <code className="font-mono">2EG-BC</code>：<b className="text-rose-600">前段</b>＝第幾列 (SN)、<b className="text-sky-600">後段</b>＝第幾欄。</p>
+            <NameGrid />
+            <ul className="list-disc ml-5 space-y-0.5 text-[13px]">
+              <li>「對位欄位」可 <b>拖曳排序 / ✕移除 / ＋新增 / 🚫忽略(留空)</b>。</li>
+              <li>缺少的圖該格<b>自動留空、不往前補位</b>。</li>
+              <li>大小寫不一致 (如 <code className="font-mono">B</code> / <code className="font-mono">b</code>) 會跳警示。</li>
+            </ul>
+            <div className="font-semibold text-slate-700 mt-3 mb-1">📑 欄位順序：xlsx 範本有兩種模式</div>
+            <p className="text-[12px] text-slate-500 mb-1"><Pill>依範本表頭</Pill> 照 Excel 表頭排欄（推薦，圖會對齊範本）；<Pill>依檔名</Pill> 照檔名字母序排。</p>
+            <OrderDemo />
+          </>) },
+        { id: "help-bysn", icon: "📋", cls: "bg-violet-100 text-violet-700", title: "依範本 SN",
+          body: (<>
+            <p>Excel <b>第一欄</b>是 SN 清單；每個來源資料夾對應<b>一欄</b>，程式依 SN 找同名檔貼入。適合「同一批 SN、多個量測角度各放一個資料夾」的情境。</p>
+            <SnDemo />
+          </>) },
+        { id: "help-crop", icon: "✂️", cls: "bg-amber-100 text-amber-700", title: "裁剪",
+          body: (<p>兩種裁剪方式：<b>統一</b>（全部套同一個裁切框）與 <b>各欄獨立</b>（每一欄各自設裁切框）；裁剪後會<b>自動維持長寬比</b>，不變形。</p>) },
+        { id: "help-fit", icon: "🖼️", cls: "bg-teal-100 text-teal-700", title: "圖片填法",
+          body: (<>
+            <ul className="list-disc ml-5 space-y-0.5 text-[13px]">
+              <li><b>完整貼邊</b>：等比放大，直到<b>寬或高先碰到格子邊</b>為止（整張完整顯示，另一邊留白）。</li>
+              <li><b>等高對齊</b>：同列圖片縮到<b>相同高度</b>、上下緣對齊。</li>
+              <li><b>拉伸</b>：不管比例，<b>變形填滿整格</b>。</li>
+            </ul>
+            <FillDemo />
+            <FitCompare />
+            <p className="text-[12px] text-slate-500"><b>提示</b>：裁剪用「統一」時各圖比例一致，「完整貼邊」與「等高對齊」看起來會相同。三種皆可設「四邊留白 %」。</p>
+          </>) },
+        { id: "help-layout", icon: "📐", cls: "bg-blue-100 text-blue-700", title: "排版（智能排列 / 網格）",
+          body: (<ul className="list-disc ml-5 space-y-0.5 text-[13px]">
+            <li><b>PPT / Keynote</b>：上傳含表格的範本 → <Pill>智能排列</Pill> 自動把圖對齊表格格子；要手動就關掉、改用「每頁網格」+ 預覽下方 steppers。</li>
+            <li><b>Excel</b>：自動偵測表格 → 帶入「起始 cell / SN 欄」。</li>
+          </ul>) },
+        { id: "help-out", icon: "📤", cls: "bg-green-100 text-green-700", title: "輸出與配置",
+          body: (<p>輸出格式 <b>pptx / key / xlsx</b>（匯入什麼預設輸出什麼）。右上角 <Pill>📁 配置</Pill> 可<b>儲存 / 載入</b> <code className="font-mono">.ibp</code> 包檔（含範本），跨專案複用。</p>) },
+        { id: "help-tips", icon: "💡", cls: "bg-fuchsia-100 text-fuchsia-700", title: "小技巧與快捷鍵",
+          body: (<ul className="list-disc ml-5 space-y-0.5 text-[13px]">
+            <li><Key>⌘Z</Key> / <Key>⇧⌘Z</Key>：Undo / Redo（幾乎所有操作都可復原）。</li>
+            <li>預覽可<b>縮放、分頁、拖曳排序</b>。</li>
+            <li>完整鍵盤操作見右上「⌨️ 熱鍵」。</li>
+          </ul>) },
+      ];
+
       return (
-        <InfoModal title="❓ 說明" onClose={onClose}>
-          <h3 className="text-sm font-semibold text-slate-800 mt-0 mb-1">主要目的</h3>
-          <p className="mb-3">
-            把一批圖片，依規則自動貼到 <b>PowerPoint / Keynote / Excel</b> 範本中的指定格子，
-            省去手動逐張拖放的繁瑣作業。
-          </p>
-
-          <h3 className="text-sm font-semibold text-slate-800 mt-3 mb-1">兩種分群方式</h3>
-          <ul className="list-disc ml-5 space-y-1 mb-3">
-            <li>
-              <b>📷 依檔名</b>：上傳<u>一個資料夾</u>的圖片，由檔名規則 (group/idx) 分群，依
-              <code className="px-1 bg-slate-100 rounded text-[12px]">依檔名 idx</code> 對位填入。
-            </li>
-            <li>
-              <b>📋 依範本 SN</b>：從 <u>Excel 範本第一欄</u>讀 SN 清單，
-              <u>每欄</u>對應一個來源資料夾，依 SN 對應檔名填入。
-            </li>
-          </ul>
-
-          <h3 className="text-sm font-semibold text-slate-800 mt-3 mb-1">一般流程</h3>
-          <ol className="list-decimal ml-5 space-y-1 mb-3">
-            <li>上傳範本 (.pptx / .key / .xlsx) — Keynote 需 macOS 環境自動轉檔</li>
-            <li>上傳圖片資料夾（依檔名）或多個 SN 來源資料夾（依範本 SN）</li>
-            <li>在中欄調整檔名規則、排序、欄／列數</li>
-            <li>(可選) 點 <b>✂️ 設定裁剪</b> — 全域裁剪 或 各欄／各 SN 獨立裁剪</li>
-            <li>看右側預覽 → 按 <b>匯出</b> 下載結果</li>
-          </ol>
-
-          <h3 className="text-sm font-semibold text-slate-800 mt-3 mb-1">配置存讀</h3>
-          <p className="mb-1">
-            右上角 <code className="px-1 bg-slate-100 rounded text-[12px]">📁 配置</code> 可
-            <b>儲存 / 載入 / 匯出</b> <code className="px-1 bg-slate-100 rounded text-[12px]">.ibp</code> 包檔
-            （含範本檔），方便不同專案間複用。
-          </p>
-        </InfoModal>
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+          <div className="bg-white rounded-xl shadow-2xl w-[95vw] max-w-[1320px] h-[93vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3 bg-gradient-to-r from-indigo-600 to-violet-600 text-white shrink-0">
+              <div className="text-lg font-semibold">📖 img-batch-paster 使用說明</div>
+              <button onClick={onClose} className="border border-white/40 rounded px-2 py-0.5 text-xs hover:bg-white/15">關閉 (Esc)</button>
+            </div>
+            <div className="flex flex-1 min-h-0">
+              <nav className="w-52 shrink-0 border-r bg-slate-50 overflow-y-auto py-2 hidden sm:block">
+                {SECTIONS.map((s) => (
+                  <button key={s.id} onClick={() => scrollTo(s.id)} className="flex items-center gap-2 w-full text-left px-4 py-1.5 text-[13px] text-slate-600 hover:bg-indigo-50 hover:text-indigo-700">
+                    <span className="w-4 text-center">{s.icon}</span>{s.title}
+                  </button>
+                ))}
+              </nav>
+              <div ref={bodyRef} className="flex-1 overflow-y-auto px-6 py-6 text-sm text-slate-700">
+                <div className="max-w-4xl mx-auto space-y-8">
+                  {SECTIONS.map((s) => (
+                    <section key={s.id} id={s.id} className="scroll-mt-2">
+                      <div className="flex items-center gap-3 mb-2">
+                        <Badge icon={s.icon} cls={s.cls} />
+                        <h3 className="text-lg font-semibold text-slate-800">{s.title}</h3>
+                      </div>
+                      <div className="sm:pl-12 leading-relaxed space-y-2">{s.body}</div>
+                    </section>
+                  ))}
+                  <div className="sm:pl-12 text-[11px] text-slate-400 pt-3 border-t">img-batch-paster · 一次把整批圖片貼進範本</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       );
     }
 
