@@ -3398,10 +3398,11 @@
                       <label className="flex items-center gap-2 text-xs text-slate-700 mt-2 pt-2 border-t">
                         <input type="checkbox" checked={cfg.excel.embedInCell}
                           onChange={(e) => setCfg((c) => ({ ...c, excel: { ...c.excel, embedInCell: e.target.checked } }))} />
-                        <span>嵌入儲存格 (DISPIMG)</span>
+                        <span>圖片嵌入儲存格內（變成格子內容，非浮動）</span>
                       </label>
                       <div className="text-[10px] text-slate-400">
-                        勾選後圖片變成儲存格內容（點 cell 即選取，不能拖拉）。需 Excel 365 / WPS Office 才顯示得了
+                        勾＝圖片變成<b>儲存格內容</b>（點 cell 即選取、不能拖拉），需 Excel 365 / WPS 才顯示得了；
+                        不勾＝<b>浮動圖片</b>蓋在格子上（相容性較佳，預設）。
                       </div>
                     </div>
                   </div>
