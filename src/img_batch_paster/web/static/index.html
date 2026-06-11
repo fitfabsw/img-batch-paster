@@ -204,10 +204,19 @@
       const snCol = letterOf(minC);
       const startColL = letterOf(startColIdx);
       if (!snCol || !startColL) return null;
+      // 表頭那列（最靠近資料的 header 列）各影像欄的文字 → 作為 idx 欄位順序（對位用）
+      // 讓圖片依檔名字母後綴對到「表頭文字相同」的欄，不必手動排序。
+      const headerRow = minR + Math.max(0, skipRows - 1);
+      const headerCols = [];
+      for (let col = startColIdx; col <= maxC; col++) {
+        const cell = cells.find((c) => c.r === headerRow && c.c === col);
+        headerCols.push(cell && cell.text != null ? String(cell.text).trim() : "");
+      }
+      while (headerCols.length && !headerCols[headerCols.length - 1]) headerCols.pop(); // 去尾端空白欄
       return {
         snCol, startCell: `${startColL}${startRowIdx}`,
         imgsPerRow: Math.max(1, maxC - startColIdx + 1),
-        region: box,
+        headerCols, region: box,
       };
     }
 
@@ -452,7 +461,7 @@
     }
 
     // 對位模式的欄位編輯器：自動偵測 idx 集合 + 排序選項 + 自訂欄位
-    function IdxColumnsEditor({ label, allFiles, updateLabel, perColCrop, onOpenIdxCrop }) {
+    function IdxColumnsEditor({ label, allFiles, updateLabel, perColCrop, onOpenIdxCrop, headerOrder }) {
       const sort = label.idxSort || "auto";
       const customMode = sort === "custom";
       const idxList = useMemo(
@@ -503,6 +512,11 @@
 
       const loadFromFiles = () => {
         updateLabel({ idxSort: "custom", idxOrder: [...fromFiles] });
+      };
+
+      const hasHeader = (headerOrder || []).some((h) => h);
+      const loadFromHeader = () => {
+        updateLabel({ idxSort: "custom", idxOrder: [...(headerOrder || [])] });
       };
 
       const SORTS = [
@@ -582,9 +596,13 @@
                   <span className="font-mono">{unmapped.join(", ")}</span>
                 </div>
               )}
-              <div className="flex gap-2 text-[10px]">
+              <div className="flex gap-2 text-[10px] flex-wrap">
+                {hasHeader && (
+                  <button onClick={loadFromHeader}
+                    className="text-sky-700 hover:underline font-medium">⊞ 依範本表頭</button>
+                )}
                 <button onClick={loadFromFiles}
-                  className="text-sky-700 hover:underline">↻ 從檔名重新載入</button>
+                  className="text-sky-700 hover:underline">↻ 依檔名</button>
                 <span className="text-slate-500">拖曳排序 · 點 ✕ 移除 · Enter 新增</span>
               </div>
             </div>
@@ -874,7 +892,7 @@
     }
 
     // 分段點選的 SN 設定 UI：分隔符 + 各段角色 chip + 即時抽取預覽 + 命中統計
-    function SnPatternPicker({ cfgLabel, autoAlign, setCfg, firstFile, allFiles, perColCrop, onOpenIdxCrop }) {
+    function SnPatternPicker({ cfgLabel, autoAlign, setCfg, firstFile, allFiles, perColCrop, onOpenIdxCrop, headerOrder }) {
       const DELIMS = [
         { v: "-", label: "-" },
         { v: "_", label: "_" },
@@ -1088,6 +1106,7 @@
                     updateLabel={updateLabel}
                     perColCrop={perColCrop}
                     onOpenIdxCrop={onOpenIdxCrop}
+                    headerOrder={headerOrder}
                   />
                 </div>
               )}
@@ -1139,6 +1158,7 @@
                       updateLabel={updateLabel}
                       perColCrop={perColCrop}
                       onOpenIdxCrop={onOpenIdxCrop}
+                      headerOrder={headerOrder}
                     />
                   )}
                 </div>
@@ -2373,9 +2393,19 @@
         const d = detectExcelTable(xlGrid);
         if (!d) return;
         excelAutoRef.current = true;
-        setCfg((c) => ({ ...c, excel: { ...c.excel, startCell: d.startCell, snCol: d.snCol, imgsPerRow: d.imgsPerRow } }));
+        const headerOrder = (d.headerCols || []).slice();
+        setCfg((c) => {
+          const next = { ...c, excel: { ...c.excel, startCell: d.startCell, snCol: d.snCol, imgsPerRow: d.imgsPerRow } };
+          // 表頭有文字 → 自動把 idx 欄位排成跟表頭一致（依檔名字母後綴自動對位，免手動排序）
+          if (headerOrder.some((h) => h)) {
+            next.label = { ...c.label, idxSort: "custom", idxOrder: headerOrder };
+          }
+          return next;
+        });
         const L = (ci) => ((xlGrid.cols || [])[ci - 1] || {}).letter || "";
-        setStatus(`偵測到表格 ${L(d.region.minC)}${d.region.minR}:${L(d.region.maxC)}${d.region.maxR} → 起始 ${d.startCell}、SN 欄 ${d.snCol}`);
+        const ord = headerOrder.filter((h) => h);
+        setStatus(`偵測到表格 ${L(d.region.minC)}${d.region.minR}:${L(d.region.maxC)}${d.region.maxR} → 起始 ${d.startCell}、SN 欄 ${d.snCol}`
+          + (ord.length ? `、欄位依表頭對位（${ord.join(" / ")}）` : ""));
       }, [xlGrid]);
 
       // 「依順序」已移除：依檔名(非 snMatch)固定用 idx 對位。自我修復——若舊 session / 舊
@@ -2383,6 +2413,13 @@
       useEffect(() => {
         if (!cfg.snMatchMode && !cfg.autoAlign) setCfg((c) => ({ ...c, autoAlign: true }));
       }, [cfg.snMatchMode, cfg.autoAlign]);
+
+      // 範本表頭欄位順序（給「依範本表頭」還原按鈕用；非 xlsx 表格則為空）
+      const tblHeaderOrder = useMemo(() => {
+        if (!xlGrid) return [];
+        const d = detectExcelTable(xlGrid);
+        return d && Array.isArray(d.headerCols) ? d.headerCols : [];
+      }, [xlGrid]);
 
       // 套用表格：用表格座標填「位置 + 圖片區總寬」，圖片欄數/列數「跟隨使用者左側設定」
       // （表格常把多張圖放在一個寬的合併欄，欄數看不出來，所以用使用者的 cols 平分）
@@ -3162,6 +3199,7 @@
                           setCropIdxKey(idxKey);
                           setCropOpen(true);
                         }}
+                        headerOrder={tblHeaderOrder}
                       />
                       <NumberInput label="字體" suffix="pt" step={1} value={cfg.label.font_pt}
                         onChange={(v) => setCfg((c) => ({ ...c, label: { ...c.label, font_pt: v } }))} />
