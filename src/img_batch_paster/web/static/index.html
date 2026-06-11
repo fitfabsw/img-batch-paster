@@ -3849,6 +3849,7 @@
                       <div className="flex items-center justify-between gap-2 flex-wrap pb-2 mb-2 border-b border-slate-100 shrink-0">
                         <div className="text-sm text-slate-500 flex items-center gap-2">
                           預覽
+                          {tplPath && (<>
                           <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
                             cfg.snMatchMode ? "bg-purple-100 text-purple-700 border-purple-300"
                               : "bg-slate-100 text-slate-600 border-slate-300"
@@ -3858,7 +3859,9 @@
                           {mode === "slides" && (
                             <span className="ml-1 text-[10px] text-slate-400" title="Stepper ◀▶ 操作">Shift＝粗調 · Alt＝微調</span>
                           )}
+                          </>)}
                         </div>
+                        {tplPath && (
                         <div className="flex items-center gap-2 text-sm">
                           {/* zoom 控制 */}
                           <div className="flex items-center gap-0 border rounded overflow-hidden">
@@ -3884,6 +3887,7 @@
                             </>
                           )}
                         </div>
+                        )}
                       </div>
                       <div ref={stageWrapRef} className="flex-1 min-h-0 relative" style={{ overflow: "auto" }}>
                        {!tplPath && <WelcomeHero />}
@@ -3989,7 +3993,7 @@
                       </div>
 
                       {/* 智能排列：自動讀範本表格、預設對齊。一個 toggle 搞定 */}
-                      {mode === "slides" && (() => {
+                      {tplPath && mode === "slides" && (() => {
                         const tbl = tableInfo && !tableInfo.error && (tableInfo.tables || [])[0];
                         const imageRows = tbl ? Math.max(1, tbl.rows - Math.min(tbl.rows - 1, tblSkipRows)) : 0;
                         return (
