@@ -45,6 +45,7 @@
         rawMode: false,            // true=直接編輯 pattern, false=分段點選
         idxSort: "auto",           // 對位模式欄位排序：auto | alpha | num | custom
         idxOrder: [],              // custom 時使用者自訂順序
+        idxIgnore: [],             // 忽略的 idx：當作資料夾無此 idx 圖（欄位保留→留空佔位）
         idxCrops: {},              // 各欄獨立模式 (依檔名 idx)：idx字串 → crop obj
         x: 2,
         width: 12,        // SN box 固定寬度 (% of slide width)，與圖片 X 解耦
@@ -231,7 +232,7 @@
       const colsArg = autoAlign
         ? detectIdxList(orderedFiles, label.pattern, label.idxSort || "auto", label.idxOrder || [])
         : perRow;
-      const rows = buildRows(orderedFiles, label.pattern, colsArg, autoAlign);
+      const rows = buildRows(orderedFiles, label.pattern, colsArg, autoAlign, new Set(label.idxIgnore || []));
       const cells = [];
       rows.forEach(({ group, cells: rowCells }, rIdx) => {
         const targetRow = start.row + rIdx * stepRow;
@@ -334,7 +335,7 @@
 
     // 依檔名 group+idx 把檔案排成 rows[group] = [col0, col1, ...]，缺的留 null
     // idxList: 欄位定義（字串陣列），cols = idxList.length
-    function groupBySnIdx(orderedFiles, pattern, idxList) {
+    function groupBySnIdx(orderedFiles, pattern, idxList, ignoreSet) {
       const cols = idxList.length;
       const idxToColMap = new Map(idxList.map((s, i) => [s, i]));
       const groups = [];
@@ -342,6 +343,8 @@
       for (const f of orderedFiles) {
         const { group, idx } = extractGroupIdx(f.name || f.path.split("/").pop(), pattern);
         if (!(group in map)) { map[group] = new Array(cols).fill(null); groups.push(group); }
+        // 被忽略的 idx：當作此檔不存在（欄位仍保留 → 留 null = 空白佔位）
+        if (idx != null && ignoreSet && ignoreSet.has(String(idx))) continue;
         const col = idx != null ? idxToColMap.get(String(idx)) : undefined;
         // idx 不在欄位清單（或無 idx）→ 不貼入。
         // 舊作法塞到第一個空位，會被後面對映到位的圖蓋掉、且順序一變就誤放別欄。
@@ -353,10 +356,10 @@
 
     // 建立 rows：每個 = { group, cells: [file|null × cols] }
     // autoAlign=true 用 idxList 對位；false 用 cols 順序填滿
-    function buildRows(orderedFiles, pattern, colsOrIdxList, autoAlign) {
+    function buildRows(orderedFiles, pattern, colsOrIdxList, autoAlign, ignoreSet) {
       if (autoAlign) {
         const idxList = Array.isArray(colsOrIdxList) ? colsOrIdxList : [];
-        return groupBySnIdx(orderedFiles, pattern, idxList);
+        return groupBySnIdx(orderedFiles, pattern, idxList, ignoreSet);
       }
       const cols = typeof colsOrIdxList === "number" ? colsOrIdxList : (colsOrIdxList?.length || 1);
       const rows = [];
@@ -394,7 +397,7 @@
       const cellH = grid.rowH > 0 ? H * grid.rowH / 100 : null;
       const areaW = grid.areaW > 0 ? W * grid.areaW / 100 : null;
 
-      const allRows = buildRows(orderedFiles, label.pattern, colsArg, autoAlign);
+      const allRows = buildRows(orderedFiles, label.pattern, colsArg, autoAlign, new Set(label.idxIgnore || []));
       const pages = [];
       for (let p = 0; p < allRows.length; p += rowsPerPage) {
         const pageRows = allRows.slice(p, p + rowsPerPage);
@@ -521,6 +524,15 @@
         editCols({ idxSort: "custom", idxOrder: [...(headerOrder || [])] }, "欄位依範本表頭");
       };
 
+      // 忽略 idx：當作資料夾無此 idx 圖 → 該欄保留位置但不貼圖（自動/自訂、依表頭/依檔名 皆通用）
+      const ignoreSet = new Set(label.idxIgnore || []);
+      const toggleIgnore = (s) => {
+        const cur = new Set(label.idxIgnore || []);
+        const was = cur.has(s);
+        if (was) cur.delete(s); else cur.add(s);
+        editCols({ idxIgnore: [...cur] }, was ? `取消忽略「${s}」` : `忽略「${s}」`);
+      };
+
       const SORTS = [
         { v: "auto",   label: "自動" },
         { v: "custom", label: "自訂" },
@@ -552,6 +564,7 @@
             <div className="flex flex-wrap gap-1 items-center">
               {idxList.map((s, i) => {
                 const isEmpty = customMode && !fromFiles.includes(s);
+                const ignored = ignoreSet.has(s);
                 return (
                   <div key={s + i}
                     draggable
@@ -559,12 +572,16 @@
                     onDragOver={(e) => { e.preventDefault(); if (hoverIdx !== i) setHoverIdx(i); }}
                     onDrop={() => onChipDrop(i)}
                     onDragEnd={() => setHoverIdx(-1)}
-                    title={isEmpty ? "此欄沒有對應檔名（將全部留空）" : "可拖曳改變順序"}
+                    title={ignored ? "已忽略：此欄留空、不貼圖" : isEmpty ? "此欄沒有對應檔名（將全部留空）" : "可拖曳改變順序"}
                     className={`flex items-center gap-1 px-2 py-0.5 rounded border text-xs font-mono cursor-grab active:cursor-grabbing ${
-                      isEmpty ? "bg-slate-50 border-dashed border-slate-400 text-slate-500"
+                      ignored ? "bg-amber-50 border-amber-300 text-amber-700"
+                      : isEmpty ? "bg-slate-50 border-dashed border-slate-400 text-slate-500"
                               : "bg-white border-sky-300 text-sky-800"
                     } ${hoverIdx === i ? "ring-2 ring-sky-400" : ""}`}>
-                    {s}
+                    <span className={ignored ? "line-through" : ""}>{s}</span>
+                    <button onClick={(e) => { e.stopPropagation(); toggleIgnore(s); }}
+                      title={ignored ? "取消忽略（恢復貼此欄圖）" : "忽略此 idx（欄位留空、不貼圖）"}
+                      className={`text-[10px] leading-none ${ignored ? "" : "opacity-40 hover:opacity-100"}`}>🚫</button>
                     {customMode && (
                       <button onClick={() => removeChip(i)}
                         className="text-slate-400 hover:text-red-600 text-[10px] leading-none"
@@ -605,7 +622,7 @@
                 )}
                 <button onClick={loadFromFiles}
                   className="text-sky-700 hover:underline">↻ 依檔名</button>
-                <span className="text-slate-500">拖曳排序 · 點 ✕ 移除 · Enter 新增</span>
+                <span className="text-slate-500">拖曳排序 · 🚫 忽略(留空) · 點 ✕ 移除 · Enter 新增</span>
               </div>
             </div>
           )}
@@ -2133,7 +2150,7 @@
         if (cfg.autoAlign && orderedFiles.length > 0) {
           const idxList = autoIdxList;
           if (!idxList.length) return orderedFiles.map((f) => [f]);
-          const rows = buildRows(orderedFiles, cfg.label.pattern, idxList, true);
+          const rows = buildRows(orderedFiles, cfg.label.pattern, idxList, true, new Set(cfg.label.idxIgnore || []));
           return rows.map((r) => r.cells);
         }
         return orderedFiles.map((f) => [f]);
@@ -3401,7 +3418,7 @@
                 {cfg.autoAlign && orderedFiles.length > 0 ? (() => {
                   const idxList = detectIdxList(orderedFiles, cfg.label.pattern, cfg.label.idxSort || "auto", cfg.label.idxOrder || []);
                   const cols = Math.max(1, idxList.length);
-                  const rows = buildRows(orderedFiles, cfg.label.pattern, idxList, true);
+                  const rows = buildRows(orderedFiles, cfg.label.pattern, idxList, true, new Set(cfg.label.idxIgnore || []));
                   const showPerColCrop = cfg.cropMode === "per-col";
                   return <>
                     {/* 各欄獨立 模式：欄位 + ✂️ 標頭列 */}
