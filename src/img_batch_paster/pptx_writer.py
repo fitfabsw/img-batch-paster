@@ -73,15 +73,62 @@ class Placement:
     font_pt: float = 18.0
     bold: bool = True
     align: str = "center"         # "left" | "center" | "right"
+    row_idx: int | None = None    # SN 文字所屬的列 index (給「寫入表格 cell」用)
+    crop: dict | None = None      # per-placement crop override (覆寫全域 crop)
 
 
-def _add_placements_to_slide(slide, placements: list[Placement]) -> None:
+def _find_table(slide):
+    for shp in slide.shapes:
+        try:
+            if shp.has_table:
+                return shp.table
+        except Exception:
+            continue
+    return None
+
+
+def _write_sn_into_table(slide, placements, sn_col: int, sn_row_start: int) -> bool:
+    """把含 text + row_idx 的 placement 寫進 slide 第一個表格的儲存格。
+    回傳 True 表示有寫入 (table 存在)；False 則呼叫端應 fallback 用文字方塊。"""
+    from pptx.util import Pt
+    table = _find_table(slide)
+    if table is None:
+        return False
+    nrows, ncols = len(table.rows), len(table.columns)
+    for pl in placements:
+        if pl.text is None or pl.row_idx is None:
+            continue
+        tr = sn_row_start + pl.row_idx
+        if tr < 0 or tr >= nrows or sn_col < 0 or sn_col >= ncols:
+            continue
+        cell = table.cell(tr, sn_col)
+        cell.text = str(pl.text)
+        for p in cell.text_frame.paragraphs:
+            for r in p.runs:
+                r.font.size = Pt(pl.font_pt)
+                r.font.bold = pl.bold
+    return True
+
+
+def _add_placements_to_slide(slide, placements: list[Placement],
+                             sn_in_cell: bool = False,
+                             sn_col: int = 0, sn_row_start: int = 1,
+                             crop: dict | None = None,
+                             tmp_dir: Path | None = None) -> None:
     from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
     from pptx.util import Pt
+    from .xlsx_writer import _apply_crop
     align_map = {"left": PP_ALIGN.LEFT, "center": PP_ALIGN.CENTER, "right": PP_ALIGN.RIGHT}
+
+    # SN 寫入表格 cell（成功的話這些 text placement 就不再以文字方塊處理）
+    sn_done = False
+    if sn_in_cell:
+        sn_done = _write_sn_into_table(slide, placements, sn_col, sn_row_start)
 
     for pl in placements:
         if pl.text is not None:
+            if sn_done:
+                continue  # 已寫進儲存格
             tb = slide.shapes.add_textbox(Cm(pl.x_cm), Cm(pl.y_cm), Cm(pl.w_cm), Cm(pl.h_cm))
             tf = tb.text_frame
             tf.word_wrap = True
@@ -93,8 +140,11 @@ def _add_placements_to_slide(slide, placements: list[Placement]) -> None:
             run.font.size = Pt(pl.font_pt)
             run.font.bold = pl.bold
         else:
+            # per-placement crop 優先；否則用全域 crop
+            eff_crop = pl.crop or crop
+            src = _apply_crop(pl.path, eff_crop, tmp_dir) if (eff_crop and tmp_dir) else pl.path
             slide.shapes.add_picture(
-                str(pl.path), Cm(pl.x_cm), Cm(pl.y_cm),
+                str(src), Cm(pl.x_cm), Cm(pl.y_cm),
                 width=Cm(pl.w_cm), height=Cm(pl.h_cm),
             )
 
@@ -105,11 +155,16 @@ def write_pages(
     pages: list[list[Placement]],
     out_path: Path,
     template: Path | None = None,
+    sn_in_cell: bool = False,
+    sn_col: int = 0,
+    sn_row_start: int = 1,
+    crop: dict | None = None,
 ) -> Path:
     """Write a multi-page pptx. Each page = a list of Placements.
 
     With a template: every page is a deep-copy of the template's first slide.
     Without a template: every page is a fresh blank slide.
+    sn_in_cell=True 時 SN 文字寫進範本表格的儲存格 (而非浮動文字方塊)。
     """
     if not pages:
         raise ValueError("pages 不可為空")
@@ -127,7 +182,8 @@ def write_pages(
         for _ in range(len(pages) - 1):
             page_slides.append(_duplicate_slide(prs, base))
         for slide, page_pls in zip(page_slides, pages):
-            _add_placements_to_slide(slide, page_pls)
+            _add_placements_to_slide(slide, page_pls, sn_in_cell, sn_col, sn_row_start,
+                                     crop=crop, tmp_dir=out_path.parent / "_crops")
     else:
         prs = Presentation()
         prs.slide_width = Cm(slide_w_cm)
@@ -135,7 +191,8 @@ def write_pages(
         blank = prs.slide_layouts[6] if len(prs.slide_layouts) > 6 else prs.slide_layouts[-1]
         for page_pls in pages:
             slide = prs.slides.add_slide(blank)
-            _add_placements_to_slide(slide, page_pls)
+            _add_placements_to_slide(slide, page_pls, sn_in_cell, sn_col, sn_row_start,
+                                     crop=crop, tmp_dir=out_path.parent / "_crops")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     prs.save(str(out_path))
