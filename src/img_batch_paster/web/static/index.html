@@ -342,11 +342,10 @@
       for (const f of orderedFiles) {
         const { group, idx } = extractGroupIdx(f.name || f.path.split("/").pop(), pattern);
         if (!(group in map)) { map[group] = new Array(cols).fill(null); groups.push(group); }
-        let col = idx != null ? idxToColMap.get(String(idx)) : undefined;
-        if (col == null) {
-          col = map[group].findIndex((x) => x === null);
-          if (col < 0) col = 0;
-        }
+        const col = idx != null ? idxToColMap.get(String(idx)) : undefined;
+        // idx 不在欄位清單（或無 idx）→ 不貼入。
+        // 舊作法塞到第一個空位，會被後面對映到位的圖蓋掉、且順序一變就誤放別欄。
+        if (col == null) continue;
         map[group][col] = f;
       }
       return groups.map((g) => ({ group: g, cells: map[g] }));
@@ -461,7 +460,7 @@
     }
 
     // 對位模式的欄位編輯器：自動偵測 idx 集合 + 排序選項 + 自訂欄位
-    function IdxColumnsEditor({ label, allFiles, updateLabel, perColCrop, onOpenIdxCrop, headerOrder }) {
+    function IdxColumnsEditor({ label, allFiles, updateLabel, perColCrop, onOpenIdxCrop, headerOrder, pushHistory }) {
       const sort = label.idxSort || "auto";
       const customMode = sort === "custom";
       const idxList = useMemo(
@@ -477,11 +476,14 @@
       const [hoverIdx, setHoverIdx] = useState(-1);
       const [newChip, setNewChip] = useState("");
 
+      // 欄位編輯前先存 undo 快照（之前缺這個 → 對調/刪欄/新增/重載都無法 undo）
+      const editCols = (patch, desc) => { if (pushHistory) pushHistory(desc); updateLabel(patch); };
+
       const setSort = (s) => {
         if (s === "custom") {
-          updateLabel({ idxSort: "custom", idxOrder: idxList.length ? [...idxList] : [...fromFiles] });
+          editCols({ idxSort: "custom", idxOrder: idxList.length ? [...idxList] : [...fromFiles] }, "切換欄位排序");
         } else {
-          updateLabel({ idxSort: s, idxOrder: [] });
+          editCols({ idxSort: s, idxOrder: [] }, "切換欄位排序");
         }
       };
 
@@ -494,29 +496,29 @@
         const next = [...idxList];
         const [moved] = next.splice(from, 1);
         next.splice(toIdx, 0, moved);
-        updateLabel({ idxSort: "custom", idxOrder: next });
+        editCols({ idxSort: "custom", idxOrder: next }, "對位欄位重排");
       };
 
       const removeChip = (i) => {
         const next = idxList.filter((_, j) => j !== i);
-        updateLabel({ idxSort: "custom", idxOrder: next });
+        editCols({ idxSort: "custom", idxOrder: next }, "刪除對位欄位");
       };
 
       const addChip = () => {
         const v = newChip.trim();
         if (!v) return;
         if (idxList.includes(v)) { setNewChip(""); return; }
-        updateLabel({ idxSort: "custom", idxOrder: [...idxList, v] });
+        editCols({ idxSort: "custom", idxOrder: [...idxList, v] }, "新增對位欄位");
         setNewChip("");
       };
 
       const loadFromFiles = () => {
-        updateLabel({ idxSort: "custom", idxOrder: [...fromFiles] });
+        editCols({ idxSort: "custom", idxOrder: [...fromFiles] }, "欄位依檔名");
       };
 
       const hasHeader = (headerOrder || []).some((h) => h);
       const loadFromHeader = () => {
-        updateLabel({ idxSort: "custom", idxOrder: [...(headerOrder || [])] });
+        editCols({ idxSort: "custom", idxOrder: [...(headerOrder || [])] }, "欄位依範本表頭");
       };
 
       const SORTS = [
@@ -592,7 +594,7 @@
             <div className="space-y-0.5 mt-1">
               {unmapped.length > 0 && (
                 <div className="text-[10px] text-amber-700">
-                  ⚠ 檔名中有 {unmapped.length} 個 idx 不在自訂欄位中（將自動塞到剩餘空位）：
+                  ⚠ 檔名中有 {unmapped.length} 個 idx 不在欄位清單，這些圖不會貼入（要納入請＋新增或按「依檔名」）：
                   <span className="font-mono">{unmapped.join(", ")}</span>
                 </div>
               )}
@@ -892,7 +894,7 @@
     }
 
     // 分段點選的 SN 設定 UI：分隔符 + 各段角色 chip + 即時抽取預覽 + 命中統計
-    function SnPatternPicker({ cfgLabel, autoAlign, setCfg, firstFile, allFiles, perColCrop, onOpenIdxCrop, headerOrder }) {
+    function SnPatternPicker({ cfgLabel, autoAlign, setCfg, firstFile, allFiles, perColCrop, onOpenIdxCrop, headerOrder, pushHistory }) {
       const DELIMS = [
         { v: "-", label: "-" },
         { v: "_", label: "_" },
@@ -1107,6 +1109,7 @@
                     perColCrop={perColCrop}
                     onOpenIdxCrop={onOpenIdxCrop}
                     headerOrder={headerOrder}
+                    pushHistory={pushHistory}
                   />
                 </div>
               )}
@@ -1159,6 +1162,7 @@
                       perColCrop={perColCrop}
                       onOpenIdxCrop={onOpenIdxCrop}
                       headerOrder={headerOrder}
+                      pushHistory={pushHistory}
                     />
                   )}
                 </div>
@@ -3200,6 +3204,7 @@
                           setCropOpen(true);
                         }}
                         headerOrder={tblHeaderOrder}
+                        pushHistory={pushHistory}
                       />
                       <NumberInput label="字體" suffix="pt" step={1} value={cfg.label.font_pt}
                         onChange={(v) => setCfg((c) => ({ ...c, label: { ...c.label, font_pt: v } }))} />
