@@ -2758,11 +2758,13 @@
         setStatus(`智能排列已開啟。欄、列數請用左側「每頁網格」設定（此表格有 ${Math.max(1, t.rows - sr)} 個圖片列）`);
       };
 
-      // 關閉智能排列：只解除 areaW(整組置中分佈)，保留 rowH(鎖死列高)。
-      // → 排版函式走手動分支但列高仍鎖 cellH → 圖片大小與「垂直位置」不變。
-      // 水平方向：智能排列的間距 d 是「即時算出來填滿 areaW」的，存在 state 的 gap.x 可能是
-      //   套用範本當下(舊尺寸)的值。這裡用智能排列「當下」的幾何重算 width(實際欄寬)、
-      //   gap.x(即時 d)、origin.x(左外緣補 d) → OFF 的左錨定固定間距排版逐欄重現 ON 的分佈。
+      // 關閉智能排列：把智能排列「當下」的幾何烘焙進「舊的等比手動模型」(rowH=0)，
+      //   而非保留鎖死列高。這樣 ON→OFF 逐欄對齊不跳，且之後調尺寸回到「整體等比縮放」舊手感
+      //   (列高=圖高隨尺寸一起長、垂直間距固定)，不會出現「先吃垂直留白、再撐水平」的怪行為。
+      // 換算(以第一張的有效比例 asp 為準，統一裁切時精確；各欄不同裁切時為近似)：
+      //   水平：實際圖寬 colW、即時等距 d(填滿 areaW)→ width=colW、gap.x=d、origin.x+=d(補左外緣)
+      //   垂直：智能排列圖高 imgH 在格高 cellH 內置中 → 把上下留白轉成固定的 gap.y 與 origin.y 偏移
+      //         gap.y = (cellH-imgH)+原gap.y、origin.y += (cellH-imgH)/2 → 逐列 y 與 ON 完全吻合
       const clearTable = () => {
         pushHistory("關閉智能排列");
         setCfg((c) => {
@@ -2770,19 +2772,25 @@
           const cellH = H * g.rowH / 100;
           const wCm = W * g.width / 100;
           const asp = effAspect((orderedFiles || [])[0]) || 0.62;
-          const imgH = Math.min(wCm * asp, cellH);
-          const colW = asp > 0 ? imgH / asp : wCm;        // 智能排列當下的實際圖寬
+          const imgH = Math.min(wCm * asp, cellH);            // 智能排列當下的圖高
+          const colW = asp > 0 ? imgH / asp : wCm;            // 智能排列當下的實際圖寬
           const cols = c.autoAlign ? Math.max(1, autoIdxList.length) : Math.max(1, g.cols);
           const areaWcm = W * g.areaW / 100;
           const d = Math.max(0, (areaWcm - cols * colW) / (cols + 1));   // 即時等距(含外緣)
-          const pct = (v) => Math.round(v / W * 100 * 100) / 100;
+          const gyCm = H * g.gap.y / 100;
+          const pctW = (v) => Math.round(v / W * 100 * 100) / 100;
+          const pctH = (v) => Math.round(v / H * 100 * 100) / 100;
           return {
             ...c,
             grid: {
               ...g,
-              origin: { ...g.origin, x: Math.round((g.origin.x + pct(d)) * 100) / 100 },
-              gap: { ...g.gap, x: pct(d) },
-              width: pct(colW),
+              origin: {
+                x: Math.round((g.origin.x + pctW(d)) * 100) / 100,
+                y: Math.round((g.origin.y + pctH((cellH - imgH) / 2)) * 100) / 100,
+              },
+              gap: { x: pctW(d), y: pctH(cellH - imgH + gyCm) },
+              width: pctW(colW),
+              rowH: 0,      // 解除鎖死列高 → 尺寸調整回到「整體等比縮放」舊行為
               areaW: 0,
             },
           };
@@ -4029,7 +4037,7 @@
                         const imageRows = tbl ? Math.max(1, tbl.rows - Math.min(tbl.rows - 1, tblSkipRows)) : 0;
                         return (
                           <div className="mt-3 pt-3 border-t border-slate-100 shrink-0 flex items-center gap-3 flex-wrap">
-                            <button onClick={() => smartOn ? clearTable() : (tbl && applyTable(tbl, undefined, undefined, cfg.grid.rowH > 0))}
+                            <button onClick={() => smartOn ? clearTable() : (tbl && applyTable(tbl, undefined, undefined, autoAppliedRef.current))}
                               disabled={!tbl}
                               className={`text-xs px-3 py-1 rounded-full border font-medium ${smartOn
                                 ? "bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-700"
