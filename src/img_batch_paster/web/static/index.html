@@ -345,6 +345,25 @@
       return seenOrder;
     }
 
+    // 上傳後的 idx 體檢：抽出檔名的 idx 欄、SN(group) 數、無 idx 的圖、只差大小寫的可疑欄
+    function analyzeFilenameIdx(files, pattern) {
+      const idxOrder = [], idxSeen = new Set(), groups = new Set();
+      const counts = {}, noIdx = [];
+      for (const f of files || []) {
+        const name = f.name || (f.path || "").split("/").pop();
+        const { group, idx } = extractGroupIdx(name, pattern);
+        if (group) groups.add(group);
+        if (idx == null) { noIdx.push(name); continue; }
+        const s = String(idx);
+        if (!idxSeen.has(s)) { idxSeen.add(s); idxOrder.push(s); }
+        counts[s] = (counts[s] || 0) + 1;
+      }
+      const byLower = {};
+      for (const s of idxOrder) { const k = s.toLowerCase(); (byLower[k] = byLower[k] || []).push(s); }
+      const caseDupes = Object.values(byLower).filter((a) => a.length > 1);
+      return { total: (files || []).length, idxList: idxOrder, counts, groups: [...groups], noIdx, caseDupes };
+    }
+
     // 依檔名 group+idx 把檔案排成 rows[group] = [col0, col1, ...]，缺的留 null
     // idxList: 欄位定義（字串陣列），cols = idxList.length
     function groupBySnIdx(orderedFiles, pattern, idxList, ignoreSet) {
@@ -1642,6 +1661,59 @@
       );
     }
 
+    // 依檔名模式上傳後：先讓使用者 double-check 抽出的 idx 欄位，確認無誤再繼續
+    function IdxConfirmModal({ data, onConfirm, onCancel }) {
+      if (!data) return null;
+      const { total, idxList, counts, groups, noIdx, caseDupes } = data;
+      return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onCancel}>
+          <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full max-h-[88vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b bg-gradient-to-r from-sky-50 to-white rounded-t-xl">
+              <div className="text-base font-semibold text-slate-800">📋 請確認偵測到的欄位</div>
+              <div className="text-xs text-slate-500 mt-0.5">
+                依檔名模式：以下是從 {total} 張圖的檔名抽出的欄位 (idx)。確認無誤再繼續；若有異常，請修正檔名後重新上傳。
+              </div>
+            </div>
+            <div className="px-5 py-4 space-y-3 text-sm">
+              <div className="text-xs text-slate-500">
+                偵測到 <b className="text-slate-700">{idxList.length}</b> 欄 · <b className="text-slate-700">{groups.length}</b> 個 SN(列)
+              </div>
+              {idxList.length === 0 ? (
+                <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+                  ⚠ 從檔名抽不到任何 idx — 請確認「對位用哪一段」的分段選取，或檔名格式。
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {idxList.map((s) => (
+                    <span key={s} className="inline-flex items-center gap-1 px-2 py-0.5 rounded border bg-white border-sky-300 text-sky-800 text-xs font-mono">
+                      {s}<span className="text-[10px] text-slate-400">×{counts[s]}</span>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {caseDupes.length > 0 && (
+                <div className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                  ⚠ 只差大小寫、會被當成不同欄(可能是檔名打錯)：
+                  <span className="font-mono font-semibold"> {caseDupes.map((a) => a.join(" / ")).join("、")}</span>
+                </div>
+              )}
+              {noIdx.length > 0 && (
+                <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                  ⚠ {noIdx.length} 張圖抽不到 idx，將不會被貼入：
+                  <span className="font-mono"> {noIdx.slice(0, 6).join("、")}{noIdx.length > 6 ? ` …等 ${noIdx.length} 張` : ""}</span>
+                </div>
+              )}
+            </div>
+            <div className="px-5 py-3 border-t flex justify-end gap-2 bg-slate-50 rounded-b-xl">
+              <button onClick={onCancel} className="text-sm px-3 py-1.5 rounded-lg border bg-white hover:bg-slate-100 text-slate-600">取消，重整檔名</button>
+              <button onClick={onConfirm} disabled={idxList.length === 0}
+                className="text-sm px-4 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-700 text-white font-medium disabled:opacity-40 disabled:cursor-not-allowed">✓ 確認無誤，繼續</button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     function NumberInput({ label, value, onChange, step = 0.5, suffix, disabled, hint }) {
       return (
         <label className={`flex flex-col text-xs ${disabled ? "text-slate-400" : "text-slate-600"}`}>
@@ -2188,6 +2260,7 @@
       const [helpOpen, setHelpOpen] = useState(false);
       const [shortcutsOpen, setShortcutsOpen] = useState(false);
       const [toast, setToast] = useState(null);              // {kind,title,sub}
+      const [idxConfirm, setIdxConfirm] = useState(null);    // 依檔名模式：上傳後 idx 確認對話框資料 | null
       const toastTimerRef = useRef(null);
       const magicRef = useRef(false);
       const showToast = (t) => {
@@ -2617,7 +2690,8 @@
         finally { setBusy(false); }
       };
 
-      const uploadImages = async (files) => {
+      // 真正上傳 + 掃描（不含確認）
+      const doUploadImages = async (files) => {
         if (!ws || !files || files.length === 0) return;
         setBusy(true); setStatus(`上傳 ${files.length} 張圖片中…`);
         try {
@@ -2628,10 +2702,23 @@
           const j = await r.json();
           if (!r.ok) throw new Error(j.error || "上傳失敗");
           setCfg((c) => ({ ...c, folder: j.folder }));
-          // 自動掃描
-          await doScanFolder(j.folder);
+          await doScanFolder(j.folder);   // 自動掃描
         } catch (e) { setStatus("錯誤: " + e.message); }
         finally { setBusy(false); }
+      };
+
+      // 上傳入口：依檔名模式下「先確認 idx、再上傳」。檔名在瀏覽器端(File.name)即可取得，
+      //   不必先上傳就能抽 idx → 確認對話框出現在上傳之前；按「確認」才真的上傳，「取消」則什麼都不做。
+      const uploadImages = (files) => {
+        const list = [...(files || [])];
+        if (!list.length) return;
+        if (cfg.autoAlign) {
+          const imgs = list.filter((f) => /\.(png|jpe?g|gif|bmp|webp|tiff?)$/i.test(f.name || ""));
+          if (!imgs.length) { setStatus("沒有圖片檔 (png/jpg…)"); return; }
+          setIdxConfirm({ ...analyzeFilenameIdx(imgs, cfg.label.pattern), _files: imgs });
+          return;
+        }
+        doUploadImages(list);
       };
 
       // 讀取 pptx/key 範本中的表格幾何（列/欄/位置/各欄寬列高）
@@ -2887,6 +2974,7 @@
         setFiles(j.files);
         setOrder(j.files.map((f) => f.path));
         setStatus(`偵測到 ${j.files.length} 張圖`);
+        return j.files;
       };
 
       const doLoadTemplate = async (overridePath) => {
@@ -3282,6 +3370,12 @@
         <div className="max-w-[1600px] mx-auto p-4 h-screen flex flex-col">
           {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />}
           {shortcutsOpen && <ShortcutsModal onClose={() => setShortcutsOpen(false)} />}
+          {idxConfirm && (
+            <IdxConfirmModal
+              data={idxConfirm}
+              onConfirm={() => { const fs = idxConfirm._files; setIdxConfirm(null); doUploadImages(fs); }}
+              onCancel={() => { setIdxConfirm(null); setStatus("已取消上傳，請修正檔名後重新上傳"); }} />
+          )}
           {toast && <Toast toast={toast} onClose={() => setToast(null)} />}
           {cropOpen && cropTargetFile && (
             <CropEditor
