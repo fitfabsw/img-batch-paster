@@ -1665,6 +1665,11 @@
     function IdxConfirmModal({ data, onConfirm, onCancel }) {
       if (!data) return null;
       const { total, idxList, counts, groups, noIdx, caseDupes } = data;
+      // 確認框的欄位 chip 依字母順序顯示（全數字 → 數值排）；僅影響此處顯示，不動實際對位欄序
+      const sortedIdx = [...idxList].sort((a, b) =>
+        idxList.every((x) => !isNaN(parseFloat(x)))
+          ? parseFloat(a) - parseFloat(b)
+          : a.localeCompare(b));
       return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onCancel}>
           <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full max-h-[88vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
@@ -1684,7 +1689,7 @@
                 </div>
               ) : (
                 <div className="flex flex-wrap gap-1.5">
-                  {idxList.map((s) => (
+                  {sortedIdx.map((s) => (
                     <span key={s} className="inline-flex items-center gap-1 px-2 py-0.5 rounded border bg-white border-sky-300 text-sky-800 text-xs font-mono">
                       {s}<span className="text-[10px] text-slate-400">×{counts[s]}</span>
                     </span>
