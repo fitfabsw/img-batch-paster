@@ -3330,8 +3330,29 @@
       const scale = STAGE_W / cfg.slide.width_cm;
       const stageH = cfg.slide.height_cm * scale;
       const _pagesRaw = computePages(cfg.slide, cfg.grid, orderedFiles, cfg.label, cfg.autoAlign, effAspect);
+      // SN 寫入表格儲存格：預覽也要反映 → 把 SN 文字移到「範本表格的目標儲存格」矩形(與圖片位置脫鉤)，
+      //   欄 = slidesSn.col-1、列 = (rowStart-1) + 該列 row_idx，幾何取自 tableInfo(left/top/各欄寬/各列高)。
+      const snInCellPreview = cfg.label.enabled && cfg.slidesSn.inCell && slidesTbl;
+      const snCellRect = (rowIdx) => {
+        const cw = slidesTbl.col_widths_cm || [], rh = slidesTbl.row_heights_cm || [];
+        const col0 = Math.max(0, (cfg.slidesSn.col || 1) - 1);
+        const row0 = Math.max(0, (cfg.slidesSn.rowStart || 2) - 1) + (rowIdx || 0);
+        if (col0 >= cw.length || row0 >= rh.length) return null;
+        return {
+          x_cm: slidesTbl.left_cm + cw.slice(0, col0).reduce((a, b) => a + b, 0),
+          y_cm: slidesTbl.top_cm + rh.slice(0, row0).reduce((a, b) => a + b, 0),
+          w_cm: cw[col0], h_cm: rh[row0],
+        };
+      };
       // 每個 placement 注入「解析後的裁切」(全域 cfg.crop 或 各欄 idxCrops) → 預覽縮圖才會裁切、且不被拉伸
       const pages = _pagesRaw.map((page) => page.map((pl) => {
+        if (pl.text !== undefined && pl.text !== null) {
+          if (snInCellPreview) {
+            const r = snCellRect(pl.row_idx);
+            if (r) return { ...pl, ...r, _snCell: true };
+          }
+          return pl;
+        }
         if (!pl.path) return pl;
         const f = orderedFiles.find((x) => x.path === pl.path);
         return { ...pl, _crop: cropOfFile(f) };
@@ -3651,8 +3672,10 @@
                                   onChange={(v) => setCfg((c) => ({ ...c, slidesSn: { ...c.slidesSn, rowStart: Math.max(1, Math.min(slidesTbl ? slidesTbl.rows : 9999, parseInt(v) || 1)) } }))} />
                               </div>
                               <div className="text-[10px] text-slate-400 mt-1">
-                                此設定只影響<b>匯出檔</b>（把 SN 寫進範本表格的儲存格）；預覽不會顯示。
-                                {slidesTbl && <span className="ml-1">· 此範本表格 <b>{slidesTbl.cols} 欄 × {slidesTbl.rows} 列</b></span>}
+                                SN 會寫進範本表格的儲存格（與圖片位置脫鉤）；預覽以<b className="text-emerald-600">綠色虛線格</b>標示寫入位置。
+                                {slidesTbl
+                                  ? <span className="ml-1">· 此範本表格 <b>{slidesTbl.cols} 欄 × {slidesTbl.rows} 列</b></span>
+                                  : <span className="ml-1 text-amber-600">· 尚未讀到表格幾何，預覽暫無法定位</span>}
                               </div>
                             </>
                           )}
@@ -4090,7 +4113,13 @@
                                 fontSize: (pl.font_pt || 18) * scale / 28.35,
                                 fontWeight: pl.bold ? 700 : 400,
                                 color: "#111",
-                              }}>
+                                ...(pl._snCell ? {
+                                  background: "rgba(16,185,129,0.12)",
+                                  outline: "1px dashed rgba(16,185,129,0.7)",
+                                  outlineOffset: -1,
+                                } : {}),
+                              }}
+                              title={pl._snCell ? "SN 將寫入此儲存格（匯出結果）" : undefined}>
                                 {pl.text}
                               </div>
                             );
