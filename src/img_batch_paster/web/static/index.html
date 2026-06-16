@@ -1663,6 +1663,20 @@
 
     // 依檔名模式上傳後：先讓使用者 double-check 抽出的 idx 欄位，確認無誤再繼續
     function IdxConfirmModal({ data, onConfirm, onCancel }) {
+      const confirmRef = useRef(null);
+      const nIdx = data ? data.idxList.length : 0;
+      // 開啟時把焦點移到「確認」鈕（否則焦點還停在剛觸發的 file input → 按 Enter 會再開檔案視窗）；
+      //   並攔截 Enter=確認、Esc=取消。
+      useEffect(() => {
+        if (!data) return;
+        if (confirmRef.current) confirmRef.current.focus();
+        const onKey = (e) => {
+          if (e.key === "Enter") { e.preventDefault(); if (nIdx > 0) onConfirm(); }
+          else if (e.key === "Escape") { e.preventDefault(); onCancel(); }
+        };
+        document.addEventListener("keydown", onKey);
+        return () => document.removeEventListener("keydown", onKey);
+      }, [data, nIdx]);
       if (!data) return null;
       const { total, idxList, counts, groups, noIdx, caseDupes } = data;
       // 確認框的欄位 chip 依字母順序顯示（全數字 → 數值排）；僅影響此處顯示，不動實際對位欄序
@@ -1711,7 +1725,7 @@
             </div>
             <div className="px-5 py-3 border-t flex justify-end gap-2 bg-slate-50 rounded-b-xl">
               <button onClick={onCancel} className="text-sm px-3 py-1.5 rounded-lg border bg-white hover:bg-slate-100 text-slate-600">取消，重整檔名</button>
-              <button onClick={onConfirm} disabled={idxList.length === 0}
+              <button ref={confirmRef} onClick={onConfirm} disabled={idxList.length === 0}
                 className="text-sm px-4 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-700 text-white font-medium disabled:opacity-40 disabled:cursor-not-allowed">✓ 確認無誤，繼續</button>
             </div>
           </div>
