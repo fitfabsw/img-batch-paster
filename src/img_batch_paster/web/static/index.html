@@ -1736,6 +1736,41 @@
       );
     }
 
+    // Excel 儲存格錯誤值（#VALUE! #REF! …）—— 範本圖片區若殘留這些，多半是上次內嵌圖片(DISPIMG)
+    //   算壞留下的，會干擾表頭偵測 / 貼圖 / 匯出 → 視為「髒範本」擋下。
+    const EXCEL_ERR_RE = /^#(VALUE|REF|DIV\/0|N\/A|NAME\?|NULL|NUM|SPILL|CALC|GETTING_DATA)!?$/i;
+
+    // 防呆：載入的 xlsx 範本資料區有殘留內容 → 阻擋對話框，要求換乾淨範本（可選擇仍要使用）
+    function DirtyTemplateModal({ cells, onUseAnyway, onCancel }) {
+      if (!cells || !cells.length) return null;
+      const errN = cells.filter((c) => EXCEL_ERR_RE.test(String(c.text ?? "").trim())).length;
+      const colL = (n) => { let s = ""; while (n > 0) { s = String.fromCharCode(65 + (n - 1) % 26) + s; n = Math.floor((n - 1) / 26); } return s; };
+      const sample = cells.slice(0, 8).map((c) => `${colL(c.c)}${c.r}=${c.text}`).join("、");
+      return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full" onClick={(e) => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b bg-gradient-to-r from-amber-50 to-white rounded-t-xl">
+              <div className="text-base font-semibold text-amber-800">⚠ 此範本含殘留內容，可能導致錯誤</div>
+            </div>
+            <div className="px-5 py-4 space-y-2 text-sm text-slate-700">
+              <p>範本的「資料區（表頭以下）」偵測到 <b className="text-amber-700">{cells.length}</b> 個非空儲存格
+                {errN > 0 && <>（含 <b className="text-amber-700">{errN}</b> 個錯誤值 <span className="font-mono">#VALUE!</span>，多為內嵌圖片殘留）</>}。
+                乾淨範本此區應全部留空，由程式自動填入 SN 與圖片。</p>
+              <p>殘留內容（如預填的 SN <span className="font-mono">2EG/2JG</span> 或 <span className="font-mono">#VALUE!</span>）會干擾表頭偵測、自動對位與匯出結果。</p>
+              <div className="text-[11px] text-slate-500 bg-slate-50 border rounded px-2 py-1 font-mono break-all">{sample}{cells.length > 8 ? " …" : ""}</div>
+              <p className="text-[13px]"><b>建議</b>：改用「只保留表頭＋框線、資料區全空」的乾淨範本，再重新載入。</p>
+            </div>
+            <div className="px-5 py-3 border-t flex justify-end gap-2 bg-slate-50 rounded-b-xl">
+              <button onClick={onUseAnyway}
+                className="text-sm px-3 py-1.5 rounded-lg border bg-white hover:bg-slate-100 text-slate-500">仍要使用</button>
+              <button onClick={onCancel}
+                className="text-sm px-4 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-medium">取消載入，換範本</button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     function NumberInput({ label, value, onChange, step = 0.5, suffix, disabled, hint }) {
       return (
         <label className={`flex flex-col text-xs ${disabled ? "text-slate-400" : "text-slate-600"}`}>
@@ -2283,6 +2318,7 @@
       const [shortcutsOpen, setShortcutsOpen] = useState(false);
       const [toast, setToast] = useState(null);              // {kind,title,sub}
       const [idxConfirm, setIdxConfirm] = useState(null);    // 依檔名模式：上傳後 idx 確認對話框資料 | null
+      const [tplWarnAck, setTplWarnAck] = useState(false);   // 已確認「髒範本」警告（每換範本重置）
       const toastTimerRef = useRef(null);
       const magicRef = useRef(false);
       const showToast = (t) => {
@@ -2699,6 +2735,9 @@
 
       const uploadTemplate = async (file) => {
         if (!ws || !file) return;
+        // 先清掉舊 grid + 重置警告 → 避免「舊非法 grid 還在、ack 已 false」時警告閃一下
+        setXlGrid(null);
+        setTplWarnAck(false);
         setBusy(true); setStatus("上傳範本中…");
         try {
           const fd = new FormData();
@@ -2770,6 +2809,7 @@
         autoAppliedRef.current = false;
         excelAutoRef.current = false;
         setTableInfo(null);
+        setTplWarnAck(false);   // 換範本 → 重置髒範本警告
         if (tplPath && mode === "slides" && /\.pptx$/i.test(tplPath)) {
           loadTableInfo();
         }
@@ -2823,6 +2863,23 @@
         while (cols.length && !cols[cols.length - 1]) cols.pop();   // 去尾端空白欄
         return cols;
       }, [xlGrid, cfg.excel.startCell]);
+
+      // 防呆：乾淨範本的「資料區(表頭以下、表格範圍內)」應全空，交給程式填 SN＋貼圖。
+      //   若資料區有任何非空儲存格 —— 不論是錯誤值(#VALUE! 殘留) 或預填的 SN/資料(如 2EG/2JG)
+      //   —— 都視為髒範本，跳阻擋對話框。
+      const tplDirtyCells = useMemo(() => {
+        if (!xlGrid) return [];
+        const d = detectExcelTable(xlGrid);
+        if (!d || !d.region) return [];
+        // 表頭＝表格最上一列(region.minR)，其下皆為資料區。不可用 startCell 推算 —— 殘留的
+        //   #VALUE! 在影像欄會把表頭偵測往下推、反而把自己排除；直接用 minR+1 才抓得到。
+        const { minR, minC, maxC } = d.region;
+        const dataStartRow = minR + 1;
+        return (xlGrid.cells || []).filter((c) =>
+          c.r >= dataStartRow && c.c >= minC && c.c <= maxC &&
+          c.text != null && String(c.text).trim() !== ""
+        );
+      }, [xlGrid]);
 
       // ppt/key 範本表格（給 SN 寫入儲存格的 max / 範圍提示用）
       const slidesTbl = (mode === "slides" && tableInfo && !tableInfo.error) ? (tableInfo.tables || [])[0] : null;
@@ -3434,6 +3491,15 @@
               onCancel={() => { setIdxConfirm(null); setStatus("已取消上傳，請修正檔名後重新上傳"); }} />
           )}
           {toast && <Toast toast={toast} onClose={() => setToast(null)} />}
+          {mode === "excel" && !tplWarnAck && tplDirtyCells.length > 0 && (
+            <DirtyTemplateModal
+              cells={tplDirtyCells}
+              onUseAnyway={() => setTplWarnAck(true)}
+              onCancel={() => {
+                setXlGrid(null); setTpl(null); setTplPath(""); setTplName("");
+                setStatus("已取消載入髒範本，請改用乾淨範本");
+              }} />
+          )}
           {cropOpen && cropTargetFile && (
             <CropEditor
               file={cropTargetFile}
@@ -3531,7 +3597,7 @@
                     <input ref={tplInputRef} type="file"
                       accept=".pptx,.key,.xlsx,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.apple.keynote,application/zip"
                       className="hidden"
-                      onChange={(e) => uploadTemplate(e.target.files?.[0])} />
+                      onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; uploadTemplate(f); }} />
                   </div>
                   <div className="text-[10px] text-slate-400 mt-1">可拖拉檔案；.key 需 server 在 macOS（Keynote 轉檔約 10-30 秒）</div>
                 </div>
@@ -3550,7 +3616,7 @@
                       <input ref={imgInputRef} type="file" multiple
                         webkitdirectory="" directory=""
                         className="hidden"
-                        onChange={(e) => uploadImages(e.target.files)} />
+                        onChange={(e) => { const fl = Array.from(e.target.files || []); e.target.value = ""; uploadImages(fl); }} />
                     </div>
                   </div>
                 )}
