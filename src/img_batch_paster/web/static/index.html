@@ -192,8 +192,11 @@
       const box = bbox(borders) || bbox(cells);
       if (!box) return null;
       const { minR, maxR, minC, maxC } = box;
+      // 表頭列偵測只看「影像欄」(SN/標籤欄之後，即 c > minC) 有沒有文字。
+      //   SN 欄(第一欄)在資料列也會有文字(如 2EG/2JG)，若一併算入，表頭會被誤判到資料列
+      //   → headerCols 變空 → 「依範本表頭」按鈕消失。排除 SN 欄即可正確抓到表頭列。
       const textRows = new Set(
-        cells.filter((c) => c.text != null && String(c.text).trim() !== "").map((c) => c.r)
+        cells.filter((c) => c.c > minC && c.text != null && String(c.text).trim() !== "").map((c) => c.r)
       );
       let skipRows = 0;
       while (minR + skipRows <= maxR && textRows.has(minR + skipRows)) skipRows++;
@@ -2800,12 +2803,26 @@
         if (!cfg.snMatchMode && !cfg.autoAlign) setCfg((c) => ({ ...c, autoAlign: true }));
       }, [cfg.snMatchMode, cfg.autoAlign]);
 
-      // 範本表頭欄位順序（給「依範本表頭」還原按鈕用；非 xlsx 表格則為空）
+      // 範本表頭欄位順序（給「依範本表頭」還原按鈕用；非 xlsx 表格則為空）。
+      // 可靠依據：UI 的「起始 cell」——其欄＝影像欄起點、上一列＝表頭列；不靠猜 SN 欄。
+      //   startCell 由偵測預填、且使用者可更正 → 改了 startCell，表頭欄位即跟著正確。
       const tblHeaderOrder = useMemo(() => {
-        if (!xlGrid) return [];
-        const d = detectExcelTable(xlGrid);
-        return d && Array.isArray(d.headerCols) ? d.headerCols : [];
-      }, [xlGrid]);
+        if (!xlGrid || !cfg.excel.startCell) return [];
+        const sc = parseCell(cfg.excel.startCell);
+        if (sc.row < 2) return [];                       // 起始列須 ≥2，上一列才有表頭
+        const headerRow = sc.row - 1;
+        const cells = xlGrid.cells || [];
+        let maxC = sc.col;                                // 影像欄右界＝框線/文字最右欄
+        for (const a of cells) if (a.c > maxC && String(a.text ?? "").trim()) maxC = a.c;
+        for (const b of (xlGrid.borders || [])) if (b.c > maxC) maxC = b.c;
+        const cols = [];
+        for (let col = sc.col; col <= maxC; col++) {
+          const cell = cells.find((c) => c.r === headerRow && c.c === col);
+          cols.push(cell && cell.text != null ? String(cell.text).trim() : "");
+        }
+        while (cols.length && !cols[cols.length - 1]) cols.pop();   // 去尾端空白欄
+        return cols;
+      }, [xlGrid, cfg.excel.startCell]);
 
       // ppt/key 範本表格（給 SN 寫入儲存格的 max / 範圍提示用）
       const slidesTbl = (mode === "slides" && tableInfo && !tableInfo.error) ? (tableInfo.tables || [])[0] : null;
