@@ -1742,7 +1742,20 @@
 
     // 防呆：載入的 xlsx 範本資料區有殘留內容 → 阻擋對話框，要求換乾淨範本（可選擇仍要使用）
     function DirtyTemplateModal({ cells, onUseAnyway, onCancel }) {
-      if (!cells || !cells.length) return null;
+      const cancelRef = useRef(null);
+      const has = !!(cells && cells.length);
+      // 開啟時焦點移到「取消載入」(否則焦點還在 file input → Enter 會再觸發載入)；
+      //   Enter / Esc 都＝取消載入(安全動作)。「仍要使用」(用髒範本)只能用點的，不綁鍵。
+      useEffect(() => {
+        if (!has) return;
+        if (cancelRef.current) cancelRef.current.focus();
+        const onKey = (e) => {
+          if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); onCancel(); }
+        };
+        document.addEventListener("keydown", onKey);
+        return () => document.removeEventListener("keydown", onKey);
+      }, [has]);
+      if (!has) return null;
       const errN = cells.filter((c) => EXCEL_ERR_RE.test(String(c.text ?? "").trim())).length;
       const colL = (n) => { let s = ""; while (n > 0) { s = String.fromCharCode(65 + (n - 1) % 26) + s; n = Math.floor((n - 1) / 26); } return s; };
       const sample = cells.slice(0, 8).map((c) => `${colL(c.c)}${c.r}=${c.text}`).join("、");
@@ -1763,7 +1776,7 @@
             <div className="px-5 py-3 border-t flex justify-end gap-2 bg-slate-50 rounded-b-xl">
               <button onClick={onUseAnyway}
                 className="text-sm px-3 py-1.5 rounded-lg border bg-white hover:bg-slate-100 text-slate-500">仍要使用</button>
-              <button onClick={onCancel}
+              <button ref={cancelRef} onClick={onCancel}
                 className="text-sm px-4 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-medium">取消載入，換範本</button>
             </div>
           </div>
