@@ -219,6 +219,16 @@ def _composite_cell_image(img_path: Path, cw_cm: float, rh_cm: float, fill: floa
         im2 = im.resize((rw, rh))
         left, top = (rw - W) // 2, (rh - H) // 2
         canvas = im2.crop((left, top, left + W, top + H))
+    elif fit == "contain_align":
+        # 等高對齊：圖高固定 = fill×格高（各格同高），寬度自然；太寬則左右置中裁切
+        th = max(1, int(H * fill))
+        tw = max(1, int(th * im.width / im.height))
+        im2 = im.resize((tw, th))
+        if tw > W:
+            l = (tw - W) // 2
+            im2 = im2.crop((l, 0, l + W, th)); tw = W
+        canvas = Image.new("RGB", (W, H), "white")
+        canvas.paste(im2, ((W - tw) // 2, (H - th) // 2))
     else:  # contain
         canvas = Image.new("RGB", (W, H), "white")
         th = H * fill

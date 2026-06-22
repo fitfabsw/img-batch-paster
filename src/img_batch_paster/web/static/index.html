@@ -2380,10 +2380,16 @@
                       ? { width: "100%", height: rowH, objectFit: "cover", display: "block" }
                       : fit === "fill"
                       ? { width: "100%", height: rowH, objectFit: "fill", display: "block" }
-                      : { height: Math.round(rowH * f), maxWidth: "94%", objectFit: "contain", display: "inline-block", verticalAlign: "middle" };
+                      : fit === "contain_align"
+                      // 等高對齊：固定高度(=填滿格高%)，寬度自然、太寬由 td 左右裁切 → 全部同高
+                      ? { height: Math.round(rowH * f), width: "auto", maxWidth: "none", display: "block", margin: "0 auto" }
+                      // 完整貼邊：整張塞進格內(同時受寬高限制)
+                      : { maxHeight: Math.round(rowH * f), maxWidth: "94%", objectFit: "contain", display: "inline-block", verticalAlign: "middle" };
+                    const tdStyle = fit === "contain" ? undefined
+                      : fit === "contain_align" ? { padding: 0, overflow: "hidden" }
+                      : { padding: 0 };
                     return (
-                      <td key={ci} className="border border-slate-400 text-center align-middle p-0"
-                        style={fit === "contain" ? undefined : { padding: 0 }}>
+                      <td key={ci} className="border border-slate-400 text-center align-middle" style={tdStyle}>
                         {file ? <img src={thumbUrl(file.path, 240, crop)} style={imgStyle} /> : null}
                       </td>
                     );
@@ -4683,7 +4689,7 @@
                               <div className="flex items-center gap-2">
                                 <span className="text-xs text-slate-600">圖片填法</span>
                                 <div className="flex text-xs border rounded overflow-hidden">
-                                  {[{ v: "contain", label: "完整貼邊" }, { v: "cover", label: "裁切填滿" }, { v: "fill", label: "拉伸" }].map((opt) => (
+                                  {[{ v: "contain", label: "完整貼邊" }, { v: "contain_align", label: "等高對齊" }, { v: "fill", label: "拉伸" }].map((opt) => (
                                     <button key={opt.v}
                                       onClick={() => setCfg((c) => ({ ...c, snAdjust: { ...c.snAdjust, fit: opt.v } }))}
                                       className={`px-2.5 py-1 ${(cfg.snAdjust?.fit || "contain") === opt.v ? "bg-slate-700 text-white" : "hover:bg-slate-100"}`}>
@@ -4692,7 +4698,7 @@
                                   ))}
                                 </div>
                               </div>
-                              {(cfg.snAdjust?.fit || "contain") === "contain" && (
+                              {(cfg.snAdjust?.fit || "contain") !== "fill" && (
                                 <div className="relative mt-1">
                                   <Stepper label="填滿格高" orient="h" step={2} value={cfg.snAdjust?.fill ?? 90}
                                     onChange={(v) => setCfg((c) => ({ ...c, snAdjust: { ...c.snAdjust, fill: Math.max(5, Math.min(100, v)) } }))} />
