@@ -549,7 +549,7 @@
         for (let c1 = 1; c1 <= nCols; c1++) {
           if (c1 - 1 === snCol0) continue;           // 跳過 SN 欄
           const h = headerText(c1).toLowerCase();
-          if (h && (h === q || h.includes(q) || q.includes(h))) return c1 - 1;
+          if (h && h === q) return c1 - 1;   // 完全相符（不分大小寫、去空白）才算對到
         }
         return null;
       };
@@ -774,7 +774,7 @@
       const resolveCol = (s) => {                      // 來源 → 顯示用目標欄
         if (!isSlides) return s.targetCol;
         const q = (s.slidesCol || s.name || "").toLowerCase();
-        return slidesHeaders.find((h) => { const hh = h.toLowerCase(); return hh === q || hh.includes(q) || q.includes(hh); }) || "(對不到欄)";
+        return slidesHeaders.find((h) => h.toLowerCase() === q) || "(對不到欄)";
       };
       // 把 source.files 建成 stem → file 的 map（不分大小寫，去副檔名）
       const fileMaps = useMemo(() => cfg.sources.map((s) => {
@@ -886,7 +886,7 @@
       const autoHeader = (name) => {
         const q = String(name || "").trim().toLowerCase();
         if (!q) return "";
-        return headers.find((h) => { const hh = h.toLowerCase(); return hh === q || hh.includes(q) || q.includes(hh); }) || "";
+        return headers.find((h) => h.toLowerCase() === q) || "";
       };
       const [loading, setLoading] = useState(false);
       const inputRefs = useRef({});
@@ -1007,8 +1007,8 @@
             sources: c.sources.map((s) => {
               if (s.id !== sid) return s;
               const next = { ...s, folder: j.folder, files: j.files };
-              // 名稱仍是預設單字母 (A/B/C/...) 時，自動帶入資料夾名稱
-              if (detectedFolderName && /^[A-Z]$/.test(s.name)) next.name = detectedFolderName;
+              // 每次上傳都把名稱更新成「實際上傳的資料夾名」（否則換上傳別的資料夾時名稱會殘留舊的）
+              if (detectedFolderName) next.name = detectedFolderName;
               return next;
             }),
           }));
@@ -1158,12 +1158,35 @@
                     {isSlides ? (
                       <>
                         <span className="text-[10px] text-slate-500">對應欄</span>
-                        <select value={s.slidesCol || autoHeader(s.name)}
+                        <select value={s.slidesCol || ""}
                           onChange={(e) => updateSource(s.id, { slidesCol: e.target.value })}
                           className="border rounded px-1 py-0.5 text-xs flex-1 min-w-0">
                           <option value="">（自動：依資料夾名）</option>
                           {headers.map((h) => <option key={h} value={h}>{h}</option>)}
                         </select>
+                        {(() => {
+                          // 手選 → 藍色徽章（固定，不受資料夾名影響）
+                          if (s.slidesCol) return (
+                            <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-sky-100 text-sky-700 border border-sky-300 whitespace-nowrap"
+                              title="手動指定的欄位（固定，不依資料夾名）">→ {s.slidesCol} 欄</span>
+                          );
+                          // 未上傳資料夾 → 還不判斷（避免拿預設名亂分配）
+                          if (!s.files?.length) return (
+                            <span className="text-[10px] text-slate-400 whitespace-nowrap">（上傳後依資料夾名判斷）</span>
+                          );
+                          const auto = autoHeader(s.name);
+                          return auto ? (
+                            <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-300 whitespace-nowrap"
+                              title={`資料夾「${s.name}」自動對到表頭「${auto}」欄（需完全相符；要固定請改下拉手選）`}>
+                              → {auto} 欄
+                            </span>
+                          ) : (
+                            <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-300 whitespace-nowrap"
+                              title={`資料夾「${s.name}」對不到任何表頭欄（需與 Before/After… 完全相符）→ 不會貼圖、匯出會被擋下；請改下拉手選欄位`}>
+                              ⚠ 對不到欄
+                            </span>
+                          );
+                        })()}
                       </>
                     ) : (
                       <>
@@ -2308,7 +2331,7 @@
       const srcForHeader = (h) => {
         const q = String(h || "").toLowerCase();
         if (!q) return null;
-        return sources.find((s) => { const m = String(s.slidesCol || s.name || "").toLowerCase(); return m && (m === q || m.includes(q) || q.includes(m)); });
+        return sources.find((s) => { const m = String(s.slidesCol || s.name || "").toLowerCase(); return m && m === q; });
       };
       const fileFor = (s, sn) => {
         if (!s) return null;
@@ -3537,13 +3560,15 @@
               const colForSource = (s) => {                 // 來源 → 0-based 欄索引（依表頭名 / slidesCol）
                 const want = String(s.slidesCol || s.name || "").toLowerCase();
                 if (!want) return null;
-                for (let c1 = 1; c1 <= ncols; c1++) { if (c1 - 1 === snCol0) continue; const h = headerText(c1).toLowerCase(); if (h && (h === want || h.includes(want) || want.includes(h))) return c1 - 1; }
+                for (let c1 = 1; c1 <= ncols; c1++) { if (c1 - 1 === snCol0) continue; const h = headerText(c1).toLowerCase(); if (h && h === want) return c1 - 1; }
                 return null;
               };
               const perCol = cfg.cropMode === "per-col";
               const globalCrop = cfg.crop?.enabled ? cfg.crop : null;
               const dataRows = Math.max(1, (slidesTbl.rows || 0) - dataStart0);
-              const unmatched = cfg.sources.filter((s) => colForSource(s) == null).map((s) => s.name);
+              // 已上傳但對不到欄的來源 → 擋下，不偷偷略過（避免照片沒貼進去卻沒回饋）
+              const unmatched = cfg.sources.filter((s) => (s.files?.length || 0) > 0 && colForSource(s) == null).map((s) => s.name);
+              if (unmatched.length) throw new Error(`來源「${unmatched.join("、")}」的資料夾名對不到表頭欄（Before/After…）→ 請在「對應欄」手選欄位，或改資料夾名後重新上傳`);
               const pages = []; let mapped = 0;
               for (let p = 0; p * dataRows < snList.length; p++) {
                 const sn = [], img = [];
@@ -3562,7 +3587,6 @@
                 }
                 pages.push({ sn, img });
               }
-              if (unmatched.length) setStatus(`⚠ 來源「${unmatched.join("、")}」對不到表頭欄；確認資料夾名與表頭(Before/After…)一致`);
               if (!mapped) throw new Error("沒有可匯出的圖片（檢查 SN 與來源檔名、來源資料夾名 vs 表頭是否對應）");
               const body = JSON.stringify({
                 snCellPages: pages, fill: Math.max(5, Math.min(100, cfg.snAdjust?.fill ?? 90)) / 100,
