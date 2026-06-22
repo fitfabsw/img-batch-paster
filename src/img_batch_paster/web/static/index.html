@@ -3525,37 +3525,55 @@
           if (!snList.length) { setStatus("錯誤: 請先提供 SN 清單"); return; }
           if (!cfg.sources.length) { setStatus("錯誤: 至少需一個來源"); return; }
 
-          // PPT/Keynote：依範本 SN 貼進表格儲存格（重用 computeSnMatchSlides + 既有 pptx 匯出）
+          // PPT/Keynote：依範本 SN → 把照片填入「表格儲存格」(cell fill)，跟著格子走、任何檢視器都對齊
           if (mode === "slides") {
             if (!slidesTbl) { setStatus("錯誤: 此 PPT 範本沒有表格"); return; }
             setBusy(true); setStatus("組裝 SN 對照投影片…");
             try {
               const d = detectSlidesTable(slidesTbl) || { snCol: 1, snRowStart: 2 };
-              const res = computeSnMatchSlides(slidesTbl, snList, cfg.sources, {
-                snCol1: d.snCol, dataStartRow1: d.snRowStart,
-                fontPt: cfg.label.font_pt || 18,
-                fill: cfg.snAdjust?.fill ?? 90,
-                dx: cfg.snAdjust?.manual ? (cfg.snAdjust?.dx ?? 0) : 0,
-                dy: cfg.snAdjust?.manual ? (cfg.snAdjust?.dy ?? 0) : 0,
-                dataStartCm: slidesTbl.data_start_cm, rowPitchCm: slidesTbl.row_pitch_cm,
-                perColCrop: cfg.cropMode === "per-col",
-                globalCrop: cfg.crop?.enabled ? cfg.crop : null,
-              });
-              if (res.unmatchedSources.length) {
-                setStatus(`⚠ 來源「${res.unmatchedSources.join("、")}」對不到表頭欄；確認資料夾名與表頭(Before/After…)一致`);
+              const snCol0 = d.snCol - 1, dataStart0 = d.snRowStart - 1;
+              const headerRow1 = d.snRowStart - 1, ncols = slidesTbl.cols || (slidesTbl.col_widths_cm || []).length;
+              const headerText = (c1) => { const cell = (slidesTbl.cells || []).find((x) => x.r === headerRow1 && x.c === c1); return cell ? String(cell.text || "").trim() : ""; };
+              const colForSource = (s) => {                 // 來源 → 0-based 欄索引（依表頭名 / slidesCol）
+                const want = String(s.slidesCol || s.name || "").toLowerCase();
+                if (!want) return null;
+                for (let c1 = 1; c1 <= ncols; c1++) { if (c1 - 1 === snCol0) continue; const h = headerText(c1).toLowerCase(); if (h && (h === want || h.includes(want) || want.includes(h))) return c1 - 1; }
+                return null;
+              };
+              const perCol = cfg.cropMode === "per-col";
+              const globalCrop = cfg.crop?.enabled ? cfg.crop : null;
+              const dataRows = Math.max(1, (slidesTbl.rows || 0) - dataStart0);
+              const unmatched = cfg.sources.filter((s) => colForSource(s) == null).map((s) => s.name);
+              const pages = []; let mapped = 0;
+              for (let p = 0; p * dataRows < snList.length; p++) {
+                const sn = [], img = [];
+                for (let k = 0; k < dataRows; k++) {
+                  const idx = p * dataRows + k; if (idx >= snList.length) break;
+                  const item = snList[idx]; const r0 = dataStart0 + k;
+                  sn.push({ row: r0, col: snCol0, text: item.sn, font_pt: cfg.label.font_pt || 14, bold: true });
+                  const stem = String(item.sn).toLowerCase();
+                  for (const s of cfg.sources) {
+                    const c0 = colForSource(s); if (c0 == null) continue;
+                    const f = (s.files || []).find((x) => (x.name || "").replace(/\.[^./]+$/, "").toLowerCase() === stem);
+                    if (!f) continue;
+                    img.push({ row: r0, col: c0, path: f.path, crop: perCol ? (s.crop?.enabled ? s.crop : null) : globalCrop });
+                    mapped++;
+                  }
+                }
+                pages.push({ sn, img });
               }
-              if (!res.mapped) throw new Error("沒有可匯出的圖片（檢查 SN 與來源檔名、來源資料夾名 vs 表頭是否對應）");
+              if (unmatched.length) setStatus(`⚠ 來源「${unmatched.join("、")}」對不到表頭欄；確認資料夾名與表頭(Before/After…)一致`);
+              if (!mapped) throw new Error("沒有可匯出的圖片（檢查 SN 與來源檔名、來源資料夾名 vs 表頭是否對應）");
               const body = JSON.stringify({
-                slide: cfg.slide, pages: res.pages, output: cfg.output, workspace: ws,
-                snInCell: true, snCol: d.snCol - 1, snRowStart: d.snRowStart - 1,
-                crop: null,   // 影像 placement 已各自帶 crop
+                snCellPages: pages, fill: Math.max(5, Math.min(100, cfg.snAdjust?.fill ?? 90)) / 100,
+                output: cfg.output, workspace: ws,
               });
-              setStatus(`匯出 PPT 中… (${res.mapped} 張圖 · ${res.pageCount} 頁)`);
+              setStatus(`匯出 PPT 中… (${mapped} 張圖 · ${pages.length} 頁)`);
               const r = await fetch("/api/export", { method: "POST", headers: { "Content-Type": "application/json" }, body });
               const j = await r.json();
               if (!r.ok) throw new Error(j.error || "export failed");
-              const pgMsg = res.pageCount > 1 ? ` · ${res.pageCount} 頁` : "";
-              if (j.download_url) { window.open(j.download_url, "_blank"); setStatus(`✓ 已匯出 (SN 對照 PPT, ${res.mapped} 張${pgMsg})`); }
+              const pgMsg = pages.length > 1 ? ` · ${pages.length} 頁` : "";
+              if (j.download_url) { window.open(j.download_url, "_blank"); setStatus(`✓ 已匯出 (SN 對照 PPT, ${mapped} 張${pgMsg})`); }
               else setStatus(`✓ ${j.output}${pgMsg}`);
             } catch (e) { setStatus("錯誤: " + e.message); }
             finally { setBusy(false); }

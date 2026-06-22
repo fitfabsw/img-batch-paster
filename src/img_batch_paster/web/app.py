@@ -18,7 +18,7 @@ from flask import Flask, jsonify, request, send_file, send_from_directory
 from PIL import Image
 
 from ..grouper import scan_folder
-from ..pptx_writer import Placement, write_pages, write_placements
+from ..pptx_writer import Placement, write_pages, write_placements, write_sn_cell_pages
 from ..xlsx_writer import CellPlacement, write_xlsx
 from ..keynote_export import convert_key_to_pptx, convert_pptx_to_key
 from .template_render import render_first_slide, slide_size_cm, prewarm_libreoffice
@@ -795,6 +795,28 @@ def api_export():
                    embed_in_cell=embed_in_cell, img_fit=img_fit,
                    contain_inset=contain_inset, crop=crop)
         resp = {"output": str(out_path)}
+        if base:
+            resp["download_url"] = f"/api/download/{ws}/{out_path.name}"
+        return jsonify(resp)
+
+    # 依範本 SN（PPT）：把照片填入表格儲存格（cell fill）→ 跟著儲存格走、任何檢視器都對齊。
+    if "snCellPages" in data:
+        if not template_path:
+            return jsonify({"error": "依範本 SN 匯出需要 PPT 範本"}), 400
+        cell_pages = data["snCellPages"]
+        if not cell_pages or all(not (pg.get("img") or pg.get("sn")) for pg in cell_pages):
+            return jsonify({"error": "沒有可匯出的圖片"}), 400
+        fill = max(0.05, min(1.0, float(data.get("fill", 0.9))))
+        want_key = out_path.suffix.lower() == ".key"
+        pptx_out = out_path.with_suffix(".pptx") if want_key else out_path
+        write_sn_cell_pages(template_path, pptx_out, cell_pages, fill=fill)
+        if want_key:
+            try:
+                convert_pptx_to_key(pptx_out, out_path)
+            except Exception as e:
+                return jsonify({"error": f".key 轉檔失敗，但 .pptx 已輸出至 {pptx_out}: {e}",
+                                "output": str(pptx_out), "pages": len(cell_pages)}), 500
+        resp = {"output": str(out_path), "pages": len(cell_pages)}
         if base:
             resp["download_url"] = f"/api/download/{ws}/{out_path.name}"
         return jsonify(resp)
