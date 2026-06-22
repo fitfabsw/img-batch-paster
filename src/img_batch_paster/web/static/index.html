@@ -2359,9 +2359,14 @@
         for (const item of rows) {
           for (const c of cols) {
             if (c.sn) continue;
-            const file = fileFor(srcForHeader(c.header), item.sn);
+            const s = srcForHeader(c.header);
+            const file = fileFor(s, item.sn);
             if (!file || !file.w || !file.h) continue;
-            alignFrac = Math.min(alignFrac, f, f * (c.w / chCm) * (file.h / file.w));
+            // 用「裁切後的有效長寬」算共同高度（否則裁成扁/高長方形時比例會錯）
+            const cr = perColCrop ? (s?.crop?.enabled ? s.crop : null) : globalCrop;
+            const ew = file.w * (cr ? Math.max(0.01, cr.right - cr.left) : 1);
+            const eh = file.h * (cr ? Math.max(0.01, cr.bottom - cr.top) : 1);
+            alignFrac = Math.min(alignFrac, f, f * (c.w / chCm) * (eh / ew));
           }
         }
       }
@@ -3620,8 +3625,12 @@
                 for (const pg of pages) for (const ic of pg.img) {
                   const fl = fileByPath[ic.path];
                   if (!fl || !fl.w || !fl.h) continue;
+                  // 用裁切後的有效長寬比（ic.crop 已是解析後的每張裁切）
+                  const cr = ic.crop;
+                  const ew = fl.w * (cr ? Math.max(0.01, cr.right - cr.left) : 1);
+                  const eh = fl.h * (cr ? Math.max(0.01, cr.bottom - cr.top) : 1);
                   const colW = cwArr[ic.col] || chCm;
-                  alignFrac = Math.min(alignFrac, fillFrac, fillFrac * (colW / chCm) * (fl.h / fl.w));
+                  alignFrac = Math.min(alignFrac, fillFrac, fillFrac * (colW / chCm) * (eh / ew));
                 }
               }
               const body = JSON.stringify({
