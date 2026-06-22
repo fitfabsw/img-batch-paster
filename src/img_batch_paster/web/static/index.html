@@ -1451,6 +1451,15 @@
     function CropEditor({ file, initial, onApply, onCancel }) {
       const imgRef = useRef(null);
       const boxRef = useRef(null);
+      // 依圖片實際尺寸 + 視窗算出顯示寬，讓小圖也放大填滿（否則 250px 小圖視窗會很小）
+      const [dispW, setDispW] = useState(null);
+      const onImgLoad = (e) => {
+        const nW = e.target.naturalWidth, nH = e.target.naturalHeight;
+        if (!nW || !nH) return;
+        const maxW = window.innerWidth * 0.8, maxH = window.innerHeight * 0.7;
+        const scale = Math.min(maxW / nW, maxH / nH);   // 可 >1 → 放大小圖
+        setDispW(Math.round(nW * scale));
+      };
       const [box, setBox] = useState(() => {
         const ini = initial || { left: 0.15, top: 0.15, right: 0.85, bottom: 0.85, enabled: false };
         return ini.enabled
@@ -1562,8 +1571,8 @@
               style={{ maxHeight: "70vh", maxWidth: "80vw" }}>
               <img ref={imgRef}
                 src={`/api/thumb?path=${encodeURIComponent(file.path)}&size=1600`}
-                draggable={false}
-                style={{ display: "block", maxHeight: "70vh", maxWidth: "80vw", userSelect: "none", pointerEvents: "none" }} />
+                draggable={false} onLoad={onImgLoad}
+                style={{ display: "block", width: dispW ? dispW : "auto", height: "auto", maxHeight: "70vh", maxWidth: "80vw", userSelect: "none", pointerEvents: "none" }} />
               {/* 暗化 4 個遮罩 */}
               <div className="absolute bg-black/55 pointer-events-none" style={{ left: 0, top: 0, right: 0, height: `${box.top * 100}%` }} />
               <div className="absolute bg-black/55 pointer-events-none" style={{ left: 0, bottom: 0, right: 0, height: `${(1 - box.bottom) * 100}%` }} />
