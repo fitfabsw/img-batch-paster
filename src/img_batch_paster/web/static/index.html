@@ -2289,6 +2289,87 @@
       );
     }
 
+    // 依範本 SN（PPT）預覽：直接用 HTML 畫出表格（SN｜各影像欄）+ 照片，所有東西同一座標系 →
+    //   天生對齊、不需疊在渲染 PNG 上、不受 LibreOffice 列高渲染差異影響。匯出仍用實際表格座標。
+    function SnSlidePreview({ slidesTbl, slidesSnInfo, snList, sources, thumbUrl, fill, perColCrop, globalCrop, slideW, slideH, stageW }) {
+      const cw = slidesTbl.col_widths_cm || [];
+      const rhArr = slidesTbl.row_heights_cm || [];
+      const snCol0 = (slidesSnInfo.snCol || 1) - 1;
+      const headerRow1 = (slidesSnInfo.snRowStart || 2) - 1;
+      const dataRows = slidesSnInfo.dataRows || snList.length;
+      const ncols = slidesTbl.cols || cw.length;
+      const cols = [];
+      for (let c1 = 1; c1 <= ncols; c1++) {
+        const w = cw[c1 - 1] || 1;
+        if (c1 - 1 === snCol0) { cols.push({ sn: true, w }); continue; }
+        const cell = (slidesTbl.cells || []).find((x) => x.r === headerRow1 && x.c === c1);
+        cols.push({ sn: false, header: cell ? String(cell.text || "").trim() : "", w });
+      }
+      const srcForHeader = (h) => {
+        const q = String(h || "").toLowerCase();
+        if (!q) return null;
+        return sources.find((s) => { const m = String(s.slidesCol || s.name || "").toLowerCase(); return m && (m === q || m.includes(q) || q.includes(m)); });
+      };
+      const fileFor = (s, sn) => {
+        if (!s) return null;
+        const stem = String(sn).toLowerCase();
+        return (s.files || []).find((x) => (x.name || "").replace(/\.[^./]+$/, "").toLowerCase() === stem);
+      };
+      // 投影片頁框：用真實投影片尺寸，表格依 left/top 定位 → 與「依檔名」的頁面預覽一致
+      const SW = slideW || 25.4, SH = slideH || 14.29;
+      const STAGE = stageW || 640;
+      const pxPerCm = STAGE / SW;
+      const boxH = Math.round(SH * pxPerCm);
+      const tLeft = Math.round((slidesTbl.left_cm || 0) * pxPerCm);
+      const tTop = Math.round((slidesTbl.top_cm || 0) * pxPerCm);
+      const tWidth = Math.round(cols.reduce((a, c) => a + c.w, 0) * pxPerCm);
+      const rowH = Math.max(20, Math.round((rhArr[1] || 4.28) * pxPerCm));
+      const headerH = Math.max(16, Math.round((rhArr[0] || 1.76) * pxPerCm));
+      const f = Math.max(0.05, Math.min(1, (fill ?? 90) / 100));
+      // SN 清單未產生時，顯示範本表格結構（表頭 + dataRows 個空白列），讓使用者確認範本載入正確
+      const rows = snList.length ? snList : Array.from({ length: Math.max(1, dataRows) }, () => ({ sn: "" }));
+      const isEmpty = snList.length === 0;
+      return (
+        <div className="stage border relative overflow-hidden" style={{ width: STAGE, height: boxH, background: "#fff" }}>
+          <table style={{ position: "absolute", left: tLeft, top: tTop, width: tWidth, borderCollapse: "collapse", tableLayout: "fixed", background: "#fff" }}>
+            <colgroup>{cols.map((c, i) => <col key={i} style={{ width: Math.round(c.w * pxPerCm) }} />)}</colgroup>
+            <thead>
+              <tr style={{ height: headerH }}>
+                {cols.map((c, i) => (
+                  <th key={i} className="border border-slate-400 text-[11px] font-semibold text-slate-700 px-1">
+                    {c.sn ? "SN" : c.header}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((item, ri) => (
+                <tr key={ri} style={{ height: rowH }} title={ri >= dataRows ? "超出範本列數 → 匯出時換頁" : undefined}>
+                  {cols.map((c, ci) => {
+                    if (c.sn) return (
+                      <td key={ci} className="border border-slate-400 text-center text-xs font-semibold"
+                        style={{ background: isEmpty ? "transparent" : (ri >= dataRows ? "#fff7ed" : "#ecfdf5") }}>{item.sn}</td>
+                    );
+                    const s = srcForHeader(c.header);
+                    const file = fileFor(s, item.sn);
+                    const crop = perColCrop ? (s?.crop?.enabled ? s.crop : null) : globalCrop;
+                    return (
+                      <td key={ci} className="border border-slate-400 text-center align-middle">
+                        {file
+                          ? <img src={thumbUrl(file.path, 240, crop)}
+                              style={{ height: Math.round(rowH * f), maxWidth: "94%", objectFit: "contain", display: "inline-block", verticalAlign: "middle" }} />
+                          : null}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+    }
+
     function ExcelPreview({ grid, cfg, orderedFiles, selected, thumbUrl, snList }) {
       if (!grid) {
         return (
@@ -4534,7 +4615,33 @@
                       {tplPath && mode === "excel" && (
                         <ExcelPreview grid={xlGrid} cfg={cfg} orderedFiles={orderedFiles} selected={selected} thumbUrl={thumbUrl} snList={snList} />
                       )}
-                      {tplPath && mode === "slides" && (
+                      {/* 依範本 SN（PPT）：HTML 表格預覽（取代疊在 PNG 上的做法 → 天生對齊）*/}
+                      {tplPath && mode === "slides" && cfg.snMatchMode && slidesTbl && (
+                        <div className="flex flex-col items-center gap-3">
+                          {snList.length === 0 && (
+                            <div className="text-[11px] text-slate-400">範本表格結構（左側「SN 清單來源」產生 SN 後即填入）</div>
+                          )}
+                          <SnSlidePreview slidesTbl={slidesTbl} slidesSnInfo={slidesSnInfo}
+                            snList={snList} sources={cfg.sources} thumbUrl={thumbUrl}
+                            fill={cfg.snAdjust?.fill ?? 90}
+                            perColCrop={cfg.cropMode === "per-col"}
+                            globalCrop={cfg.crop?.enabled ? cfg.crop : null}
+                            slideW={previewSlide.width_cm} slideH={previewSlide.height_cm} stageW={STAGE_W} />
+                          {slidesSnInfo && snList.length > slidesSnInfo.dataRows && (
+                            <div className="text-[11px] text-amber-600">
+                              ⚠ SN 數（{snList.length}）超過範本資料列（{slidesSnInfo.dataRows}）→ 匯出時會自動換頁；橘底列為下一頁。
+                            </div>
+                          )}
+                          {snList.length > 0 && (
+                            <div className="relative">
+                              <Stepper label="填滿格高" orient="h" step={2} value={cfg.snAdjust?.fill ?? 90}
+                                onChange={(v) => setCfg((c) => ({ ...c, snAdjust: { ...c.snAdjust, fill: Math.max(5, Math.min(100, v)) } }))} />
+                              <div className="absolute left-0 right-0 top-full text-[10px] text-slate-400 text-center mt-1 pointer-events-none">100% = 圖高填滿格高</div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {tplPath && mode === "slides" && !cfg.snMatchMode && (
                       <div className="relative flex justify-center">
 
                         {/* 舞台 + 下方水平 stepper */}
@@ -4660,24 +4767,6 @@
                       )}
                        </div>
                       </div>
-
-                      {/* 依範本 SN：智能對齊(自動置中) / 手動微調 開關（仿依檔名的智能排列 toggle）*/}
-                      {tplPath && mode === "slides" && cfg.snMatchMode && (
-                        <div className="mt-3 pt-3 border-t border-slate-100 shrink-0 flex items-center gap-3 flex-wrap">
-                          <button onClick={() => setCfg((c) => ({ ...c, snAdjust: { ...c.snAdjust, manual: !c.snAdjust?.manual } }))}
-                            className={`text-xs px-3 py-1 rounded-full border font-medium ${!cfg.snAdjust?.manual
-                              ? "bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-700"
-                              : "bg-white text-slate-600 border-slate-300 hover:bg-slate-50"}`}
-                            title="智能：自動置中於儲存格。再按一次切換手動微調（可拉 X/Y 位移）">
-                            ✨ 智能對齊：{!cfg.snAdjust?.manual ? "開" : "關"}
-                          </button>
-                          <span className="text-[11px] text-slate-500 flex-1 min-w-[10rem]">
-                            {!cfg.snAdjust?.manual
-                              ? "圖片自動置中於儲存格 · 用下方「填滿格高」調大小"
-                              : "手動微調：左緣「Y 位移」、底緣「X 位移」浮動 stepper（hover 顯示）"}
-                          </span>
-                        </div>
-                      )}
 
                       {/* 智能排列：自動讀範本表格、預設對齊。一個 toggle 搞定。依範本 SN 模式不適用 */}
                       {tplPath && mode === "slides" && !cfg.snMatchMode && (() => {
