@@ -352,6 +352,39 @@ def api_template_load():
     })
 
 
+def _measure_data_start_cm(png_path, slide_w_cm, slide_h_cm, left_cm, top_cm, width_cm, height_cm):
+    """從渲染後的 PNG 量出表格「表頭底緣＝資料列起點」的實際 y(cm)。
+    PowerPoint/LibreOffice 會把含文字的表頭列撐高(超出規格列高)，導致用規格座標貼圖偏上。
+    只需偵測表格區內最上面兩條水平格線(表格頂、表頭底)即可修正主要偏移。失敗回 None。"""
+    try:
+        from PIL import Image
+        im = Image.open(png_path).convert("L")
+        W, H = im.size
+        px = im.load()
+        pxcm_y = H / slide_h_cm
+        x0 = max(0, int(left_cm / slide_w_cm * W) + 4)
+        x1 = min(W, int((left_cm + width_cm) / slide_w_cm * W) - 4)
+        if x1 - x0 < 10:
+            return None
+        y0 = max(1, int(top_cm / slide_h_cm * H) - 6)
+        y1 = min(H - 1, int((top_cm + height_cm * 1.6) / slide_h_cm * H))
+        span = x1 - x0
+
+        def dark(y):
+            return sum(1 for x in range(x0, x1, 2) if px[x, y] < 128) / (span / 2)
+        lines = []
+        for y in range(y0, y1):
+            f = dark(y)
+            if f > 0.6 and f >= dark(y - 1) and f > dark(y + 1):
+                if not lines or y - lines[-1] > 8:
+                    lines.append(y)
+        if len(lines) < 2:
+            return None
+        return round(lines[1] / pxcm_y, 2)   # 第二條線 = 表頭底緣 = 資料列起點
+    except Exception:
+        return None
+
+
 @app.post("/api/template/table-info")
 def api_template_table_info():
     """讀取 .pptx 範本中所有表格的幾何（列/欄/位置/各欄寬/各列高），供自動貼圖用。
@@ -369,6 +402,12 @@ def api_template_table_info():
     except Exception as e:
         return jsonify({"error": f"無法讀取簡報: {e}"}), 500
     sw, sh = Emu(prs.slide_width).cm, Emu(prs.slide_height).cm
+    # 渲染一次 PNG 供量測表頭實際高度（失敗不影響：data_start_cm 會是 None → 前端用規格）
+    png_path = None
+    try:
+        png_path = render_first_slide(path)
+    except Exception:
+        png_path = None
     tables = []
     for si, slide in enumerate(prs.slides):
         for shp in slide.shapes:
@@ -385,17 +424,25 @@ def api_template_table_info():
                         txt = ""
                     if txt:
                         cells.append({"r": ri + 1, "c": ci + 1, "text": txt})
+            left_cm = round(Emu(shp.left).cm, 2)
+            top_cm = round(Emu(shp.top).cm, 2)
+            width_cm = round(Emu(shp.width).cm, 2)
+            height_cm = round(Emu(shp.height).cm, 2)
+            data_start_cm = None
+            if png_path and si == 0:   # 只量第一頁（範本均為單頁）
+                data_start_cm = _measure_data_start_cm(png_path, sw, sh, left_cm, top_cm, width_cm, height_cm)
             tables.append({
                 "slide": si,
                 "name": shp.name,
                 "rows": len(t.rows),
                 "cols": len(t.columns),
-                "left_cm": round(Emu(shp.left).cm, 2),
-                "top_cm": round(Emu(shp.top).cm, 2),
-                "width_cm": round(Emu(shp.width).cm, 2),
-                "height_cm": round(Emu(shp.height).cm, 2),
+                "left_cm": left_cm,
+                "top_cm": top_cm,
+                "width_cm": width_cm,
+                "height_cm": height_cm,
                 "col_widths_cm": [round(Emu(c.width).cm, 2) for c in t.columns],
                 "row_heights_cm": [round(Emu(r.height).cm, 2) for r in t.rows],
+                "data_start_cm": data_start_cm,   # 量測到的資料列實際起點 y(cm)，None=回退規格
                 "cells": cells,
             })
     return jsonify({

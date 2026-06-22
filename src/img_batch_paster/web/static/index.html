@@ -52,8 +52,13 @@
         font_pt: 18,
       },
       autoAlign: true,    // 依檔名 group+idx 對位 (固定；「依順序」模式已移除)
-      snMatchMode: false, // SN 對照模式：從範本讀 SN list、每個 SN 從多來源資料夾找對應圖
-      snSource: { col: "A", rowStart: 2 },  // SN 在範本的哪一欄、從第幾列開始
+      snMatchMode: false, // SN 對照模式：手動提供 SN list、每個 SN 從多來源資料夾找對應圖
+      snSource: { col: "A", rowStart: 2 },  // (templateCol 模式) SN 在範本的哪一欄、從第幾列開始
+      // SN 清單來源：手動提供，取代讀範本欄。keyin=直接輸入 / range=範圍展開 / upload=csv·txt / templateCol=讀 xlsx 欄
+      snInput: { mode: "keyin", text: "", prefix: "10B-#", from: 1, to: 8, pad: 0 },
+      // 依範本 SN（PPT）圖片在儲存格內的調整：fill=佔格高百分比 / dx,dy=整體位移(佔格寬高百分比)
+      //   manual=false 時自動置中(忽略 dx/dy)；true 時套用手動位移
+      snAdjust: { fill: 90, dx: 0, dy: 0, manual: false },
       sources: [          // SN 對照模式專用：多個來源資料夾 (每元素: {id, name, folder, files, targetCol, crop})
       ],
       crop: { enabled: false, left: 0, top: 0, right: 1, bottom: 1 },  // 0..1 相對裁剪 (全域)
@@ -234,6 +239,11 @@
       if (skipRows === 0) skipRows = 1;     // 無文字也假設 1 表頭列
       const skipCols = 1;                   // 第一欄當標籤/SN 欄（同 xlsx 慣例）
       return { skipRows, skipCols, snCol: 1, snRowStart: skipRows + 1 };
+    }
+
+    // slidesSnInfo 的總列數（給 UI 顯示用）：資料起始列上一列＝表頭 → rows = dataRows + 表頭數
+    function slidesTblRows(info) {
+      return (info?.dataRows || 0) + Math.max(1, (info?.snRowStart || 2) - 1);
     }
 
     // 計算 Excel 的儲存格 placements
@@ -496,6 +506,103 @@
       return pages;
     }
 
+    // 依範本 SN（PPT/Keynote）：多來源各對一表格欄、用 SN(檔名 stem) 配對 → 貼進對應儲存格。
+    //   影像放進 cell＝把 cell 矩形當絕對座標（沿用 SN-in-cell 的幾何）；SN 文字寫進第 snCol1 欄。
+    //   來源 → 欄：依「資料夾名 vs 表頭文字」自動對應（不分大小寫、互相 contains）。
+    //   回傳單頁 placements；列數上限＝範本表格資料列數（超過截斷）。回傳 { pages, mapped, total, capped, unmatchedSources }。
+    function computeSnMatchSlides(slidesTbl, snList, sources, opts) {
+      const cw = slidesTbl.col_widths_cm || [], rh = slidesTbl.row_heights_cm || [];
+      const nCols = slidesTbl.cols || cw.length, nRows = slidesTbl.rows || rh.length;
+      const snCol0 = Math.max(0, (opts.snCol1 || 1) - 1);
+      const dataStart0 = Math.max(0, (opts.dataStartRow1 || 2) - 1);
+      const headerRow1 = opts.dataStartRow1 - 1;     // 表頭列（1-based）＝資料起始列上一列
+      const dataRows = Math.max(0, nRows - dataStart0);
+      const fill = Math.max(5, Math.min(100, opts.fill ?? 90)) / 100;   // 圖高佔格高比例
+      const dxFrac = (opts.dx || 0) / 100, dyFrac = (opts.dy || 0) / 100; // 位移（佔格寬/高比例）
+      // 資料列起點：優先用後端從渲染 PNG 量到的實際 y（修正表頭文字撐高造成的偏移）；否則用規格。
+      const specDataTop = slidesTbl.top_cm + rh.slice(0, dataStart0).reduce((a, b) => a + b, 0);
+      const dataTopCm = (opts.dataStartCm != null) ? opts.dataStartCm : specDataTop;
+      const cellRect = (r0, c0) => {
+        if (c0 < 0 || c0 >= cw.length || r0 < 0 || r0 >= rh.length) return null;
+        const y = (r0 >= dataStart0)
+          ? dataTopCm + rh.slice(dataStart0, r0).reduce((a, b) => a + b, 0)
+          : slidesTbl.top_cm + rh.slice(0, r0).reduce((a, b) => a + b, 0);
+        return { x: slidesTbl.left_cm + cw.slice(0, c0).reduce((a, b) => a + b, 0), y, w: cw[c0], h: rh[r0] };
+      };
+      const headerText = (c1) => {
+        const cell = (slidesTbl.cells || []).find((x) => x.r === headerRow1 && x.c === c1);
+        return cell ? String(cell.text || "").trim() : "";
+      };
+      const findHeaderCol = (label) => {             // 找表頭文字相符的欄 → 0-based
+        const q = String(label || "").trim().toLowerCase();
+        if (!q) return null;
+        for (let c1 = 1; c1 <= nCols; c1++) {
+          if (c1 - 1 === snCol0) continue;           // 跳過 SN 欄
+          const h = headerText(c1).toLowerCase();
+          if (h && (h === q || h.includes(q) || q.includes(h))) return c1 - 1;
+        }
+        return null;
+      };
+      // 來源 → 0-based 欄索引：優先用使用者選的表格欄 (slidesCol＝表頭文字)，否則依資料夾名自動對應
+      const sourceCol0 = (s) => {
+        if (s.slidesCol) { const c = findHeaderCol(s.slidesCol); if (c != null) return c; }
+        return findHeaderCol(s.name);
+      };
+      const aspectOf = (f, crop) => {
+        if (!f || !f.w || !f.h) return 0.75;
+        if (crop && crop.enabled) {
+          const ww = Math.max(0.01, (crop.right - crop.left)) * f.w;
+          const hh = Math.max(0.01, (crop.bottom - crop.top)) * f.h;
+          return ww ? hh / ww : 0.75;
+        }
+        return f.h / f.w;
+      };
+      // 在 cell 矩形內置中：圖高＝fill×格高，超過格寬則改以格寬為準；再套整體位移 dx/dy。
+      const containIn = (rect, asp) => {
+        let ih = rect.h * fill, iw = ih / asp;
+        const maxW = rect.w * fill;
+        if (iw > maxW) { iw = maxW; ih = maxW * asp; }
+        const x0 = rect.x + (rect.w - iw) / 2 + dxFrac * rect.w;
+        const y0 = rect.y + (rect.h - ih) / 2 + dyFrac * rect.h;
+        return { x_cm: x0, y_cm: y0, w_cm: iw, h_cm: ih };
+      };
+
+      const colOfSource = sources.map(sourceCol0);
+      const unmatchedSources = sources.filter((s, i) => colOfSource[i] == null).map((s) => s.name);
+      const total = (snList || []).length;
+      const perPage = Math.max(1, dataRows);          // 每頁列數＝範本資料列數；超過 → 換頁(複製範本)
+      const pages = [];
+      let mapped = 0;
+      for (let p = 0; p * perPage < total; p++) {
+        const placements = [];
+        for (let k = 0; k < perPage; k++) {
+          const idx = p * perPage + k;
+          if (idx >= total) break;
+          const sn = (snList[idx] || {}).sn;
+          const r0 = dataStart0 + k;                  // 該頁內第 k 列
+          const snRect = cellRect(r0, snCol0);
+          if (snRect) placements.push({
+            text: sn, row_idx: k, x_cm: snRect.x, y_cm: snRect.y, w_cm: snRect.w, h_cm: snRect.h,
+            font_pt: opts.fontPt || 18, bold: true, align: "center", _snCell: true,
+          });
+          const stem = String(sn).toLowerCase();
+          sources.forEach((s, si) => {
+            const c0 = colOfSource[si];
+            if (c0 == null) return;
+            const f = (s.files || []).find((x) => (x.name || "").replace(/\.[^./]+$/, "").toLowerCase() === stem);
+            if (!f) return;
+            const rect = cellRect(r0, c0);
+            if (!rect) return;
+            const crop = opts.perColCrop ? (s.crop?.enabled ? s.crop : null) : opts.globalCrop;
+            placements.push({ path: f.path, ...containIn(rect, aspectOf(f, crop)), _crop: crop, crop });
+            mapped++;
+          });
+        }
+        pages.push(placements);
+      }
+      return { pages, mapped, total, pageCount: pages.length, perPage, unmatchedSources };
+    }
+
     // 對位模式的欄位編輯器：單一可編輯欄位清單（預設自動偵測，可拖曳排序 / ✕移除 / ＋新增 / 🚫忽略；
     //   依範本表頭 / 依檔名 為重置來源）。已無「自動/自訂」模式切換 —— 編輯時自動轉 idxSort=custom。
     function IdxColumnsEditor({ label, allFiles, updateLabel, perColCrop, onOpenIdxCrop, headerOrder, pushHistory }) {
@@ -651,7 +758,14 @@
     }
 
     // SN 對照模式：中欄 — SN × source 對照表
-    function SnMatchMatrix({ cfg, snList, selected, setSelected, thumbUrl, onOpenCrop, perColCrop, selectedCell, setSelectedCell, setSelectedPaths }) {
+    function SnMatchMatrix({ cfg, snList, mode, slidesSnInfo, selected, setSelected, thumbUrl, onOpenCrop, perColCrop, selectedCell, setSelectedCell, setSelectedPaths }) {
+      const isSlides = mode === "slides" && !!slidesSnInfo;
+      const slidesHeaders = slidesSnInfo?.headers || [];
+      const resolveCol = (s) => {                      // 來源 → 顯示用目標欄
+        if (!isSlides) return s.targetCol;
+        const q = (s.slidesCol || s.name || "").toLowerCase();
+        return slidesHeaders.find((h) => { const hh = h.toLowerCase(); return hh === q || hh.includes(q) || q.includes(hh); }) || "(對不到欄)";
+      };
       // 把 source.files 建成 stem → file 的 map（不分大小寫，去副檔名）
       const fileMaps = useMemo(() => cfg.sources.map((s) => {
         const m = new Map();
@@ -705,7 +819,7 @@
                         <div className="flex items-center justify-center gap-1">
                           <span className="bg-purple-100 text-purple-800 px-1 rounded font-mono text-[10px] max-w-[100px] truncate" title={s.name}>{displayName}</span>
                           <span className="text-slate-400">→</span>
-                          <span className="font-mono">{s.targetCol}</span>
+                          <span className="font-mono">{resolveCol(s)}</span>
                           {perColCrop && (
                             <button
                               onClick={() => onOpenCrop && onOpenCrop(s.id)}
@@ -755,7 +869,15 @@
     }
 
     // SN 對照模式：左欄 — SN 來源設定 + 多來源資料夾管理
-    function SnMatchPanel({ cfg, setCfg, ws, tplPath, snList, setSnList, setStatus, setSelected, setCropOpen, setCropSourceId, pushHistory }) {
+    function SnMatchPanel({ cfg, setCfg, ws, tplPath, mode, slidesSnInfo, snList, setSnList, setStatus, setSelected, setCropOpen, setCropSourceId, pushHistory }) {
+      const isSlides = mode === "slides" && !!slidesSnInfo;
+      const headers = slidesSnInfo?.headers || [];
+      // 來源 → 自動對應的表頭欄（依資料夾名，不分大小寫互相 contains）
+      const autoHeader = (name) => {
+        const q = String(name || "").trim().toLowerCase();
+        if (!q) return "";
+        return headers.find((h) => { const hh = h.toLowerCase(); return hh === q || hh.includes(q) || q.includes(hh); }) || "";
+      };
       const [loading, setLoading] = useState(false);
       const inputRefs = useRef({});
 
@@ -784,12 +906,54 @@
         } finally { setLoading(false); }
       };
 
-      // 自動讀取 SN list：在 SN 對照模式 + 範本已載入 + 尚無 SN list 時自動觸發 (失敗時不跳 alert)
+      // 自動讀取 SN list：僅「讀範本欄(templateCol)」模式 + xlsx 範本 + 尚無 SN list 時自動觸發
       useEffect(() => {
-        if (cfg.snMatchMode && tplPath && snList.length === 0 && !loading) {
+        if (cfg.snMatchMode && cfg.snInput.mode === "templateCol" && tplPath && /\.xlsx$/i.test(tplPath)
+            && snList.length === 0 && !loading) {
           loadSnList({ silentEmpty: true });
         }
-      }, [tplPath, cfg.snMatchMode]);
+      }, [tplPath, cfg.snMatchMode, cfg.snInput.mode]);
+
+      const dedupe = (list) => {
+        const seen = new Set();
+        return list.map((s) => String(s).trim()).filter((s) => {
+          if (!s) return false;
+          const k = s.toLowerCase();
+          if (seen.has(k)) return false;
+          seen.add(k); return true;
+        });
+      };
+      const commitSnList = (list) => {
+        const clean = dedupe(list);
+        const rowStart = cfg.snSource.rowStart || 2;
+        setSnList(clean.map((sn, i) => ({ sn, row: rowStart + i })));
+        setStatus(clean.length ? `已產生 ${clean.length} 個 SN` : "⚠ 沒有產生任何 SN");
+      };
+      // 直接輸入：逗號 / 空白 / 換行分隔
+      const genKeyin = () => commitSnList((cfg.snInput.text || "").split(/[\s,，、\n]+/));
+      // 範圍展開：prefix 含 # → 用 from..to 的整數代入（可補零）
+      const genRange = () => {
+        const { prefix, from, to, pad } = cfg.snInput;
+        if (!String(prefix).includes("#")) { setStatus("⚠ 範圍樣板需含 #（例 10B-#）"); return; }
+        const a = parseInt(from), b = parseInt(to);
+        if (isNaN(a) || isNaN(b) || b < a) { setStatus("⚠ 起訖數字無效"); return; }
+        const list = [];
+        for (let n = a; n <= b && list.length < 2000; n++) {
+          const num = pad > 0 ? String(n).padStart(pad, "0") : String(n);
+          list.push(String(prefix).replace(/#/g, num));
+        }
+        commitSnList(list);
+      };
+      // 上傳 csv / txt：每行取第一欄（逗號或 tab 分隔）當 SN，全在瀏覽器端解析
+      const onSnFile = (file) => {
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+          const txt = String(reader.result || "");
+          commitSnList(txt.split(/\r?\n/).map((line) => line.split(/[,\t]/)[0]));
+        };
+        reader.readAsText(file);
+      };
 
       const uploadSource = async (sid, files) => {
         if (!ws || !files || !files.length) return;
@@ -861,31 +1025,90 @@
 
       return (
         <div className="space-y-3">
-          {/* SN 來源 */}
+          {/* SN 來源（手動提供） */}
           <div className="border rounded-lg p-2 bg-purple-50/50">
-            <div className="text-sm font-medium text-purple-900 mb-2">SN 來源 (範本)</div>
-            <div className="grid grid-cols-2 gap-2">
-              <label className="flex flex-col text-xs text-slate-600">
-                <span className="mb-1">SN 欄位</span>
-                <input value={cfg.snSource.col}
-                  onChange={(e) => setCfg((c) => ({ ...c, snSource: { ...c.snSource, col: e.target.value.toUpperCase() } }))}
-                  className="border rounded px-2 py-1 text-sm font-mono" placeholder="A" />
-              </label>
-              <label className="flex flex-col text-xs text-slate-600">
-                <span className="mb-1">起始列</span>
-                <input type="number" value={cfg.snSource.rowStart}
-                  onChange={(e) => setCfg((c) => ({ ...c, snSource: { ...c.snSource, rowStart: Math.max(1, parseInt(e.target.value) || 1) } }))}
-                  className="border rounded px-2 py-1 text-sm" />
-              </label>
+            <div className="text-sm font-medium text-purple-900 mb-2">SN 清單來源</div>
+            {/* 模式選擇 */}
+            <div className="grid grid-cols-4 gap-1 mb-2 text-[11px]">
+              {[["keyin", "直接輸入"], ["range", "範圍"], ["upload", "上傳檔"], ["templateCol", "讀範本欄"]].map(([m, label]) => (
+                <button key={m}
+                  onClick={() => setCfg((c) => ({ ...c, snInput: { ...c.snInput, mode: m } }))}
+                  className={`rounded py-1 border ${cfg.snInput.mode === m ? "bg-purple-600 text-white border-purple-700" : "bg-white text-slate-600 hover:bg-purple-100"}`}>
+                  {label}
+                </button>
+              ))}
             </div>
-            <button onClick={() => loadSnList()} disabled={loading || !tplPath}
-              className="w-full mt-2 border rounded py-1 text-xs bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-40">
-              {loading ? "讀取中…" : tplPath ? `讀取 SN list (${cfg.snSource.col}${cfg.snSource.rowStart}起)` : "請先上傳範本"}
-            </button>
+
+            {cfg.snInput.mode === "keyin" && (
+              <div className="space-y-1">
+                <textarea value={cfg.snInput.text} rows={3}
+                  onChange={(e) => setCfg((c) => ({ ...c, snInput: { ...c.snInput, text: e.target.value } }))}
+                  placeholder="10B-1, 10B-2, 10B-3 …（逗號 / 空白 / 換行分隔）"
+                  className="w-full border rounded px-2 py-1 text-xs font-mono" />
+                <button onClick={genKeyin}
+                  className="w-full border rounded py-1 text-xs bg-purple-600 text-white hover:bg-purple-700">產生 SN 清單</button>
+              </div>
+            )}
+
+            {cfg.snInput.mode === "range" && (
+              <div className="space-y-1">
+                <label className="flex flex-col text-[11px] text-slate-600">
+                  <span className="mb-0.5">樣板（# 代表編號）</span>
+                  <input value={cfg.snInput.prefix}
+                    onChange={(e) => setCfg((c) => ({ ...c, snInput: { ...c.snInput, prefix: e.target.value } }))}
+                    placeholder="10B-#" className="border rounded px-2 py-1 text-sm font-mono" />
+                </label>
+                <div className="grid grid-cols-3 gap-1">
+                  <label className="flex flex-col text-[11px] text-slate-600"><span className="mb-0.5">起</span>
+                    <input type="number" value={cfg.snInput.from}
+                      onChange={(e) => setCfg((c) => ({ ...c, snInput: { ...c.snInput, from: parseInt(e.target.value) || 1 } }))}
+                      className="border rounded px-2 py-1 text-sm" /></label>
+                  <label className="flex flex-col text-[11px] text-slate-600"><span className="mb-0.5">迄</span>
+                    <input type="number" value={cfg.snInput.to}
+                      onChange={(e) => setCfg((c) => ({ ...c, snInput: { ...c.snInput, to: parseInt(e.target.value) || 1 } }))}
+                      className="border rounded px-2 py-1 text-sm" /></label>
+                  <label className="flex flex-col text-[11px] text-slate-600" title="補零位數，0=不補（符合 10B-1 命名）"><span className="mb-0.5">補零</span>
+                    <input type="number" value={cfg.snInput.pad}
+                      onChange={(e) => setCfg((c) => ({ ...c, snInput: { ...c.snInput, pad: Math.max(0, parseInt(e.target.value) || 0) } }))}
+                      className="border rounded px-2 py-1 text-sm" /></label>
+                </div>
+                <button onClick={genRange}
+                  className="w-full border rounded py-1 text-xs bg-purple-600 text-white hover:bg-purple-700">展開 SN 清單</button>
+              </div>
+            )}
+
+            {cfg.snInput.mode === "upload" && (
+              <div className="space-y-1">
+                <input type="file" accept=".csv,.txt,text/csv,text/plain"
+                  onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; onSnFile(f); }}
+                  className="w-full text-xs" />
+                <div className="text-[10px] text-slate-500">每行第一欄（逗號 / Tab 分隔）當 SN。</div>
+              </div>
+            )}
+
+            {cfg.snInput.mode === "templateCol" && (
+              <div className="space-y-1">
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="flex flex-col text-xs text-slate-600"><span className="mb-1">SN 欄位</span>
+                    <input value={cfg.snSource.col}
+                      onChange={(e) => setCfg((c) => ({ ...c, snSource: { ...c.snSource, col: e.target.value.toUpperCase() } }))}
+                      className="border rounded px-2 py-1 text-sm font-mono" placeholder="A" /></label>
+                  <label className="flex flex-col text-xs text-slate-600"><span className="mb-1">起始列</span>
+                    <input type="number" value={cfg.snSource.rowStart}
+                      onChange={(e) => setCfg((c) => ({ ...c, snSource: { ...c.snSource, rowStart: Math.max(1, parseInt(e.target.value) || 1) } }))}
+                      className="border rounded px-2 py-1 text-sm" /></label>
+                </div>
+                <button onClick={() => loadSnList()} disabled={loading || !tplPath}
+                  className="w-full border rounded py-1 text-xs bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-40">
+                  {loading ? "讀取中…" : "讀取 SN list（僅 .xlsx）"}
+                </button>
+              </div>
+            )}
+
             {snList.length > 0 && (
-              <div className="text-[10px] text-slate-600 mt-1">
-                偵測到 <b>{snList.length}</b> 個 SN：
-                <span className="font-mono">{snList.slice(0, 3).map((s) => s.sn).join(", ")}{snList.length > 3 ? ` … (+${snList.length - 3})` : ""}</span>
+              <div className="text-[10px] text-slate-600 mt-2">
+                目前 <b>{snList.length}</b> 個 SN：
+                <span className="font-mono">{snList.slice(0, 4).map((s) => s.sn).join(", ")}{snList.length > 4 ? ` … (+${snList.length - 4})` : ""}</span>
               </div>
             )}
           </div>
@@ -893,14 +1116,35 @@
           {/* 來源列表 */}
           <div className="border rounded-lg p-2">
             <div className="text-sm font-medium text-slate-700 mb-2">資料來源 ({cfg.sources.length})</div>
+            {isSlides && (
+              <div className="text-[10px] text-slate-500 bg-slate-50 border rounded px-2 py-1 mb-2">
+                已辨識範本表格：<b>{slidesSnInfo.headers.length + 1} 欄 × {slidesTblRows(slidesSnInfo)} 列</b>
+                · SN 寫第 <b>{slidesSnInfo.snCol}</b> 欄、資料從第 <b>{slidesSnInfo.snRowStart}</b> 列起
+                {headers.length > 0 && <> · 可對應欄：<span className="font-mono">{headers.join(" / ")}</span></>}
+              </div>
+            )}
             <div className="space-y-2">
               {cfg.sources.map((s) => (
                 <div key={s.id} className="border rounded p-2 bg-white">
                   <div className="flex items-center gap-1 mb-1">
-                    <span className="text-[10px] text-slate-500">寫入欄</span>
-                    <input value={s.targetCol}
-                      onChange={(e) => updateSource(s.id, { targetCol: e.target.value.toUpperCase() })}
-                      className="border rounded px-1.5 py-0.5 text-xs font-mono w-12" />
+                    {isSlides ? (
+                      <>
+                        <span className="text-[10px] text-slate-500">對應欄</span>
+                        <select value={s.slidesCol || autoHeader(s.name)}
+                          onChange={(e) => updateSource(s.id, { slidesCol: e.target.value })}
+                          className="border rounded px-1 py-0.5 text-xs flex-1 min-w-0">
+                          <option value="">（自動：依資料夾名）</option>
+                          {headers.map((h) => <option key={h} value={h}>{h}</option>)}
+                        </select>
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-[10px] text-slate-500">寫入欄</span>
+                        <input value={s.targetCol}
+                          onChange={(e) => updateSource(s.id, { targetCol: e.target.value.toUpperCase() })}
+                          className="border rounded px-1.5 py-0.5 text-xs font-mono w-12" />
+                      </>
+                    )}
                     <button onClick={() => removeSource(s.id)}
                       className="ml-auto text-slate-400 hover:text-red-600 text-xs">✕</button>
                   </div>
@@ -2481,6 +2725,7 @@
           setCfg((c) => {
             const fresh = JSON.parse(JSON.stringify(DEFAULTS));
             fresh.output = { ...fresh.output, path: c.output?.path || fresh.output.path, template: c.output?.template };
+            fresh.slide = c.slide;   // 保留已載入範本的投影片尺寸（否則預覽 cm→px 比例會錯）
             fresh.snMatchMode = !!toSnMatch;
             fresh.autoAlign = false;
             if (toSnMatch) {
@@ -2896,6 +3141,20 @@
 
       // ppt/key 範本表格（給 SN 寫入儲存格的 max / 範圍提示用）
       const slidesTbl = (mode === "slides" && tableInfo && !tableInfo.error) ? (tableInfo.tables || [])[0] : null;
+      // 依範本 SN（PPT）：偵測表頭/SN欄/資料列，並列出可對應的表頭欄（給來源欄位下拉用）
+      const slidesSnInfo = (() => {
+        if (!slidesTbl) return null;
+        const d = detectSlidesTable(slidesTbl) || { snCol: 1, snRowStart: 2 };
+        const headerRow1 = d.snRowStart - 1, snCol0 = d.snCol - 1;
+        const headers = [];
+        for (let c1 = 1; c1 <= (slidesTbl.cols || 0); c1++) {
+          if (c1 - 1 === snCol0) continue;
+          const cell = (slidesTbl.cells || []).find((x) => x.r === headerRow1 && x.c === c1);
+          const text = cell ? String(cell.text || "").trim() : "";
+          if (text) headers.push(text);
+        }
+        return { ...d, headers, dataRows: Math.max(0, (slidesTbl.rows || 0) - (d.snRowStart - 1)) };
+      })();
 
       // 套用表格：用表格座標填「位置 + 圖片區總寬」，圖片欄數/列數「跟隨使用者左側設定」
       // （表格常把多張圖放在一個寬的合併欄，欄數看不出來，所以用使用者的 cols 平分）
@@ -3132,9 +3391,47 @@
       const doExport = async () => {
         // SN 對照模式 — 自成一條路徑
         if (cfg.snMatchMode) {
-          if (!tplPath) { setStatus("錯誤: 請先上傳 Excel 範本"); return; }
-          if (!snList.length) { setStatus("錯誤: 請先載入 SN list"); return; }
+          if (!tplPath) { setStatus("錯誤: 請先上傳範本"); return; }
+          if (!snList.length) { setStatus("錯誤: 請先提供 SN 清單"); return; }
           if (!cfg.sources.length) { setStatus("錯誤: 至少需一個來源"); return; }
+
+          // PPT/Keynote：依範本 SN 貼進表格儲存格（重用 computeSnMatchSlides + 既有 pptx 匯出）
+          if (mode === "slides") {
+            if (!slidesTbl) { setStatus("錯誤: 此 PPT 範本沒有表格"); return; }
+            setBusy(true); setStatus("組裝 SN 對照投影片…");
+            try {
+              const d = detectSlidesTable(slidesTbl) || { snCol: 1, snRowStart: 2 };
+              const res = computeSnMatchSlides(slidesTbl, snList, cfg.sources, {
+                snCol1: d.snCol, dataStartRow1: d.snRowStart,
+                fontPt: cfg.label.font_pt || 18,
+                fill: cfg.snAdjust?.fill ?? 90,
+                dx: cfg.snAdjust?.manual ? (cfg.snAdjust?.dx ?? 0) : 0,
+                dy: cfg.snAdjust?.manual ? (cfg.snAdjust?.dy ?? 0) : 0,
+                dataStartCm: slidesTbl.data_start_cm,
+                perColCrop: cfg.cropMode === "per-col",
+                globalCrop: cfg.crop?.enabled ? cfg.crop : null,
+              });
+              if (res.unmatchedSources.length) {
+                setStatus(`⚠ 來源「${res.unmatchedSources.join("、")}」對不到表頭欄；確認資料夾名與表頭(Before/After…)一致`);
+              }
+              if (!res.mapped) throw new Error("沒有可匯出的圖片（檢查 SN 與來源檔名、來源資料夾名 vs 表頭是否對應）");
+              const body = JSON.stringify({
+                slide: cfg.slide, pages: res.pages, output: cfg.output, workspace: ws,
+                snInCell: true, snCol: d.snCol - 1, snRowStart: d.snRowStart - 1,
+                crop: null,   // 影像 placement 已各自帶 crop
+              });
+              setStatus(`匯出 PPT 中… (${res.mapped} 張圖 · ${res.pageCount} 頁)`);
+              const r = await fetch("/api/export", { method: "POST", headers: { "Content-Type": "application/json" }, body });
+              const j = await r.json();
+              if (!r.ok) throw new Error(j.error || "export failed");
+              const pgMsg = res.pageCount > 1 ? ` · ${res.pageCount} 頁` : "";
+              if (j.download_url) { window.open(j.download_url, "_blank"); setStatus(`✓ 已匯出 (SN 對照 PPT, ${res.mapped} 張${pgMsg})`); }
+              else setStatus(`✓ ${j.output}${pgMsg}`);
+            } catch (e) { setStatus("錯誤: " + e.message); }
+            finally { setBusy(false); }
+            return;
+          }
+
           setBusy(true); setStatus("組裝 SN 對照 cells…");
           try {
             const perCol = cfg.cropMode === "per-col";
@@ -3430,6 +3727,22 @@
       const STAGE_W = 640;
       const scale = STAGE_W / cfg.slide.width_cm;
       const stageH = cfg.slide.height_cm * scale;
+      // 依範本 SN（PPT）：用範本表格幾何把多來源圖依 SN 貼進儲存格 → 預覽與匯出共用
+      const snSlide = (cfg.snMatchMode && mode === "slides" && slidesTbl && snList.length)
+        ? (() => {
+            const d = detectSlidesTable(slidesTbl) || { snCol: 1, snRowStart: 2 };
+            return computeSnMatchSlides(slidesTbl, snList, cfg.sources, {
+              snCol1: d.snCol, dataStartRow1: d.snRowStart,
+              fontPt: cfg.label.font_pt || 18,
+              fill: cfg.snAdjust?.fill ?? 90,
+              dx: cfg.snAdjust?.manual ? (cfg.snAdjust?.dx ?? 0) : 0,
+              dy: cfg.snAdjust?.manual ? (cfg.snAdjust?.dy ?? 0) : 0,
+              dataStartCm: slidesTbl.data_start_cm,
+              perColCrop: cfg.cropMode === "per-col",
+              globalCrop: cfg.crop?.enabled ? cfg.crop : null,
+            });
+          })()
+        : null;
       const _pagesRaw = computePages(cfg.slide, cfg.grid, orderedFiles, cfg.label, cfg.autoAlign, effAspect);
       // SN 寫入表格儲存格：預覽也要反映 → 把 SN 文字移到「範本表格的目標儲存格」矩形(與圖片位置脫鉤)，
       //   欄 = slidesSn.col-1、列 = (rowStart-1) + 該列 row_idx，幾何取自 tableInfo(left/top/各欄寬/各列高)。
@@ -3446,7 +3759,8 @@
         };
       };
       // 每個 placement 注入「解析後的裁切」(全域 cfg.crop 或 各欄 idxCrops) → 預覽縮圖才會裁切、且不被拉伸
-      const pages = _pagesRaw.map((page) => page.map((pl) => {
+      //   依範本 SN（PPT）模式直接用 snSlide.pages（placement 已含座標 + _crop）。
+      const pages = snSlide ? snSlide.pages : _pagesRaw.map((page) => page.map((pl) => {
         if (pl.text !== undefined && pl.text !== null) {
           if (snInCellPreview) {
             const r = snCellRect(pl.row_idx);
@@ -3640,6 +3954,8 @@
                     setCfg={setCfg}
                     ws={ws}
                     tplPath={tplPath}
+                    mode={mode}
+                    slidesSnInfo={slidesSnInfo}
                     snList={snList}
                     setSnList={setSnList}
                     setStatus={setStatus}
@@ -3940,6 +4256,8 @@
                   <SnMatchMatrix
                     cfg={cfg}
                     snList={snList}
+                    mode={mode}
+                    slidesSnInfo={slidesSnInfo}
                     selected={selected}
                     setSelected={setSelected}
                     thumbUrl={thumbUrl}
@@ -4183,7 +4501,7 @@
                             )}
                             {/* Y 軸 stepper：浮在投影片左緣「裡面」、半透明、hover 變實心；智能排列時 Y 鎖定 → 不顯示。
                                 反向縮放 scale(1/zoom) 抵銷舞台 zoom → 不論放大多少都維持正常大小。 */}
-                            {!smartOn && (
+                            {!smartOn && !cfg.snMatchMode && (
                               <div className="absolute left-1 top-1/2 z-20 flex flex-col gap-4 opacity-25 hover:opacity-100 transition-opacity"
                                 style={{ transform: `translateY(-50%) scale(${1 / (zoom || 1)})`, transformOrigin: "left center" }}>
                                 <Stepper label="Y 起" orient="v" value={cfg.grid.origin.y}
@@ -4192,9 +4510,17 @@
                                   onChange={(v) => setGrid("gap.y", v)} />
                               </div>
                             )}
+                            {/* 依範本 SN 手動：Y 位移浮在左緣（仿依檔名）*/}
+                            {cfg.snMatchMode && cfg.snAdjust?.manual && (
+                              <div className="absolute left-1 top-1/2 z-20 flex flex-col gap-4 opacity-25 hover:opacity-100 transition-opacity"
+                                style={{ transform: `translateY(-50%) scale(${1 / (zoom || 1)})`, transformOrigin: "left center" }}>
+                                <Stepper label="Y 位移" orient="v" step={1} value={cfg.snAdjust?.dy ?? 0}
+                                  onChange={(v) => setCfg((c) => ({ ...c, snAdjust: { ...c.snAdjust, dy: v } }))} />
+                              </div>
+                            )}
                             {/* X 軸微調 stepper：浮在投影片底緣「裡面」、半透明、hover 變實心；仿 Y 軸。
                                 X 起 / 間距X / SN X 三項；尺寸主控制留在舞台下方。智能排列時鎖定 → 不顯示。 */}
-                            {!smartOn && (
+                            {!smartOn && !cfg.snMatchMode && (
                               <div className="absolute bottom-1 left-1/2 z-20 flex gap-4 opacity-25 hover:opacity-100 transition-opacity"
                                 style={{ transform: `translateX(-50%) scale(${1 / (zoom || 1)})`, transformOrigin: "bottom center" }}>
                                 {cfg.label.enabled && (
@@ -4205,6 +4531,14 @@
                                   onChange={(v) => setGrid("origin.x", v)} />
                                 <Stepper label="間距X" orient="h" value={cfg.grid.gap.x}
                                   onChange={(v) => setGrid("gap.x", v)} />
+                              </div>
+                            )}
+                            {/* 依範本 SN 手動：X 位移浮在底緣（仿依檔名）*/}
+                            {cfg.snMatchMode && cfg.snAdjust?.manual && (
+                              <div className="absolute bottom-1 left-1/2 z-20 flex gap-4 opacity-25 hover:opacity-100 transition-opacity"
+                                style={{ transform: `translateX(-50%) scale(${1 / (zoom || 1)})`, transformOrigin: "bottom center" }}>
+                                <Stepper label="X 位移" orient="h" step={1} value={cfg.snAdjust?.dx ?? 0}
+                                  onChange={(v) => setCfg((c) => ({ ...c, snAdjust: { ...c.snAdjust, dx: v } }))} />
                               </div>
                             )}
                         {pagePls.map((pl, i) => {
@@ -4244,11 +4578,14 @@
                         })}
                           </div>
 
-                          {/* 舞台下方：只留「尺寸／填滿格高」主控制——OFF/ON 同位置同大小。
-                              X 起 / 間距X / SN X 已浮入預覽底緣。 */}
+                          {/* 舞台下方：主控制（尺寸／填滿格高）——各模式同位置同大小。
+                              X/Y 位移、X起/間距 等已浮入預覽。 */}
                           <div className="flex justify-center mt-3">
                             <div className="relative">
-                              {smartOn ? (
+                              {cfg.snMatchMode ? (
+                                <Stepper label="填滿格高" orient="h" step={2} value={cfg.snAdjust?.fill ?? 90}
+                                  onChange={(v) => setCfg((c) => ({ ...c, snAdjust: { ...c.snAdjust, fill: Math.max(5, Math.min(100, v)) } }))} />
+                              ) : smartOn ? (
                                 <Stepper label="填滿格高" orient="h" step={2} value={smartFillRatio}
                                   onChange={(r) => {
                                     const rr = Math.max(5, Math.min(100, r));
@@ -4259,7 +4596,7 @@
                                   onChange={(v) => setGrid("width", v)} />
                               )}
                               <div className="absolute left-0 right-0 top-full text-[10px] text-slate-400 text-center mt-1 pointer-events-none">
-                                {smartOn ? "100% = 圖高填滿格高" : "按比例縮放"}
+                                {(cfg.snMatchMode || smartOn) ? "100% = 圖高填滿格高" : "按比例縮放"}
                               </div>
                             </div>
                           </div>
@@ -4269,8 +4606,26 @@
                        </div>
                       </div>
 
-                      {/* 智能排列：自動讀範本表格、預設對齊。一個 toggle 搞定 */}
-                      {tplPath && mode === "slides" && (() => {
+                      {/* 依範本 SN：智能對齊(自動置中) / 手動微調 開關（仿依檔名的智能排列 toggle）*/}
+                      {tplPath && mode === "slides" && cfg.snMatchMode && (
+                        <div className="mt-3 pt-3 border-t border-slate-100 shrink-0 flex items-center gap-3 flex-wrap">
+                          <button onClick={() => setCfg((c) => ({ ...c, snAdjust: { ...c.snAdjust, manual: !c.snAdjust?.manual } }))}
+                            className={`text-xs px-3 py-1 rounded-full border font-medium ${!cfg.snAdjust?.manual
+                              ? "bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-700"
+                              : "bg-white text-slate-600 border-slate-300 hover:bg-slate-50"}`}
+                            title="智能：自動置中於儲存格。再按一次切換手動微調（可拉 X/Y 位移）">
+                            ✨ 智能對齊：{!cfg.snAdjust?.manual ? "開" : "關"}
+                          </button>
+                          <span className="text-[11px] text-slate-500 flex-1 min-w-[10rem]">
+                            {!cfg.snAdjust?.manual
+                              ? "圖片自動置中於儲存格 · 用下方「填滿格高」調大小"
+                              : "手動微調：左緣「Y 位移」、底緣「X 位移」浮動 stepper（hover 顯示）"}
+                          </span>
+                        </div>
+                      )}
+
+                      {/* 智能排列：自動讀範本表格、預設對齊。一個 toggle 搞定。依範本 SN 模式不適用 */}
+                      {tplPath && mode === "slides" && !cfg.snMatchMode && (() => {
                         const tbl = tableInfo && !tableInfo.error && (tableInfo.tables || [])[0];
                         const imageRows = tbl ? Math.max(1, tbl.rows - Math.min(tbl.rows - 1, tblSkipRows)) : 0;
                         return (
