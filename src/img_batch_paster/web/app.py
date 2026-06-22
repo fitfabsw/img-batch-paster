@@ -808,9 +808,10 @@ def api_export():
             return jsonify({"error": "沒有可匯出的圖片"}), 400
         fill = max(0.05, min(1.0, float(data.get("fill", 0.9))))
         fit = data.get("fit", "contain")
+        align_frac = max(0.05, min(1.0, float(data.get("alignFrac", fill))))
         want_key = out_path.suffix.lower() == ".key"
         pptx_out = out_path.with_suffix(".pptx") if want_key else out_path
-        write_sn_cell_pages(template_path, pptx_out, cell_pages, fill=fill, fit=fit)
+        write_sn_cell_pages(template_path, pptx_out, cell_pages, fill=fill, fit=fit, align_frac=align_frac)
         if want_key:
             try:
                 convert_pptx_to_key(pptx_out, out_path)

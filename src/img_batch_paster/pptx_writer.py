@@ -200,7 +200,8 @@ def write_pages(
 
 
 def _composite_cell_image(img_path: Path, cw_cm: float, rh_cm: float, fill: float,
-                          crop: dict | None, tmp_dir: Path, fit: str = "contain") -> Path:
+                          crop: dict | None, tmp_dir: Path, fit: str = "contain",
+                          align_frac: float = 0.9) -> Path:
     """把照片合成到「儲存格比例的畫布」上 → 此合成圖填滿儲存格 → 照片跟著儲存格走（不漂移）。
     fit：contain(完整貼邊，等比留白) / cover(裁切填滿，等比裁切) / fill(拉伸變形填滿)。"""
     from .xlsx_writer import _apply_crop
@@ -220,13 +221,12 @@ def _composite_cell_image(img_path: Path, cw_cm: float, rh_cm: float, fill: floa
         left, top = (rw - W) // 2, (rh - H) // 2
         canvas = im2.crop((left, top, left + W, top + H))
     elif fit == "contain_align":
-        # 等高對齊：圖高固定 = fill×格高（各格同高），寬度自然；太寬則左右置中裁切
-        th = max(1, int(H * fill))
+        # 等高對齊：圖高固定 = align_frac×格高（所有圖共同高度），保比例、不裁切
+        th = max(1, int(H * align_frac))
         tw = max(1, int(th * im.width / im.height))
+        if tw > W:           # 安全網：仍超寬則縮到格寬（理論上 align_frac 已保證放得下）
+            tw = W; th = max(1, int(W * im.height / im.width))
         im2 = im.resize((tw, th))
-        if tw > W:
-            l = (tw - W) // 2
-            im2 = im2.crop((l, 0, l + W, th)); tw = W
         canvas = Image.new("RGB", (W, H), "white")
         canvas.paste(im2, ((W - tw) // 2, (H - th) // 2))
     else:  # contain
@@ -265,7 +265,7 @@ def _set_cell_picture_fill(slide, cell, image_path: Path) -> None:
 
 
 def write_sn_cell_pages(template: Path, out_path: Path, pages: list[dict],
-                        fill: float = 0.9, fit: str = "contain") -> Path:
+                        fill: float = 0.9, fit: str = "contain", align_frac: float = 0.9) -> Path:
     """依範本 SN（PPT）：把 SN 文字與照片直接填進「表格儲存格」。
     照片成為儲存格內容（cell fill）→ 跟著儲存格走，任何檢視器都對齊（浮動圖會因列高渲染差異漂移）。
     pages: 每頁 { "sn": [{row,col,text,font_pt,bold}], "img": [{row,col,path,crop}] }（row/col 0-based）。
@@ -301,7 +301,7 @@ def write_sn_cell_pages(template: Path, out_path: Path, pages: list[dict],
                 continue
             cw_cm = _Emu(table.columns[c].width).cm
             rh_cm = _Emu(table.rows[r].height).cm
-            comp = _composite_cell_image(Path(ic["path"]), cw_cm, rh_cm, fill, ic.get("crop"), tmp_dir, fit)
+            comp = _composite_cell_image(Path(ic["path"]), cw_cm, rh_cm, fill, ic.get("crop"), tmp_dir, fit, align_frac)
             _set_cell_picture_fill(slide, table.cell(r, c), comp)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     prs.save(str(out_path))

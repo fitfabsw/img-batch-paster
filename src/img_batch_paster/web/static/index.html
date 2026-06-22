@@ -2352,6 +2352,19 @@
       // SN 清單未產生時，顯示範本表格結構（表頭 + dataRows 個空白列），讓使用者確認範本載入正確
       const rows = snList.length ? snList : Array.from({ length: Math.max(1, dataRows) }, () => ({ sn: "" }));
       const isEmpty = snList.length === 0;
+      // 等高對齊：取所有圖「都放得下」的共同高度(佔格高比例)→ 保比例、不裁切、全部同高
+      const chCm = rhArr[1] || 4.28;
+      let alignFrac = f;
+      if (fit === "contain_align") {
+        for (const item of rows) {
+          for (const c of cols) {
+            if (c.sn) continue;
+            const file = fileFor(srcForHeader(c.header), item.sn);
+            if (!file || !file.w || !file.h) continue;
+            alignFrac = Math.min(alignFrac, f, f * (c.w / chCm) * (file.h / file.w));
+          }
+        }
+      }
       return (
         <div className="stage border relative overflow-hidden" style={{ width: STAGE, height: boxH, background: "#fff" }}>
           <table style={{ position: "absolute", left: tLeft, top: tTop, width: tWidth, borderCollapse: "collapse", tableLayout: "fixed", background: "#fff" }}>
@@ -2381,13 +2394,11 @@
                       : fit === "fill"
                       ? { width: "100%", height: rowH, objectFit: "fill", display: "block" }
                       : fit === "contain_align"
-                      // 等高對齊：固定高度(=填滿格高%)，寬度自然、太寬由 td 左右裁切 → 全部同高
-                      ? { height: Math.round(rowH * f), width: "auto", maxWidth: "none", display: "block", margin: "0 auto" }
+                      // 等高對齊：所有圖同高(=共同高度)、保比例、不裁切 → 較高的會縮小到一致
+                      ? { height: Math.round(rowH * alignFrac), width: "auto", maxWidth: "100%", display: "block", margin: "0 auto" }
                       // 完整貼邊：整張塞進格內(同時受寬高限制)
                       : { maxHeight: Math.round(rowH * f), maxWidth: "94%", objectFit: "contain", display: "inline-block", verticalAlign: "middle" };
-                    const tdStyle = fit === "contain" ? undefined
-                      : fit === "contain_align" ? { padding: 0, overflow: "hidden" }
-                      : { padding: 0 };
+                    const tdStyle = fit === "contain" ? undefined : { padding: 0 };
                     return (
                       <td key={ci} className="border border-slate-400 text-center align-middle" style={tdStyle}>
                         {file ? <img src={thumbUrl(file.path, 240, crop)} style={imgStyle} /> : null}
@@ -3597,9 +3608,24 @@
                 pages.push({ sn, img });
               }
               if (!mapped) throw new Error("沒有可匯出的圖片（檢查 SN 與來源檔名、來源資料夾名 vs 表頭是否對應）");
+              const fitMode = cfg.snAdjust?.fit || "contain";
+              const fillFrac = Math.max(5, Math.min(100, cfg.snAdjust?.fill ?? 90)) / 100;
+              // 等高對齊：算出所有圖「都放得下」的共同高度(佔格高比例)，傳給後端 → 保比例不裁切、全部同高
+              let alignFrac = fillFrac;
+              if (fitMode === "contain_align") {
+                const cwArr = slidesTbl.col_widths_cm || [];
+                const chCm = (slidesTbl.row_heights_cm || [])[1] || 4.28;
+                const fileByPath = {};
+                cfg.sources.forEach((s) => (s.files || []).forEach((x) => { fileByPath[x.path] = x; }));
+                for (const pg of pages) for (const ic of pg.img) {
+                  const fl = fileByPath[ic.path];
+                  if (!fl || !fl.w || !fl.h) continue;
+                  const colW = cwArr[ic.col] || chCm;
+                  alignFrac = Math.min(alignFrac, fillFrac, fillFrac * (colW / chCm) * (fl.h / fl.w));
+                }
+              }
               const body = JSON.stringify({
-                snCellPages: pages, fill: Math.max(5, Math.min(100, cfg.snAdjust?.fill ?? 90)) / 100,
-                fit: cfg.snAdjust?.fit || "contain",
+                snCellPages: pages, fill: fillFrac, fit: fitMode, alignFrac,
                 output: cfg.output, workspace: ws,
               });
               setStatus(`匯出 PPT 中… (${mapped} 張圖 · ${pages.length} 頁)`);
