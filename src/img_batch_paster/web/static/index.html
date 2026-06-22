@@ -965,16 +965,6 @@
         }
         commitSnList(list);
       };
-      // 上傳 csv / txt：每行取第一欄（逗號或 tab 分隔）當 SN，全在瀏覽器端解析
-      const onSnFile = (file) => {
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = () => {
-          const txt = String(reader.result || "");
-          commitSnList(txt.split(/\r?\n/).map((line) => line.split(/[,\t]/)[0]));
-        };
-        reader.readAsText(file);
-      };
 
       const uploadSource = async (sid, files) => {
         if (!ws || !files || !files.length) return;
@@ -1050,8 +1040,8 @@
           <div className="border rounded-lg p-2 bg-purple-50/50">
             <div className="text-sm font-medium text-purple-900 mb-2">SN 清單來源</div>
             {/* 模式選擇 */}
-            <div className="grid grid-cols-4 gap-1 mb-2 text-[11px]">
-              {[["keyin", "直接輸入"], ["range", "範圍"], ["upload", "上傳檔"], ["templateCol", "讀範本欄"]].map(([m, label]) => (
+            <div className="grid grid-cols-3 gap-1 mb-2 text-[11px]">
+              {[["keyin", "直接輸入"], ["range", "範圍"], ["templateCol", "讀範本欄"]].map(([m, label]) => (
                 <button key={m}
                   onClick={() => setCfg((c) => ({ ...c, snInput: { ...c.snInput, mode: m } }))}
                   className={`rounded py-1 border ${cfg.snInput.mode === m ? "bg-purple-600 text-white border-purple-700" : "bg-white text-slate-600 hover:bg-purple-100"}`}>
@@ -1098,14 +1088,6 @@
               </div>
             )}
 
-            {cfg.snInput.mode === "upload" && (
-              <div className="space-y-1">
-                <input type="file" accept=".csv,.txt,text/csv,text/plain"
-                  onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; onSnFile(f); }}
-                  className="w-full text-xs" />
-                <div className="text-[10px] text-slate-500">每行第一欄（逗號 / Tab 分隔）當 SN。</div>
-              </div>
-            )}
 
             {cfg.snInput.mode === "templateCol" && (
               <div className="space-y-1">
