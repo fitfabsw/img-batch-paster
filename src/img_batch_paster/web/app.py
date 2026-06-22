@@ -352,10 +352,12 @@ def api_template_load():
     })
 
 
-def _measure_data_start_cm(png_path, slide_w_cm, slide_h_cm, left_cm, top_cm, width_cm, height_cm):
-    """從渲染後的 PNG 量出表格「表頭底緣＝資料列起點」的實際 y(cm)。
-    PowerPoint/LibreOffice 會把含文字的表頭列撐高(超出規格列高)，導致用規格座標貼圖偏上。
-    只需偵測表格區內最上面兩條水平格線(表格頂、表頭底)即可修正主要偏移。失敗回 None。"""
+def _measure_table_rows(png_path, slide_w_cm, slide_h_cm, left_cm, top_cm, width_cm, height_cm,
+                        header_h_cm=None, data_h_cm=None):
+    """從渲染後的 PNG 量出表格實際的「資料列起點 + 資料列間距」。
+    PowerPoint/LibreOffice 渲染表格時，表頭含文字會撐高、且各版本對列高的解讀不同(可能壓縮)，
+    用規格座標貼圖會「越往下偏移越大」。量出實際的資料起點(data_start)與列間距(pitch)後，
+    每列以 data_start + k×pitch 定位即與渲染完全吻合。回傳 (data_start_cm, pitch_cm)，失敗回 (None, None)。"""
     try:
         from PIL import Image
         im = Image.open(png_path).convert("L")
@@ -365,9 +367,9 @@ def _measure_data_start_cm(png_path, slide_w_cm, slide_h_cm, left_cm, top_cm, wi
         x0 = max(0, int(left_cm / slide_w_cm * W) + 4)
         x1 = min(W, int((left_cm + width_cm) / slide_w_cm * W) - 4)
         if x1 - x0 < 10:
-            return None
+            return None, None
         y0 = max(1, int(top_cm / slide_h_cm * H) - 6)
-        y1 = min(H - 1, int((top_cm + height_cm * 1.6) / slide_h_cm * H))
+        y1 = min(H - 1, int((top_cm + height_cm * 1.8) / slide_h_cm * H))
         span = x1 - x0
 
         def dark(y):
@@ -378,11 +380,26 @@ def _measure_data_start_cm(png_path, slide_w_cm, slide_h_cm, left_cm, top_cm, wi
             if f > 0.6 and f >= dark(y - 1) and f > dark(y + 1):
                 if not lines or y - lines[-1] > 8:
                     lines.append(y)
-        if len(lines) < 2:
-            return None
-        return round(lines[1] / pxcm_y, 2)   # 第二條線 = 表頭底緣 = 資料列起點
+        if len(lines) < 3:   # 至少要有 表格頂 + 表頭底 + 一條資料列線 才能算間距
+            return None, None
+        # 第一條線必須接近表格頂(top_cm)，否則偵測有雜訊 → 放棄改用規格
+        if abs(lines[0] / pxcm_y - top_cm) > max(0.3, (header_h_cm or 1) * 0.5):
+            return None, None
+        cm = [y / pxcm_y for y in lines]
+        data_start = round(cm[1], 2)              # 第二條線 = 表頭底 = 資料列起點
+        gaps = [cm[i + 1] - cm[i] for i in range(1, len(cm) - 1)]   # 資料列之間的間距
+        if not gaps:
+            return None, None
+        gaps.sort()
+        pitch = round(gaps[len(gaps) // 2], 2)    # 取中位數，避免偶發漏線/雜訊
+        # 合理性檢查
+        if header_h_cm and not (0.6 * header_h_cm <= data_start - top_cm <= 3.0 * header_h_cm):
+            return None, None
+        if data_h_cm and not (0.5 * data_h_cm <= pitch <= 1.6 * data_h_cm):
+            return None, None
+        return data_start, pitch
     except Exception:
-        return None
+        return None, None
 
 
 @app.post("/api/template/table-info")
@@ -429,8 +446,12 @@ def api_template_table_info():
             width_cm = round(Emu(shp.width).cm, 2)
             height_cm = round(Emu(shp.height).cm, 2)
             data_start_cm = None
-            if png_path and si == 0:   # 只量第一頁（範本均為單頁）
-                data_start_cm = _measure_data_start_cm(png_path, sw, sh, left_cm, top_cm, width_cm, height_cm)
+            row_pitch_cm = None
+            if png_path and si == 0 and len(t.rows) >= 2:   # 只量第一頁（範本均為單頁）
+                header_h = round(Emu(t.rows[0].height).cm, 2)
+                data_h = round(Emu(t.rows[1].height).cm, 2)
+                data_start_cm, row_pitch_cm = _measure_table_rows(
+                    png_path, sw, sh, left_cm, top_cm, width_cm, height_cm, header_h, data_h)
             tables.append({
                 "slide": si,
                 "name": shp.name,
@@ -443,6 +464,7 @@ def api_template_table_info():
                 "col_widths_cm": [round(Emu(c.width).cm, 2) for c in t.columns],
                 "row_heights_cm": [round(Emu(r.height).cm, 2) for r in t.rows],
                 "data_start_cm": data_start_cm,   # 量測到的資料列實際起點 y(cm)，None=回退規格
+                "row_pitch_cm": row_pitch_cm,     # 量測到的資料列實際間距 cm，None=回退規格列高
                 "cells": cells,
             })
     return jsonify({

@@ -18,6 +18,9 @@ CACHE_DIR.mkdir(exist_ok=True)
 _LO_PROFILE = Path(tempfile.gettempdir()) / "img-batch-paster-lo-profile"
 _warm_started = False
 _warm_lock = threading.Lock()
+# 序列化 soffice 渲染：LibreOffice 同一 user profile 不能同時跑多個行程（profile 鎖），
+# 否則並發渲染（/api/template/load 與 /api/template/table-info）會其中一個失敗 → 預覽空白。
+_render_lock = threading.Lock()
 
 
 def _cache_key(path: Path) -> str:
@@ -45,6 +48,16 @@ def render_first_slide(pptx_path: Path) -> Path:
     if out_png.exists():
         return out_png
 
+    # 序列化渲染：同一時間只跑一個 soffice（避免 profile 鎖衝突）。
+    # 雙重檢查——拿到鎖後若另一執行緒已渲染好就直接回快取，不重複跑 soffice。
+    with _render_lock:
+        if out_png.exists():
+            return out_png
+        return _render_first_slide_locked(pptx_path, out_png)
+
+
+def _render_first_slide_locked(pptx_path: Path, out_png: Path) -> Path:
+    import sys as _sys
     # macOS: 預設用 LibreOffice 渲染 preview（穩定）。
     # Keynote 14.2 的 AppleScript document scripting 壞掉（count of documents / front
     # document 都回 -1708/-1728），會卡滿 60s timeout 才 fallback，preview 因此慢到 1 分鐘。
@@ -133,7 +146,8 @@ def prewarm_libreoffice(default_pptx: Path, periodic_interval_sec: int = 300) ->
         while True:
             time.sleep(periodic_interval_sec)
             try:
-                with tempfile.TemporaryDirectory() as tmp:
+                # 與使用者觸發的渲染共用同一把鎖 → 不會兩個 soffice 搶 profile（避免預覽空白）
+                with _render_lock, tempfile.TemporaryDirectory() as tmp:
                     subprocess.run(
                         [soffice_path, "--headless", "--convert-to", "png",
                          "--outdir", tmp,

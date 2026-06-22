@@ -233,7 +233,9 @@
     function detectSlidesTable(t) {
       if (!t || !t.rows || !t.cols) return null;
       const rows = t.rows, cols = t.cols;
-      const textRows = new Set((t.cells || []).map((c) => c.r));
+      // 表頭列偵測只看「影像欄」(第 1 欄之後)有沒有文字 —— SN 欄(第 1 欄)在資料列也會有值
+      //   (如已預填的 10B-8/10B-2)，若一併算入會把表頭誤判到資料列、SN 欄抓不到。
+      const textRows = new Set((t.cells || []).filter((c) => c.c > 1 && String(c.text || "").trim()).map((c) => c.r));
       let skipRows = 0;
       while (skipRows < rows - 1 && textRows.has(skipRows + 1)) skipRows++;
       if (skipRows === 0) skipRows = 1;     // 無文字也假設 1 表頭列
@@ -519,15 +521,23 @@
       const dataRows = Math.max(0, nRows - dataStart0);
       const fill = Math.max(5, Math.min(100, opts.fill ?? 90)) / 100;   // 圖高佔格高比例
       const dxFrac = (opts.dx || 0) / 100, dyFrac = (opts.dy || 0) / 100; // 位移（佔格寬/高比例）
-      // 資料列起點：優先用後端從渲染 PNG 量到的實際 y（修正表頭文字撐高造成的偏移）；否則用規格。
+      // 資料列定位：優先用後端從渲染 PNG 量到的「實際起點 + 實際列間距」，每列 = 起點 + k×間距，
+      //   與渲染完全吻合（修正表頭撐高 + 各版本列高壓縮造成的逐列累積偏移）。量不到才回退規格。
       const specDataTop = slidesTbl.top_cm + rh.slice(0, dataStart0).reduce((a, b) => a + b, 0);
       const dataTopCm = (opts.dataStartCm != null) ? opts.dataStartCm : specDataTop;
+      const pitch = (opts.rowPitchCm != null && opts.rowPitchCm > 0) ? opts.rowPitchCm : null;
       const cellRect = (r0, c0) => {
         if (c0 < 0 || c0 >= cw.length || r0 < 0 || r0 >= rh.length) return null;
-        const y = (r0 >= dataStart0)
-          ? dataTopCm + rh.slice(dataStart0, r0).reduce((a, b) => a + b, 0)
-          : slidesTbl.top_cm + rh.slice(0, r0).reduce((a, b) => a + b, 0);
-        return { x: slidesTbl.left_cm + cw.slice(0, c0).reduce((a, b) => a + b, 0), y, w: cw[c0], h: rh[r0] };
+        let y, h;
+        if (r0 >= dataStart0) {
+          const di = r0 - dataStart0;               // 第幾個資料列(0 起)
+          y = pitch ? dataTopCm + di * pitch : dataTopCm + rh.slice(dataStart0, r0).reduce((a, b) => a + b, 0);
+          h = pitch || rh[r0];
+        } else {
+          y = slidesTbl.top_cm + rh.slice(0, r0).reduce((a, b) => a + b, 0);
+          h = rh[r0];
+        }
+        return { x: slidesTbl.left_cm + cw.slice(0, c0).reduce((a, b) => a + b, 0), y, w: cw[c0], h };
       };
       const headerText = (c1) => {
         const cell = (slidesTbl.cells || []).find((x) => x.r === headerRow1 && x.c === c1);
@@ -883,7 +893,18 @@
 
       const loadSnList = async (opts) => {
         const silentEmpty = opts?.silentEmpty;  // 自動觸發時不跳 alert
-        if (!tplPath) { setStatus("錯誤: 請先上傳 Excel 範本"); return; }
+        if (!tplPath) { setStatus("錯誤: 請先上傳範本"); return; }
+        // PPT/Keynote：直接讀範本表格 SN 欄已填的值（openpyxl 不支援 pptx → 不打後端）
+        if (isSlides) {
+          const cellsSn = slidesSnInfo?.snCells || [];
+          if (!cellsSn.length) {
+            // 空白範本(SN 欄未預填)是常態 → 只用 inline 狀態提示，不彈 alert
+            setStatus("⚠ 範本表格 SN 欄沒有預填內容 — 請改用「直接輸入 / 範圍 / 上傳檔」");
+            return;
+          }
+          commitSnList(cellsSn);
+          return;
+        }
         setLoading(true);
         try {
           const r = await fetch("/api/template/sn-list", {
@@ -1088,19 +1109,26 @@
 
             {cfg.snInput.mode === "templateCol" && (
               <div className="space-y-1">
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="flex flex-col text-xs text-slate-600"><span className="mb-1">SN 欄位</span>
-                    <input value={cfg.snSource.col}
-                      onChange={(e) => setCfg((c) => ({ ...c, snSource: { ...c.snSource, col: e.target.value.toUpperCase() } }))}
-                      className="border rounded px-2 py-1 text-sm font-mono" placeholder="A" /></label>
-                  <label className="flex flex-col text-xs text-slate-600"><span className="mb-1">起始列</span>
-                    <input type="number" value={cfg.snSource.rowStart}
-                      onChange={(e) => setCfg((c) => ({ ...c, snSource: { ...c.snSource, rowStart: Math.max(1, parseInt(e.target.value) || 1) } }))}
-                      className="border rounded px-2 py-1 text-sm" /></label>
-                </div>
-                <button onClick={() => loadSnList()} disabled={loading || !tplPath}
-                  className="w-full border rounded py-1 text-xs bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-40">
-                  {loading ? "讀取中…" : "讀取 SN list（僅 .xlsx）"}
+                {isSlides ? (
+                  <div className="text-[10px] text-slate-500">
+                    讀取 PPT 範本表格 <b>SN 欄</b> 已填的值（第 {slidesSnInfo?.snCol || 1} 欄、第 {slidesSnInfo?.snRowStart || 2} 列起）。
+                    {!(slidesSnInfo?.snCells?.length) && <span className="text-amber-600"> 此範本 SN 欄為空白，請改用「直接輸入 / 範圍 / 上傳檔」。</span>}
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="flex flex-col text-xs text-slate-600"><span className="mb-1">SN 欄位</span>
+                      <input value={cfg.snSource.col}
+                        onChange={(e) => setCfg((c) => ({ ...c, snSource: { ...c.snSource, col: e.target.value.toUpperCase() } }))}
+                        className="border rounded px-2 py-1 text-sm font-mono" placeholder="A" /></label>
+                    <label className="flex flex-col text-xs text-slate-600"><span className="mb-1">起始列</span>
+                      <input type="number" value={cfg.snSource.rowStart}
+                        onChange={(e) => setCfg((c) => ({ ...c, snSource: { ...c.snSource, rowStart: Math.max(1, parseInt(e.target.value) || 1) } }))}
+                        className="border rounded px-2 py-1 text-sm" /></label>
+                  </div>
+                )}
+                <button onClick={() => loadSnList()} disabled={loading || !tplPath || (isSlides && !(slidesSnInfo?.snCells?.length))}
+                  className="w-full border rounded py-1 text-xs bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-40 disabled:cursor-not-allowed">
+                  {loading ? "讀取中…" : isSlides ? `讀取範本表格 SN 欄${slidesSnInfo?.snCells?.length ? `（${slidesSnInfo.snCells.length} 個）` : ""}` : "讀取 SN list（僅 .xlsx）"}
                 </button>
               </div>
             )}
@@ -2554,6 +2582,7 @@
       const [xlGrid, setXlGrid] = useState(null);
       const [tableInfo, setTableInfo] = useState(null);   // pptx/key 範本表格資訊
       const [tableInfoLoading, setTableInfoLoading] = useState(false);
+      const tableInfoReqRef = useRef(0);   // 防過期回應：只採用最新一次 table-info 請求的結果
       const [tblSkipCols, setTblSkipCols] = useState(1);  // 套用表格時略過左側幾欄（標籤欄）
       const [tblSkipRows, setTblSkipRows] = useState(1);  // 套用表格時略過頂部幾列（表頭）
       const [dragTpl, setDragTpl] = useState(false);
@@ -3041,23 +3070,37 @@
       };
 
       // 讀取 pptx/key 範本中的表格幾何（列/欄/位置/各欄寬列高）
-      const loadTableInfo = async () => {
-        if (!tplPath) { setStatus("請先上傳範本"); return; }
+      // table-info 現在會渲染 PNG 量測 → 較慢；快速切換範本時舊回應可能比新的晚到，
+      //   用 token 確保只採用「最新一次請求」的結果（且 path 仍相符），避免幾何錯置。
+      const loadTableInfo = async (pathArg) => {
+        const path = pathArg || tplPath;
+        if (!path) { setStatus("請先上傳範本"); return; }
+        const token = ++tableInfoReqRef.current;
         setTableInfoLoading(true);
         try {
           const r = await fetch("/api/template/table-info", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ path: tplPath }),
+            body: JSON.stringify({ path }),
           });
           const j = await r.json();
+          if (token !== tableInfoReqRef.current) return;   // 已有更新的請求 → 丟棄此過期回應
           if (!r.ok) throw new Error(j.error || "讀取失敗");
           setTableInfo(j);
+          // 同步 cfg.slide 為表格幾何所屬的投影片尺寸 → 預覽縮放與 SN placement 座標系一致
+          // （避免 cfg.slide 殘留舊範本尺寸時，疊加層與背景圖比例不符 → 看似沒對齊）
+          if (j.slide?.width_cm) {
+            setCfg((c) => (c.slide.width_cm === j.slide.width_cm && c.slide.height_cm === j.slide.height_cm)
+              ? c : { ...c, slide: { width_cm: j.slide.width_cm, height_cm: j.slide.height_cm } });
+          }
           setStatus(j.tables?.length ? `偵測到 ${j.tables.length} 個表格` : "此範本沒有表格");
         } catch (e) {
+          if (token !== tableInfoReqRef.current) return;
           setTableInfo({ tables: [], error: e.message });
           setStatus("讀取表格失敗: " + e.message);
-        } finally { setTableInfoLoading(false); }
+        } finally {
+          if (token === tableInfoReqRef.current) setTableInfoLoading(false);
+        }
       };
 
       // 換範本時：清掉舊資訊、重設 auto-apply 旗標、自動讀新範本的表格 (slides + pptx)
@@ -3066,10 +3109,11 @@
       useEffect(() => {
         autoAppliedRef.current = false;
         excelAutoRef.current = false;
+        tableInfoReqRef.current++;   // 立即作廢前一個範本仍在飛行中的 table-info 請求
         setTableInfo(null);
         setTplWarnAck(false);   // 換範本 → 重置髒範本警告
         if (tplPath && mode === "slides" && /\.pptx$/i.test(tplPath)) {
-          loadTableInfo();
+          loadTableInfo(tplPath);
         }
       }, [tplPath, mode]);
 
@@ -3153,7 +3197,12 @@
           const text = cell ? String(cell.text || "").trim() : "";
           if (text) headers.push(text);
         }
-        return { ...d, headers, dataRows: Math.max(0, (slidesTbl.rows || 0) - (d.snRowStart - 1)) };
+        // SN 欄(第 1 欄)資料列已填的值 → 供「讀範本欄」直接讀取(pptx 用，不碰 openpyxl)
+        const snCells = (slidesTbl.cells || [])
+          .filter((x) => x.c === d.snCol && x.r >= d.snRowStart && String(x.text || "").trim())
+          .sort((a, b) => a.r - b.r)
+          .map((x) => String(x.text).trim());
+        return { ...d, headers, snCells, dataRows: Math.max(0, (slidesTbl.rows || 0) - (d.snRowStart - 1)) };
       })();
 
       // 套用表格：用表格座標填「位置 + 圖片區總寬」，圖片欄數/列數「跟隨使用者左側設定」
@@ -3407,7 +3456,7 @@
                 fill: cfg.snAdjust?.fill ?? 90,
                 dx: cfg.snAdjust?.manual ? (cfg.snAdjust?.dx ?? 0) : 0,
                 dy: cfg.snAdjust?.manual ? (cfg.snAdjust?.dy ?? 0) : 0,
-                dataStartCm: slidesTbl.data_start_cm,
+                dataStartCm: slidesTbl.data_start_cm, rowPitchCm: slidesTbl.row_pitch_cm,
                 perColCrop: cfg.cropMode === "per-col",
                 globalCrop: cfg.crop?.enabled ? cfg.crop : null,
               });
@@ -3725,8 +3774,13 @@
 
       // --- 預覽 ---
       const STAGE_W = 640;
-      const scale = STAGE_W / cfg.slide.width_cm;
-      const stageH = cfg.slide.height_cm * scale;
+      // 依範本 SN（slides）：縮放用「table-info 回報的真實投影片尺寸」(背景 PNG + placement 同座標系)，
+      //   避免 cfg.slide 殘留錯誤高度時，背景被垂直拉伸到不同比例 → 越往下越歪。
+      //   依檔名 placement 仍以 cfg.slide 計算，故維持 cfg.slide（已另在 table-info 同步成正確值）。
+      const previewSlide = (cfg.snMatchMode && mode === "slides" && tableInfo?.slide?.width_cm)
+        ? tableInfo.slide : cfg.slide;
+      const scale = STAGE_W / previewSlide.width_cm;
+      const stageH = previewSlide.height_cm * scale;
       // 依範本 SN（PPT）：用範本表格幾何把多來源圖依 SN 貼進儲存格 → 預覽與匯出共用
       const snSlide = (cfg.snMatchMode && mode === "slides" && slidesTbl && snList.length)
         ? (() => {
@@ -3737,7 +3791,7 @@
               fill: cfg.snAdjust?.fill ?? 90,
               dx: cfg.snAdjust?.manual ? (cfg.snAdjust?.dx ?? 0) : 0,
               dy: cfg.snAdjust?.manual ? (cfg.snAdjust?.dy ?? 0) : 0,
-              dataStartCm: slidesTbl.data_start_cm,
+              dataStartCm: slidesTbl.data_start_cm, rowPitchCm: slidesTbl.row_pitch_cm,
               perColCrop: cfg.cropMode === "per-col",
               globalCrop: cfg.crop?.enabled ? cfg.crop : null,
             });
@@ -4558,12 +4612,13 @@
                                 fontWeight: pl.bold ? 700 : 400,
                                 color: "#111",
                                 ...(pl._snCell ? {
-                                  background: "rgba(16,185,129,0.12)",
+                                  // 不透明背景蓋掉範本原本預填的 SN（避免疊字）；只顯示乾淨的單一 SN
+                                  background: "#eafaf1",
                                   outline: "1px dashed rgba(16,185,129,0.7)",
                                   outlineOffset: -1,
                                 } : {}),
                               }}
-                              title={pl._snCell ? "SN 將寫入此儲存格（匯出結果）" : undefined}>
+                              title={pl._snCell ? "SN 將寫入此儲存格（匯出結果，會覆蓋範本原值）" : undefined}>
                                 {pl.text}
                               </div>
                             );
