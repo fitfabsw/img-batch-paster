@@ -888,52 +888,8 @@
         if (!q) return "";
         return headers.find((h) => h.toLowerCase() === q) || "";
       };
-      const [loading, setLoading] = useState(false);
       const inputRefs = useRef({});
 
-      const loadSnList = async (opts) => {
-        const silentEmpty = opts?.silentEmpty;  // 自動觸發時不跳 alert
-        if (!tplPath) { setStatus("錯誤: 請先上傳範本"); return; }
-        // PPT/Keynote：直接讀範本表格 SN 欄已填的值（openpyxl 不支援 pptx → 不打後端）
-        if (isSlides) {
-          const cellsSn = slidesSnInfo?.snCells || [];
-          if (!cellsSn.length) {
-            // 空白範本(SN 欄未預填)是常態 → 只用 inline 狀態提示，不彈 alert
-            setStatus("⚠ 範本表格 SN 欄沒有預填內容 — 請改用「直接輸入 / 範圍 / 上傳檔」");
-            return;
-          }
-          commitSnList(cellsSn);
-          return;
-        }
-        setLoading(true);
-        try {
-          const r = await fetch("/api/template/sn-list", {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ path: tplPath, col: cfg.snSource.col, rowStart: cfg.snSource.rowStart }),
-          });
-          const j = await r.json();
-          if (!r.ok) throw new Error(j.error || "讀取失敗");
-          setSnList(j.sns);
-          if (j.count === 0) {
-            const msg = `沒讀到任何 SN — 確認範本欄位「${cfg.snSource.col}」從第 ${cfg.snSource.rowStart} 列起是否有內容`;
-            setStatus("⚠ " + msg);
-            if (!silentEmpty) alert("⚠ " + msg);
-          } else {
-            setStatus(`已載入 ${j.count} 個 SN (${cfg.snSource.col}${cfg.snSource.rowStart}起)`);
-          }
-        } catch (e) {
-          setStatus("錯誤: " + e.message);
-          if (!silentEmpty) alert("錯誤: " + e.message);
-        } finally { setLoading(false); }
-      };
-
-      // 自動讀取 SN list：僅「讀範本欄(templateCol)」模式 + xlsx 範本 + 尚無 SN list 時自動觸發
-      useEffect(() => {
-        if (cfg.snMatchMode && cfg.snInput.mode === "templateCol" && tplPath && /\.xlsx$/i.test(tplPath)
-            && snList.length === 0 && !loading) {
-          loadSnList({ silentEmpty: true });
-        }
-      }, [tplPath, cfg.snMatchMode, cfg.snInput.mode]);
 
       const dedupe = (list) => {
         const seen = new Set();
@@ -1040,8 +996,8 @@
           <div className="border rounded-lg p-2 bg-purple-50/50">
             <div className="text-sm font-medium text-purple-900 mb-2">SN 清單來源</div>
             {/* 模式選擇 */}
-            <div className="grid grid-cols-3 gap-1 mb-2 text-[11px]">
-              {[["keyin", "直接輸入"], ["range", "範圍"], ["templateCol", "讀範本欄"]].map(([m, label]) => (
+            <div className="grid grid-cols-2 gap-1 mb-2 text-[11px]">
+              {[["keyin", "直接輸入"], ["range", "範圍"]].map(([m, label]) => (
                 <button key={m}
                   onClick={() => setCfg((c) => ({ ...c, snInput: { ...c.snInput, mode: m } }))}
                   className={`rounded py-1 border ${cfg.snInput.mode === m ? "bg-purple-600 text-white border-purple-700" : "bg-white text-slate-600 hover:bg-purple-100"}`}>
@@ -1088,32 +1044,6 @@
               </div>
             )}
 
-
-            {cfg.snInput.mode === "templateCol" && (
-              <div className="space-y-1">
-                {isSlides ? (
-                  <div className="text-[10px] text-slate-500">
-                    讀取 PPT 範本表格 <b>SN 欄</b> 已填的值（第 {slidesSnInfo?.snCol || 1} 欄、第 {slidesSnInfo?.snRowStart || 2} 列起）。
-                    {!(slidesSnInfo?.snCells?.length) && <span className="text-amber-600"> 此範本 SN 欄為空白，請改用「直接輸入 / 範圍 / 上傳檔」。</span>}
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-2 gap-2">
-                    <label className="flex flex-col text-xs text-slate-600"><span className="mb-1">SN 欄位</span>
-                      <input value={cfg.snSource.col}
-                        onChange={(e) => setCfg((c) => ({ ...c, snSource: { ...c.snSource, col: e.target.value.toUpperCase() } }))}
-                        className="border rounded px-2 py-1 text-sm font-mono" placeholder="A" /></label>
-                    <label className="flex flex-col text-xs text-slate-600"><span className="mb-1">起始列</span>
-                      <input type="number" value={cfg.snSource.rowStart}
-                        onChange={(e) => setCfg((c) => ({ ...c, snSource: { ...c.snSource, rowStart: Math.max(1, parseInt(e.target.value) || 1) } }))}
-                        className="border rounded px-2 py-1 text-sm" /></label>
-                  </div>
-                )}
-                <button onClick={() => loadSnList()} disabled={loading || !tplPath || (isSlides && !(slidesSnInfo?.snCells?.length))}
-                  className="w-full border rounded py-1 text-xs bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-40 disabled:cursor-not-allowed">
-                  {loading ? "讀取中…" : isSlides ? `讀取範本表格 SN 欄${slidesSnInfo?.snCells?.length ? `（${slidesSnInfo.snCells.length} 個）` : ""}` : "讀取 SN list（僅 .xlsx）"}
-                </button>
-              </div>
-            )}
 
             {snList.length > 0 && (
               <div className="text-[10px] text-slate-600 mt-2">
@@ -4685,20 +4615,30 @@
                         <ExcelPreview grid={xlGrid} cfg={cfg} orderedFiles={orderedFiles} selected={selected} thumbUrl={thumbUrl} snList={snList} />
                       )}
                       {/* 依範本 SN（PPT）：HTML 表格預覽（取代疊在 PNG 上的做法 → 天生對齊）*/}
-                      {tplPath && mode === "slides" && cfg.snMatchMode && slidesTbl && (
+                      {tplPath && mode === "slides" && cfg.snMatchMode && slidesTbl && (() => {
+                        // 依目前頁碼切出該頁的 SN（每頁＝範本資料列數）→ 換頁顯示不同 SN
+                        const dr = Math.max(1, slidesSnInfo?.dataRows || snList.length || 1);
+                        const totalPages = Math.max(1, Math.ceil(snList.length / dr));
+                        const pg = Math.min(currentPage, totalPages - 1);
+                        const slice = snList.length ? snList.slice(pg * dr, (pg + 1) * dr) : [];
+                        // 補滿到範本資料列數，讓每頁都顯示完整表格結構（末頁不足處留空白列）
+                        const pageSns = snList.length
+                          ? [...slice, ...Array.from({ length: Math.max(0, dr - slice.length) }, () => ({ sn: "" }))]
+                          : [];
+                        return (
                         <div className="flex flex-col items-center gap-3">
                           {snList.length === 0 && (
                             <div className="text-[11px] text-slate-400">範本表格結構（左側「SN 清單來源」產生 SN 後即填入）</div>
                           )}
                           <SnSlidePreview slidesTbl={slidesTbl} slidesSnInfo={slidesSnInfo}
-                            snList={snList} sources={cfg.sources} thumbUrl={thumbUrl}
+                            snList={pageSns} sources={cfg.sources} thumbUrl={thumbUrl}
                             fill={cfg.snAdjust?.fill ?? 90} fit={cfg.snAdjust?.fit || "contain"}
                             perColCrop={cfg.cropMode === "per-col"}
                             globalCrop={cfg.crop?.enabled ? cfg.crop : null}
                             slideW={previewSlide.width_cm} slideH={previewSlide.height_cm} stageW={STAGE_W} />
-                          {slidesSnInfo && snList.length > slidesSnInfo.dataRows && (
+                          {totalPages > 1 && (
                             <div className="text-[11px] text-amber-600">
-                              ⚠ SN 數（{snList.length}）超過範本資料列（{slidesSnInfo.dataRows}）→ 匯出時會自動換頁；橘底列為下一頁。
+                              ⚠ SN 數（{snList.length}）超過範本資料列（{dr}）→ 分成 {totalPages} 頁（用右上翻頁鈕切換；第 {pg + 1} 頁）。
                             </div>
                           )}
                           {snList.length > 0 && (
@@ -4725,7 +4665,8 @@
                             </div>
                           )}
                         </div>
-                      )}
+                        );
+                      })()}
                       {tplPath && mode === "slides" && !cfg.snMatchMode && (
                       <div className="relative flex justify-center">
 
