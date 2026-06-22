@@ -53,8 +53,8 @@
       },
       autoAlign: true,    // 依檔名 group+idx 對位 (固定；「依順序」模式已移除)
       snMatchMode: false, // SN 對照模式：手動提供 SN list、每個 SN 從多來源資料夾找對應圖
-      snSource: { col: "A", rowStart: 2 },  // (templateCol 模式) SN 在範本的哪一欄、從第幾列開始
-      // SN 清單來源：手動提供，取代讀範本欄。keyin=直接輸入 / range=範圍展開 / upload=csv·txt / templateCol=讀 xlsx 欄
+      snSource: { col: "A", rowStart: 2 },  // SN 列號起算（commitSnList 用）
+      // SN 清單來源：keyin=直接輸入 / range=範圍展開。xlsx 範本 SN 欄有值時會自動讀入 keyin 框。
       snInput: { mode: "keyin", text: "", prefix: "10B-#", from: 1, to: 8, pad: 0 },
       // 依範本 SN（PPT）圖片在儲存格內的調整：fit=填法(contain完整貼邊/cover裁切填滿/fill拉伸)
       //   fill=佔格高百分比(contain 用) / dx,dy=整體位移 / manual 微調
@@ -879,8 +879,9 @@
     }
 
     // SN 對照模式：左欄 — SN 來源設定 + 多來源資料夾管理
-    function SnMatchPanel({ cfg, setCfg, ws, tplPath, mode, slidesSnInfo, snList, setSnList, setStatus, setSelected, setCropOpen, setCropSourceId, pushHistory }) {
+    function SnMatchPanel({ cfg, setCfg, ws, tplPath, mode, slidesSnInfo, xlsxSn, snList, setSnList, setStatus, setSelected, setCropOpen, setCropSourceId, pushHistory }) {
       const isSlides = mode === "slides" && !!slidesSnInfo;
+      const isExcel = mode === "excel";
       const headers = slidesSnInfo?.headers || [];
       // 來源 → 自動對應的表頭欄（依資料夾名，不分大小寫互相 contains）
       const autoHeader = (name) => {
@@ -889,7 +890,26 @@
         return headers.find((h) => h.toLowerCase() === q) || "";
       };
       const inputRefs = useRef({});
-
+      // 範本內已定義的 SN（xlsx: SN 欄值 / pptx: 表格 SN 欄值）→ 有值時鎖定「讀範本欄」、停用手動輸入
+      const templateSns = isExcel ? (xlsxSn?.sns || [])
+        : isSlides ? (slidesSnInfo?.snCells || []).map((sn, i) => ({ sn, row: (slidesSnInfo.snRowStart || 2) + i }))
+        : [];
+      const templateHasSn = templateSns.length > 0;
+      const tmplSnColLabel = isExcel ? (xlsxSn?.col ? `${xlsxSn.col} 欄` : "") : (slidesSnInfo?.snCol ? `第 ${slidesSnInfo.snCol} 欄` : "");
+      // 依範本決定來源：有 SN 值 → 自動切「讀範本欄」並讀入；沒有 → 若停在 templateCol 則退回直接輸入
+      const snAutoRef = useRef("");
+      useEffect(() => {
+        const key = `${tplPath}|${templateHasSn}`;
+        if (snAutoRef.current === key) return;
+        snAutoRef.current = key;
+        if (templateHasSn) {
+          setCfg((c) => ({ ...c, snInput: { ...c.snInput, mode: "templateCol" } }));
+          setSnList(templateSns);
+          setStatus(`已讀取範本 SN 欄（${tmplSnColLabel}）${templateSns.length} 個`);
+        } else if (cfg.snInput.mode === "templateCol") {
+          setCfg((c) => ({ ...c, snInput: { ...c.snInput, mode: "keyin" } }));
+        }
+      }, [tplPath, templateHasSn]);
 
       const dedupe = (list) => {
         const seen = new Set();
@@ -995,16 +1015,30 @@
           {/* SN 來源（手動提供） */}
           <div className="border rounded-lg p-2 bg-purple-50/50">
             <div className="text-sm font-medium text-purple-900 mb-2">SN 清單來源</div>
-            {/* 模式選擇 */}
-            <div className="grid grid-cols-2 gap-1 mb-2 text-[11px]">
-              {[["keyin", "直接輸入"], ["range", "範圍"]].map(([m, label]) => (
-                <button key={m}
-                  onClick={() => setCfg((c) => ({ ...c, snInput: { ...c.snInput, mode: m } }))}
-                  className={`rounded py-1 border ${cfg.snInput.mode === m ? "bg-purple-600 text-white border-purple-700" : "bg-white text-slate-600 hover:bg-purple-100"}`}>
-                  {label}
-                </button>
-              ))}
+            {/* 模式選擇：範本有 SN 值 → 鎖「讀範本欄」、停用手動；沒有 → 反之 */}
+            <div className="grid grid-cols-3 gap-1 mb-2 text-[11px]">
+              {[["keyin", "直接輸入"], ["range", "範圍"], ["templateCol", "讀範本欄"]].map(([m, label]) => {
+                const disabled = m === "templateCol" ? !templateHasSn : templateHasSn;
+                return (
+                  <button key={m} disabled={disabled}
+                    onClick={() => !disabled && setCfg((c) => ({ ...c, snInput: { ...c.snInput, mode: m } }))}
+                    title={disabled ? (m === "templateCol" ? "範本未定義 SN（資料區留空）" : "範本已定義 SN → 用「讀範本欄」") : ""}
+                    className={`rounded py-1 border ${cfg.snInput.mode === m ? "bg-purple-600 text-white border-purple-700" : "bg-white text-slate-600 hover:bg-purple-100"} ${disabled ? "opacity-40 cursor-not-allowed" : ""}`}>
+                    {label}
+                  </button>
+                );
+              })}
             </div>
+
+            {cfg.snInput.mode === "templateCol" && (
+              <div className="text-[11px] text-slate-600 space-y-1">
+                <div>已讀取範本 SN 欄{tmplSnColLabel ? `（${tmplSnColLabel}）` : ""}：共 <b>{templateSns.length}</b> 個。</div>
+                <div className="font-mono text-[10px] bg-white border rounded px-2 py-1 max-h-24 overflow-auto">
+                  {templateSns.map((s) => s.sn).join(", ")}
+                </div>
+                <div className="text-[10px] text-slate-400">由範本 SN 欄自動帶入；要手動指定 SN 請改用「資料區留空」的範本。</div>
+              </div>
+            )}
 
             {cfg.snInput.mode === "keyin" && (
               <div className="space-y-1">
@@ -3186,6 +3220,20 @@
         if (!cfg.snMatchMode && !cfg.autoAlign) setCfg((c) => ({ ...c, autoAlign: true }));
       }, [cfg.snMatchMode, cfg.autoAlign]);
 
+      // xlsx 依範本 SN：偵測範本「SN 欄」與其已填的值（給「讀範本欄」用，並可自動產生 SN 清單）
+      const xlsxSn = useMemo(() => {
+        if (mode !== "excel" || !xlGrid) return null;
+        const d = detectExcelTable(xlGrid);
+        if (!d) return null;
+        const snColIdx = colLetterToIdx(d.snCol);
+        const startRow = parseCell(d.startCell).row;
+        const sns = (xlGrid.cells || [])
+          .filter((c) => c.c === snColIdx && c.r >= startRow && String(c.text || "").trim())
+          .sort((a, b) => a.r - b.r)
+          .map((c) => ({ sn: String(c.text).trim(), row: c.r }));
+        return { col: d.snCol, startRow, sns };
+      }, [mode, xlGrid]);
+
       // 範本表頭欄位順序（給「依範本表頭」還原按鈕用；非 xlsx 表格則為空）。
       // 可靠依據：UI 的「起始 cell」——其欄＝影像欄起點、上一列＝表頭列；不靠猜 SN 欄。
       //   startCell 由偵測預填、且使用者可更正 → 改了 startCell，表頭欄位即跟著正確。
@@ -3952,7 +4000,8 @@
               onCancel={() => { setIdxConfirm(null); setStatus("已取消上傳，請修正檔名後重新上傳"); }} />
           )}
           {toast && <Toast toast={toast} onClose={() => setToast(null)} />}
-          {mode === "excel" && !tplWarnAck && tplDirtyCells.length > 0 && (
+          {/* 依範本 SN 模式：範本本來就允許預填 SN/資料 → 不跳髒範本警告（該警告是給依檔名抓 DISPIMG 殘留用） */}
+          {mode === "excel" && !cfg.snMatchMode && !tplWarnAck && tplDirtyCells.length > 0 && (
             <DirtyTemplateModal
               cells={tplDirtyCells}
               onUseAnyway={() => setTplWarnAck(true)}
@@ -4090,6 +4139,7 @@
                     tplPath={tplPath}
                     mode={mode}
                     slidesSnInfo={slidesSnInfo}
+                    xlsxSn={xlsxSn}
                     snList={snList}
                     setSnList={setSnList}
                     setStatus={setStatus}
