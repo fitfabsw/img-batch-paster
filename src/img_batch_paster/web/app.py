@@ -807,9 +807,10 @@ def api_export():
         if not cell_pages or all(not (pg.get("img") or pg.get("sn")) for pg in cell_pages):
             return jsonify({"error": "沒有可匯出的圖片"}), 400
         fill = max(0.05, min(1.0, float(data.get("fill", 0.9))))
+        fit = data.get("fit", "contain")
         want_key = out_path.suffix.lower() == ".key"
         pptx_out = out_path.with_suffix(".pptx") if want_key else out_path
-        write_sn_cell_pages(template_path, pptx_out, cell_pages, fill=fill)
+        write_sn_cell_pages(template_path, pptx_out, cell_pages, fill=fill, fit=fit)
         if want_key:
             try:
                 convert_pptx_to_key(pptx_out, out_path)

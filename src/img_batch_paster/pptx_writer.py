@@ -200,26 +200,36 @@ def write_pages(
 
 
 def _composite_cell_image(img_path: Path, cw_cm: float, rh_cm: float, fill: float,
-                          crop: dict | None, tmp_dir: Path) -> Path:
-    """把照片合成到「儲存格比例的白底畫布」上（依 fill 置中縮放）。
-    之後用此合成圖填滿儲存格 → 照片即以 contain 方式落在格內、且跟著儲存格走（不漂移）。"""
+                          crop: dict | None, tmp_dir: Path, fit: str = "contain") -> Path:
+    """把照片合成到「儲存格比例的畫布」上 → 此合成圖填滿儲存格 → 照片跟著儲存格走（不漂移）。
+    fit：contain(完整貼邊，等比留白) / cover(裁切填滿，等比裁切) / fill(拉伸變形填滿)。"""
     from .xlsx_writer import _apply_crop
     tmp_dir.mkdir(parents=True, exist_ok=True)
     src = _apply_crop(img_path, crop, tmp_dir) if crop else img_path
     DPI = 110
     W = max(8, int(cw_cm / 2.54 * DPI))
     H = max(8, int(rh_cm / 2.54 * DPI))
-    canvas = Image.new("RGB", (W, H), "white")
     im = Image.open(src).convert("RGB")
-    th = H * fill
-    tw = th * im.width / im.height
-    mw = W * fill
-    if tw > mw:
-        tw = mw
-        th = tw * im.height / im.width
-    im2 = im.resize((max(1, int(tw)), max(1, int(th))))
-    canvas.paste(im2, ((W - int(tw)) // 2, (H - int(th)) // 2))
-    out = tmp_dir / f"cell_{img_path.stem}_{W}x{H}.png"
+    if fit == "fill":
+        canvas = im.resize((W, H))
+    elif fit == "cover":
+        # 等比放大到覆蓋整格，置中裁切
+        scale = max(W / im.width, H / im.height)
+        rw, rh = max(1, int(im.width * scale)), max(1, int(im.height * scale))
+        im2 = im.resize((rw, rh))
+        left, top = (rw - W) // 2, (rh - H) // 2
+        canvas = im2.crop((left, top, left + W, top + H))
+    else:  # contain
+        canvas = Image.new("RGB", (W, H), "white")
+        th = H * fill
+        tw = th * im.width / im.height
+        mw = W * fill
+        if tw > mw:
+            tw = mw
+            th = tw * im.height / im.width
+        im2 = im.resize((max(1, int(tw)), max(1, int(th))))
+        canvas.paste(im2, ((W - int(tw)) // 2, (H - int(th)) // 2))
+    out = tmp_dir / f"cell_{img_path.stem}_{fit}_{W}x{H}.png"
     canvas.save(out)
     return out
 
@@ -245,7 +255,7 @@ def _set_cell_picture_fill(slide, cell, image_path: Path) -> None:
 
 
 def write_sn_cell_pages(template: Path, out_path: Path, pages: list[dict],
-                        fill: float = 0.9) -> Path:
+                        fill: float = 0.9, fit: str = "contain") -> Path:
     """依範本 SN（PPT）：把 SN 文字與照片直接填進「表格儲存格」。
     照片成為儲存格內容（cell fill）→ 跟著儲存格走，任何檢視器都對齊（浮動圖會因列高渲染差異漂移）。
     pages: 每頁 { "sn": [{row,col,text,font_pt,bold}], "img": [{row,col,path,crop}] }（row/col 0-based）。
@@ -281,7 +291,7 @@ def write_sn_cell_pages(template: Path, out_path: Path, pages: list[dict],
                 continue
             cw_cm = _Emu(table.columns[c].width).cm
             rh_cm = _Emu(table.rows[r].height).cm
-            comp = _composite_cell_image(Path(ic["path"]), cw_cm, rh_cm, fill, ic.get("crop"), tmp_dir)
+            comp = _composite_cell_image(Path(ic["path"]), cw_cm, rh_cm, fill, ic.get("crop"), tmp_dir, fit)
             _set_cell_picture_fill(slide, table.cell(r, c), comp)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     prs.save(str(out_path))
