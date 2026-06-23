@@ -53,7 +53,7 @@
       },
       autoAlign: true,    // 依檔名 group+idx 對位 (固定；「依順序」模式已移除)
       snMatchMode: false, // SN 對照模式：手動提供 SN list、每個 SN 從多來源資料夾找對應圖
-      snSource: { col: "A", rowStart: 2 },  // SN 列號起算（commitSnList 用）
+      snSource: { col: "A", rowStart: 2 },  // SN 列號起算（產生 SN 清單時 row 從這裡算）
       // SN 清單來源：keyin=直接輸入 / range=範圍展開。xlsx 範本 SN 欄有值時會自動讀入 keyin 框。
       snInput: { mode: "keyin", text: "", prefix: "10B-#", from: 1, to: 8, pad: 1 },  // pad=位數(1=不補零)
       snColPick: 1,   // 依範本 SN：哪一欄是 SN 欄（1-based，相對表格最左欄；1=最左欄＝預設）
@@ -793,7 +793,7 @@
       if (!snList.length) {
         return (
           <div className="text-xs text-slate-400 text-center py-8">
-            請先讀取範本 SN list
+            請先提供 SN 清單（直接輸入／範圍／依範本 SN）
           </div>
         );
       }
@@ -926,27 +926,27 @@
           seen.add(k); return true;
         });
       };
-      const commitSnList = (list) => {
+      // 直接輸入 / 範圍：編輯即時生效（不需按鈕）。templateCol（依範本 SN）由 SN 自動讀取 effect 負責。
+      useEffect(() => {
+        if (cfg.snInput.mode !== "keyin" && cfg.snInput.mode !== "range") return;
+        let list = [];
+        if (cfg.snInput.mode === "keyin") {
+          list = (cfg.snInput.text || "").split(/[\s,，、\n]+/);   // 逗號 / 空白 / 換行分隔
+        } else {
+          // 範圍展開：prefix 含 # → 用 from..to 的整數代入（可補零）
+          const { prefix, from, to, pad } = cfg.snInput;
+          const a = parseInt(from), b = parseInt(to);
+          if (String(prefix).includes("#") && !isNaN(a) && !isNaN(b) && b >= a) {
+            const width = Math.max(1, parseInt(pad) || 1);   // 位數：1=不補零(10B-1)、2=10B-01…
+            for (let n = a; n <= b && list.length < 2000; n++) {
+              list.push(String(prefix).replace(/#/g, String(n).padStart(width, "0")));
+            }
+          }
+        }
         const clean = dedupe(list);
         const rowStart = cfg.snSource.rowStart || 2;
         setSnList(clean.map((sn, i) => ({ sn, row: rowStart + i })));
-        setStatus(clean.length ? `已產生 ${clean.length} 個 SN` : "⚠ 沒有產生任何 SN");
-      };
-      // 直接輸入：逗號 / 空白 / 換行分隔
-      const genKeyin = () => commitSnList((cfg.snInput.text || "").split(/[\s,，、\n]+/));
-      // 範圍展開：prefix 含 # → 用 from..to 的整數代入（可補零）
-      const genRange = () => {
-        const { prefix, from, to, pad } = cfg.snInput;
-        if (!String(prefix).includes("#")) { setStatus("⚠ 範圍樣板需含 #（例 10B-#）"); return; }
-        const a = parseInt(from), b = parseInt(to);
-        if (isNaN(a) || isNaN(b) || b < a) { setStatus("⚠ 起訖數字無效"); return; }
-        const width = Math.max(1, parseInt(pad) || 1);   // 位數：1=不補零(10B-1)、2=10B-01…
-        const list = [];
-        for (let n = a; n <= b && list.length < 2000; n++) {
-          list.push(String(prefix).replace(/#/g, String(n).padStart(width, "0")));
-        }
-        commitSnList(list);
-      };
+      }, [cfg.snInput.mode, cfg.snInput.text, cfg.snInput.prefix, cfg.snInput.from, cfg.snInput.to, cfg.snInput.pad]);
 
       const uploadSource = async (sid, files) => {
         if (!ws || !files || !files.length) return;
@@ -1034,12 +1034,12 @@
             <div className="text-sm font-medium text-purple-900 mb-2">SN 清單來源</div>
             {/* 模式選擇：範本有 SN 值 → 鎖「讀範本欄」、停用手動；沒有 → 反之 */}
             <div className="grid grid-cols-3 gap-1 mb-2 text-[11px]">
-              {[["keyin", "直接輸入"], ["range", "範圍"], ["templateCol", "讀範本欄"]].map(([m, label]) => {
+              {[["keyin", "直接輸入"], ["range", "範圍"], ["templateCol", "依範本 SN"]].map(([m, label]) => {
                 const disabled = m === "templateCol" ? !templateHasSn : templateHasSn;
                 return (
                   <button key={m} disabled={disabled}
                     onClick={() => !disabled && setCfg((c) => ({ ...c, snInput: { ...c.snInput, mode: m } }))}
-                    title={disabled ? (m === "templateCol" ? "範本未定義 SN（資料區留空）" : "範本已定義 SN → 用「讀範本欄」") : ""}
+                    title={disabled ? (m === "templateCol" ? "範本未定義 SN（資料區留空）" : "範本已定義 SN → 用「依範本 SN」") : ""}
                     className={`rounded py-1 border ${cfg.snInput.mode === m ? "bg-purple-600 text-white border-purple-700" : "bg-white text-slate-600 hover:bg-purple-100"} ${disabled ? "opacity-40 cursor-not-allowed" : ""}`}>
                     {label}
                   </button>
@@ -1063,8 +1063,6 @@
                   onChange={(e) => setCfg((c) => ({ ...c, snInput: { ...c.snInput, text: e.target.value } }))}
                   placeholder="10B-1, 10B-2, 10B-3 …（逗號 / 空白 / 換行分隔）"
                   className="w-full border rounded px-2 py-1 text-xs font-mono" />
-                <button onClick={genKeyin}
-                  className="w-full border rounded py-1 text-xs bg-purple-600 text-white hover:bg-purple-700">產生 SN 清單</button>
               </div>
             )}
 
@@ -1097,8 +1095,6 @@
                     {String(cfg.snInput.prefix).replace(/#/g, String(cfg.snInput.to).padStart(Math.max(1, parseInt(cfg.snInput.pad) || 1), "0"))}
                   </div>
                 )}
-                <button onClick={genRange}
-                  className="w-full border rounded py-1 text-xs bg-purple-600 text-white hover:bg-purple-700">展開 SN 清單</button>
               </div>
             )}
 
@@ -1819,7 +1815,7 @@
         { id: "help-group", icon: "🗂️", cls: "bg-sky-100 text-sky-700", title: "兩種分群方式",
           body: (<div className="grid grid-cols-2 gap-2">
             <div className="border rounded-lg p-2"><b>📷 依檔名</b><div className="text-[12px] text-slate-500 mt-0.5">上傳一個資料夾，靠檔名規則分群、對位。</div></div>
-            <div className="border rounded-lg p-2"><b>📋 依範本 SN</b><div className="text-[12px] text-slate-500 mt-0.5">從 Excel 第一欄讀 SN 清單，每欄對應一個來源資料夾。</div></div>
+            <div className="border rounded-lg p-2"><b>📋 依 SN 清單</b><div className="text-[12px] text-slate-500 mt-0.5">提供一份 SN 清單（直接輸入／範圍／依範本 SN），每個來源資料夾對應一欄。</div></div>
           </div>) },
         { id: "help-byname", icon: "📷", cls: "bg-rose-100 text-rose-700", title: "依檔名對位",
           body: (<>
@@ -1834,9 +1830,9 @@
             <p className="text-[12px] text-slate-500 mb-1"><Pill>依範本表頭</Pill> 照 Excel 表頭排欄（推薦，圖會對齊範本）；<Pill>依檔名</Pill> 照檔名字母序排。</p>
             <OrderDemo />
           </>) },
-        { id: "help-bysn", icon: "📋", cls: "bg-violet-100 text-violet-700", title: "依範本 SN",
+        { id: "help-bysn", icon: "📋", cls: "bg-violet-100 text-violet-700", title: "依 SN 清單",
           body: (<>
-            <p>Excel <b>第一欄</b>是 SN 清單；每個來源資料夾對應<b>一欄</b>，程式依 SN 找同名檔貼入。適合「同一批 SN、多個量測角度各放一個資料夾」的情境。</p>
+            <p>提供一份 <b>SN 清單</b>（直接輸入／範圍／依範本 SN）決定列；每個來源資料夾對應<b>一欄</b>，程式依 SN 找同名檔貼入。適合「同一批 SN、多個量測角度各放一個資料夾」的情境。</p>
             <SnDemo />
           </>) },
         { id: "help-crop", icon: "✂️", cls: "bg-amber-100 text-amber-700", title: "裁剪",
@@ -4450,12 +4446,12 @@
                         ? "bg-purple-700 text-white border-purple-800 shadow"
                         : "bg-white text-slate-600 border-slate-300 hover:bg-purple-50"
                     }`}>
-                    📋 依範本 SN
+                    📋 依 SN 清單
                   </button>
                 </div>
                 <div className="text-[10px] text-slate-500 mt-1">
                   {cfg.snMatchMode
-                    ? "範本 SN 決定列；每個資料夾對應一欄"
+                    ? "SN 清單決定列；每個資料夾對應一欄"
                     : "從一個資料夾上傳一批圖、依檔名分群"}
                 </div>
 
@@ -4733,7 +4729,7 @@
                             cfg.snMatchMode ? "bg-purple-100 text-purple-700 border-purple-300"
                               : "bg-slate-100 text-slate-600 border-slate-300"
                           }`}>
-                            {cfg.snMatchMode ? "📋 依範本 SN" : cfg.autoAlign ? "📷 依檔名 · idx" : "📷 依檔名 · 順序"}
+                            {cfg.snMatchMode ? "📋 依 SN 清單" : cfg.autoAlign ? "📷 依檔名 · idx" : "📷 依檔名 · 順序"}
                           </span>
                           {mode === "slides" && (
                             <span className="ml-1 text-[10px] text-slate-400" title="Stepper ◀▶ 操作">Shift＝粗調 · Alt＝微調</span>
@@ -4789,9 +4785,6 @@
                           : [];
                         return (
                         <div className="flex flex-col items-center gap-3">
-                          {snList.length === 0 && slidesTbl && (
-                            <div className="text-[11px] text-slate-400">範本表格結構（左側「SN 清單來源」產生 SN 後即填入）</div>
-                          )}
                           {/* 載入中 spinner overlay：與「依檔名」完全一致（同款 stage 框 + spinner） */}
                           {slidesTbl ? (
                             <div className="relative">
