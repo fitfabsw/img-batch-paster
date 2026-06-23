@@ -3419,7 +3419,9 @@
         } else return;
         if (snAutoColRef.current === tplLoadSeq) return;
         snAutoColRef.current = tplLoadSeq;
-        if (best && best !== 1) setCfg((cf) => (cf.snColPick === best ? cf : { ...cf, snColPick: best }));
+        // 一律覆寫成偵測結果（算不出就回第 1 欄）→ 避免沿用上一個範本殘留的選擇
+        const target = best || 1;
+        setCfg((cf) => (cf.snColPick === target ? cf : { ...cf, snColPick: target }));
       }, [slidesTbl, xlGrid, mode, tplLoadSeq]);
 
       // 依範本 SN：表格各欄選項（給「選 SN 欄」下拉用），value=相對表格的第幾欄(1-based)
@@ -4599,18 +4601,24 @@
 
                 {cfg.snMatchMode ? (
                   <>
-                  {/* 對不到 SN 的圖會被靜默丟棄 → 明確列出，避免「沒出現卻不知為何」 */}
+                  {/* 只警示「整個資料夾的圖全部對不到 SN」的來源（疑似選錯資料夾/檔名格式不符）；
+                      若該資料夾已有圖對到，多出來的對不上就當多的、不警示，避免正常情況也跳警告 */}
                   {(() => {
                     if (!snList.length) return null;
                     const snSet = new Set(snList.map((x) => String(x.sn).toLowerCase()));
-                    const unmatched = cfg.sources.flatMap((s) => s.files || [])
-                      .filter((f) => !snSet.has((f.name || "").replace(/\.[^./]+$/, "").toLowerCase()));
-                    if (!unmatched.length) return null;
+                    const stem = (f) => (f.name || "").replace(/\.[^./]+$/, "").toLowerCase();
+                    const deadSources = cfg.sources.filter((s) => {
+                      const files = s.files || [];
+                      return files.length > 0 && !files.some((f) => snSet.has(stem(f)));
+                    });
+                    if (!deadSources.length) return null;
+                    const unmatched = deadSources.flatMap((s) => s.files || []);
                     const sample = unmatched.slice(0, 5).map((f) => f.name).join("、");
+                    const names = deadSources.map((s) => s.name).filter(Boolean).join("、");
                     return (
                       <div className="mb-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
-                        ⚠ {unmatched.length} 張圖檔名對不到任何 SN（不會貼上）：<span className="font-mono">{sample}{unmatched.length > 5 ? ` …(+${unmatched.length - 5})` : ""}</span>
-                        <div className="text-[10px] text-amber-600 mt-0.5">目前 SN：{snList.slice(0, 6).map((x) => x.sn).join("、")}{snList.length > 6 ? "…" : ""}。請確認「檔名(去副檔名) ＝ 某個 SN」。</div>
+                        ⚠ 資料夾{names ? `「${names}」` : ""}的 {unmatched.length} 張圖<span className="font-semibold">全部</span>對不到任何 SN（不會貼上）：<span className="font-mono">{sample}{unmatched.length > 5 ? ` …(+${unmatched.length - 5})` : ""}</span>
+                        <div className="text-[10px] text-amber-600 mt-0.5">目前 SN：{snList.slice(0, 6).map((x) => x.sn).join("、")}{snList.length > 6 ? "…" : ""}。請確認選對資料夾、且「檔名(去副檔名) ＝ 某個 SN」。</div>
                       </div>
                     );
                   })()}
