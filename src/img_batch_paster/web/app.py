@@ -51,7 +51,7 @@ def index():
 def api_scan():
     data = request.get_json(force=True)
     folder = Path(data["folder"]).expanduser().resolve()
-    extensions = data.get("extensions", [".png", ".jpg", ".jpeg"])
+    extensions = data.get("extensions", [".png", ".jpg", ".jpeg", ".jfif", ".webp", ".gif", ".bmp", ".tif", ".tiff"])
     exts = {e.lower() for e in extensions}
 
     if not folder.is_dir():

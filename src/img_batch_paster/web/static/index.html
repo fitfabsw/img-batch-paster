@@ -24,7 +24,7 @@
 
     const DEFAULTS = {
       folder: "",
-      extensions: [".png", ".jpg", ".jpeg"],
+      extensions: [".png", ".jpg", ".jpeg", ".jfif", ".webp", ".gif", ".bmp", ".tif", ".tiff"],
       slide: { width_cm: 25.4, height_cm: 14.29 },
       grid: {
         origin: { x: 8, y: 15 },
@@ -962,7 +962,7 @@
         fd.append("workspace", ws);
         fd.append("sourceId", String(sid));
         for (const f of files) {
-          if (/\.(png|jpe?g)$/i.test(f.name)) fd.append("files", f);
+          if (/\.(png|jpe?g|jfif|gif|bmp|webp|tiff?)$/i.test(f.name)) fd.append("files", f);
         }
         try {
           const r = await fetch("/api/upload/source", { method: "POST", body: fd });
@@ -3155,7 +3155,7 @@
         const list = [...(files || [])];
         if (!list.length) return;
         if (cfg.autoAlign) {
-          const imgs = list.filter((f) => /\.(png|jpe?g|gif|bmp|webp|tiff?)$/i.test(f.name || ""));
+          const imgs = list.filter((f) => /\.(png|jpe?g|jfif|gif|bmp|webp|tiff?)$/i.test(f.name || ""));
           if (!imgs.length) { setStatus("沒有圖片檔 (png/jpg…)"); return; }
           setIdxConfirm({ ...analyzeFilenameIdx(imgs, cfg.label.pattern), _files: imgs });
           return;
@@ -3480,9 +3480,9 @@
       const onDropImages = async (e) => {
         e.preventDefault(); setDragImg(false);
         const fs = await filesFromDrop(e.dataTransfer);
-        const imgs = fs.filter((f) => /\.(png|jpe?g)$/i.test(f.name));
+        const imgs = fs.filter((f) => /\.(png|jpe?g|jfif|gif|bmp|webp|tiff?)$/i.test(f.name));
         if (imgs.length) uploadImages(imgs);
-        else setStatus("拖入的內容沒有圖片檔 (png/jpg)");
+        else setStatus("拖入的內容沒有圖片檔 (png/jpg/webp/gif/bmp/tiff)");
       };
 
       const doScanFolder = async (folder) => {
