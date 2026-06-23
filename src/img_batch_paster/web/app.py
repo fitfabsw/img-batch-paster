@@ -127,6 +127,23 @@ def api_workspace():
     return jsonify({"workspace": ws})
 
 
+_tpl_seq = 0
+
+
+def _next_template_path(base: Path, suffix: str) -> Path:
+    """回傳一個唯一的 template 檔名（template_N.suffix），並清掉同 workspace 內舊的 template 檔。
+    每次換範本都用不同檔名 → 前端 tplPath 必定改變 → 才會重新載入表格資訊（否則固定存
+    template.pptx 時，換不同範本 path 不變、前端 effect 不觸發、預覽停在舊範本結構）。"""
+    global _tpl_seq
+    for old in list(base.glob("template.*")) + list(base.glob("template_*.*")):
+        try:
+            old.unlink()
+        except OSError:
+            pass
+    _tpl_seq += 1
+    return base / f"template_{_tpl_seq}{suffix}"
+
+
 @app.post("/api/upload/template")
 def api_upload_template():
     import sys as _sys
@@ -139,14 +156,14 @@ def api_upload_template():
         return jsonify({"error": "no file"}), 400
 
     ext = Path(f.filename).suffix.lower()
-    dest_pptx = base / "template.pptx"
-    dest_xlsx = base / "template.xlsx"
 
     if ext == ".pptx":
+        dest_pptx = _next_template_path(base, ".pptx")
         f.save(str(dest_pptx))
         return jsonify({"path": str(dest_pptx), "mode": "slides"})
 
     if ext == ".xlsx":
+        dest_xlsx = _next_template_path(base, ".xlsx")
         f.save(str(dest_xlsx))
         return jsonify({"path": str(dest_xlsx), "mode": "excel"})
 
@@ -155,6 +172,7 @@ def api_upload_template():
             return jsonify({"error": ".key 範本僅在 macOS server 可轉檔；請改傳 .pptx"}), 501
         tmp_key = base / "uploaded.key"
         f.save(str(tmp_key))
+        dest_pptx = _next_template_path(base, ".pptx")
         try:
             convert_key_to_pptx(tmp_key, dest_pptx)
         except Exception as e:
@@ -696,7 +714,7 @@ def api_configs_get(name):
         inner = _ibp_template_name(p)
         if inner:
             ext = Path(inner).suffix
-            dest = base / f"template{ext}"
+            dest = _next_template_path(base, ext)   # 唯一檔名 → 換 recipe 範本時 tplPath 也會變
             with _zipfile.ZipFile(p, "r") as zf:
                 with zf.open(inner) as src, open(dest, "wb") as dst:
                     dst.write(src.read())

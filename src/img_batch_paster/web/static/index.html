@@ -235,13 +235,15 @@
       if (!t || !t.rows || !t.cols) return null;
       const rows = t.rows, cols = t.cols;
       const snC = Math.max(1, Math.min(cols, snCol1 || 1));   // 1-based SN 欄（預設第 1 欄）
-      // 表頭列偵測只看「SN 欄以外」的欄有沒有文字 —— SN 欄在資料列也會有值（如已預填的
-      //   10B-8/10B-2），若一併算入會把表頭誤判到資料列、SN 欄抓不到。
-      const textRows = new Set((t.cells || []).filter((c) => c.c !== snC && String(c.text || "").trim()).map((c) => c.r));
+      // 表頭列偵測（與 SN 欄無關）：表頭列在「多個」欄都有文字；資料列通常只有 SN 欄有值。
+      //   以「該列有文字的欄數 ≥ 2」判定表頭 → 不受 SN 欄位置或預填值影響，欄位顯示永遠對得上範本。
+      const cnt = {};
+      (t.cells || []).forEach((c) => { if (String(c.text || "").trim()) cnt[c.r] = (cnt[c.r] || 0) + 1; });
+      const headerRows = new Set(Object.keys(cnt).filter((r) => cnt[r] >= 2).map(Number));
       let skipRows = 0;
-      while (skipRows < rows - 1 && textRows.has(skipRows + 1)) skipRows++;
-      if (skipRows === 0) skipRows = 1;     // 無文字也假設 1 表頭列
-      const skipCols = 1;                   // 第一欄當標籤/SN 欄（同 xlsx 慣例）
+      while (skipRows < rows - 1 && headerRows.has(skipRows + 1)) skipRows++;
+      if (skipRows === 0) skipRows = 1;     // 無多欄文字列也假設 1 表頭列
+      const skipCols = 1;
       return { skipRows, skipCols, snCol: snC, snRowStart: skipRows + 1 };
     }
 
@@ -881,7 +883,7 @@
     }
 
     // SN 對照模式：左欄 — SN 來源設定 + 多來源資料夾管理
-    function SnMatchPanel({ cfg, setCfg, ws, tplPath, mode, slidesSnInfo, xlsxSn, snColOptions, snList, setSnList, setStatus, setSelected, setCropOpen, setCropSourceId, pushHistory }) {
+    function SnMatchPanel({ cfg, setCfg, ws, tplPath, tplLoadSeq, mode, slidesSnInfo, xlsxSn, snColOptions, snList, setSnList, setStatus, setSelected, setCropOpen, setCropSourceId, pushHistory }) {
       const isSlides = mode === "slides" && !!slidesSnInfo;
       const isExcel = mode === "excel";
       const headers = slidesSnInfo?.headers || [];
@@ -901,7 +903,7 @@
       // 依範本決定來源：有 SN 值 → 自動切「讀範本欄」並讀入；沒有 → 若停在 templateCol 則退回直接輸入
       const snAutoRef = useRef("");
       useEffect(() => {
-        const key = `${tplPath}|${cfg.snColPick || 1}|${templateHasSn}`;   // 換 SN 欄也要重讀
+        const key = `${tplLoadSeq}|${tplPath}|${cfg.snColPick || 1}|${templateHasSn}`;   // 換範本/換 SN 欄都要重讀
         if (snAutoRef.current === key) return;
         snAutoRef.current = key;
         if (templateHasSn) {
@@ -909,9 +911,11 @@
           setSnList(templateSns);
           setStatus(`已讀取範本 SN 欄（${tmplSnColLabel}）${templateSns.length} 個`);
         } else if (cfg.snInput.mode === "templateCol") {
+          // 新選的欄沒有 SN 值 → 退回手動，並清掉上一欄自動讀進來的 SN（否則殘留會畫到新欄）
           setCfg((c) => ({ ...c, snInput: { ...c.snInput, mode: "keyin" } }));
+          setSnList([]);
         }
-      }, [tplPath, cfg.snColPick, templateHasSn]);
+      }, [tplLoadSeq, tplPath, cfg.snColPick, templateHasSn]);
 
       const dedupe = (list) => {
         const seen = new Set();
@@ -1112,8 +1116,8 @@
             <div className="text-sm font-medium text-slate-700 mb-2">資料來源 ({cfg.sources.length})</div>
             {isSlides && (
               <div className="text-[10px] text-slate-500 bg-slate-50 border rounded px-2 py-1 mb-2">
-                已辨識範本表格：<b>{slidesSnInfo.headers.length + 1} 欄 × {slidesTblRows(slidesSnInfo)} 列</b>
-                · SN 寫第 <b>{slidesSnInfo.snCol}</b> 欄、資料從第 <b>{slidesSnInfo.snRowStart}</b> 列起
+                已辨識範本表格：<b>{slidesSnInfo.ncols || slidesSnInfo.headers.length + 1} 欄 × {slidesTblRows(slidesSnInfo)} 列</b>
+                · SN 在第 <b>{slidesSnInfo.snCol}</b> 欄、資料從第 <b>{slidesSnInfo.snRowStart}</b> 列起
                 {headers.length > 0 && <> · 可對應欄：<span className="font-mono">{headers.join(" / ")}</span></>}
               </div>
             )}
@@ -2698,6 +2702,7 @@
       const [status, setStatus] = useState("");
       const [busy, setBusy] = useState(false);
       const [tplPath, setTplPath] = useState("");
+      const [tplLoadSeq, setTplLoadSeq] = useState(0);   // 每次載入範本都 +1：即使 path 相同也強制重載表格資訊
       const [tplName, setTplName] = useState("");
       const [tpl, setTpl] = useState(null);
       const [mode, setMode] = useState("slides");
@@ -2875,8 +2880,7 @@
         confirmAndReset("切換模式", () => {
           setCfg((c) => {
             const fresh = JSON.parse(JSON.stringify(DEFAULTS));
-            fresh.output = { ...fresh.output, path: c.output?.path || fresh.output.path, template: c.output?.template };
-            fresh.slide = c.slide;   // 保留已載入範本的投影片尺寸（否則預覽 cm→px 比例會錯）
+            fresh.output = { ...fresh.output, path: c.output?.path || fresh.output.path };   // 保留輸出檔名；範本清空 → 不留 template/slide
             fresh.snMatchMode = !!toSnMatch;
             fresh.autoAlign = false;
             if (toSnMatch) {
@@ -2887,6 +2891,9 @@
             }
             return fresh;
           });
+          // 換分群方式 → 清空已載入範本（避免沿用上一個模式的範本／結構，需重新載入合適範本）
+          setTplPath(""); setTplName(""); setTpl(null); setXlGrid(null); setTableInfo(null);
+          setFiles([]); setOrder([]); setSnList([]);
         });
       };
       const undo = () => {
@@ -3106,6 +3113,7 @@
       const loadTemplateByPath = async (path, name) => {
         if (!path) return;
         setTplPath(path);
+        setTplLoadSeq((n) => n + 1);   // 強制觸發換範本的重載（後端若固定存 template.pptx，path 不變也能重載）
         if (name) setTplName(name);
         const ext = (path.split(".").pop() || "").toLowerCase();
         const newMode = ext === "xlsx" ? "excel" : "slides";
@@ -3234,10 +3242,11 @@
         tableInfoReqRef.current++;   // 立即作廢前一個範本仍在飛行中的 table-info 請求
         setTableInfo(null);
         setTplWarnAck(false);   // 換範本 → 重置髒範本警告
+        setCfg((c) => (c.snColPick === 1 ? c : { ...c, snColPick: 1 }));   // SN 欄選擇回預設第 1 欄
         if (tplPath && mode === "slides" && /\.pptx$/i.test(tplPath)) {
           loadTableInfo(tplPath);
         }
-      }, [tplPath, mode]);
+      }, [tplLoadSeq, tplPath, mode]);
 
       // xlsx：grid 載入後自動偵測表格位置 → 預設「起始 cell + SN 寫入欄」(每範本一次，比照 ppt/key)
       useEffect(() => {
@@ -3333,19 +3342,21 @@
         if (!slidesTbl) return null;
         const d = detectSlidesTable(slidesTbl, cfg.snColPick) || { snCol: 1, snRowStart: 2 };
         const headerRow1 = d.snRowStart - 1, snCol0 = d.snCol - 1;
+        const ncols = slidesTbl.cols || (slidesTbl.col_widths_cm || []).length;
+        // 可對應欄 = SN 欄以外的所有欄（忠實呈現範本；SN 欄不列入對應目標）
         const headers = [];
-        for (let c1 = 1; c1 <= (slidesTbl.cols || 0); c1++) {
+        for (let c1 = 1; c1 <= ncols; c1++) {
           if (c1 - 1 === snCol0) continue;
           const cell = (slidesTbl.cells || []).find((x) => x.r === headerRow1 && x.c === c1);
           const text = cell ? String(cell.text || "").trim() : "";
           if (text) headers.push(text);
         }
-        // SN 欄(第 1 欄)資料列已填的值 → 供「讀範本欄」直接讀取(pptx 用，不碰 openpyxl)
+        // SN 欄資料列已填的值 → 供「讀範本欄」直接讀取(pptx 用，不碰 openpyxl)
         const snCells = (slidesTbl.cells || [])
           .filter((x) => x.c === d.snCol && x.r >= d.snRowStart && String(x.text || "").trim())
           .sort((a, b) => a.r - b.r)
           .map((x) => String(x.text).trim());
-        return { ...d, headers, snCells, dataRows: Math.max(0, (slidesTbl.rows || 0) - (d.snRowStart - 1)) };
+        return { ...d, headers, snCells, ncols, dataRows: Math.max(0, (slidesTbl.rows || 0) - (d.snRowStart - 1)) };
       })();
 
       // 依範本 SN：表格各欄選項（給「選 SN 欄」下拉用），value=相對表格的第幾欄(1-based)
@@ -4218,6 +4229,7 @@
                     setCfg={setCfg}
                     ws={ws}
                     tplPath={tplPath}
+                    tplLoadSeq={tplLoadSeq}
                     mode={mode}
                     slidesSnInfo={slidesSnInfo}
                     xlsxSn={xlsxSn}
