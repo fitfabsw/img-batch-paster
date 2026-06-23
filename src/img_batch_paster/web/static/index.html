@@ -2383,7 +2383,7 @@
       );
     }
 
-    function ExcelPreview({ grid, cfg, orderedFiles, selected, thumbUrl, snList }) {
+    function ExcelPreview({ grid, cfg, orderedFiles, selected, thumbUrl, snList, snColIdx }) {
       if (!grid) {
         return (
           <div className="border rounded-lg bg-slate-50 p-8 text-center text-slate-500">
@@ -2516,6 +2516,20 @@
             ))}
 
             {/* (移除無 content 的 cell 分隔線；範本既有的 border 由下方獨立渲染) */}
+
+            {/* SN 欄 highlight（依範本 SN 模式，比照 ppt 預覽的綠底） */}
+            {cfg.snMatchMode && snColIdx > 0 && snColIdx <= grid.cols.length && (snList || []).map(({ row }, i) => {
+              const ri = row - 1;
+              if (ri < 0 || ri >= grid.rows.length) return null;
+              return (
+                <div key={`snhl-${i}`} style={{
+                  position: "absolute",
+                  left: HEADER_W + cumX[snColIdx - 1], top: HEADER_H + cumY[ri],
+                  width: grid.cols[snColIdx - 1].w_px, height: grid.rows[ri].h_px,
+                  background: "#ecfdf5", pointerEvents: "none",
+                }} />
+              );
+            })}
 
             {/* 邊框 (從範本讀的) */}
             {(grid.borders || []).map((b, i) => {
@@ -3240,17 +3254,20 @@
       }, [cfg.snMatchMode, cfg.autoAlign]);
 
       // xlsx 依範本 SN：偵測範本「SN 欄」與其已填的值（給「讀範本欄」用，並可自動產生 SN 清單）
+      // 注意：SN 起始列要看「表格首列(表頭)的下一列」，不能用 detectExcelTable 的 startCell——
+      //   那個 startCell 是依「圖片欄有無文字」推算，若資料列的圖片欄已預填(如 QN1/QN2 的 UC3 值)，
+      //   會把資料列誤判成表頭 → 起始列被往下推、漏掉前幾個 SN。
       const xlsxSn = useMemo(() => {
         if (mode !== "excel" || !xlGrid) return null;
         const d = detectExcelTable(xlGrid);
         if (!d) return null;
         const snColIdx = colLetterToIdx(d.snCol);
-        const startRow = parseCell(d.startCell).row;
+        const headerRow = d.region.minR;   // 表格首列＝表頭（SN 標籤），SN 資料從下一列起
         const sns = (xlGrid.cells || [])
-          .filter((c) => c.c === snColIdx && c.r >= startRow && String(c.text || "").trim())
+          .filter((c) => c.c === snColIdx && c.r > headerRow && String(c.text || "").trim())
           .sort((a, b) => a.r - b.r)
           .map((c) => ({ sn: String(c.text).trim(), row: c.r }));
-        return { col: d.snCol, startRow, sns };
+        return { col: d.snCol, startRow: headerRow + 1, sns };
       }, [mode, xlGrid]);
 
       // 範本表頭欄位順序（給「依範本表頭」還原按鈕用；非 xlsx 表格則為空）。
@@ -4698,7 +4715,8 @@
                        <div style={{ zoom: zoom, MozTransform: `scale(${zoom})`, MozTransformOrigin: "top left" }}>
 
                       {tplPath && mode === "excel" && (
-                        <ExcelPreview grid={xlGrid} cfg={cfg} orderedFiles={orderedFiles} selected={selected} thumbUrl={thumbUrl} snList={snList} />
+                        <ExcelPreview grid={xlGrid} cfg={cfg} orderedFiles={orderedFiles} selected={selected} thumbUrl={thumbUrl} snList={snList}
+                          snColIdx={cfg.snMatchMode && xlsxSn ? colLetterToIdx(xlsxSn.col) : 0} />
                       )}
                       {/* 依範本 SN（PPT）：HTML 表格預覽（取代疊在 PNG 上的做法 → 天生對齊）*/}
                       {tplPath && mode === "slides" && cfg.snMatchMode && (() => {
