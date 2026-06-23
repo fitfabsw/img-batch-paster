@@ -275,6 +275,16 @@ def write_sn_cell_pages(template: Path, out_path: Path, pages: list[dict],
     if not pages:
         raise ValueError("pages 不可為空")
     prs = Presentation(str(template))
+    # 範本若本身就有多頁（每頁同結構、只是預填的 SN 不同）→ 只留第一頁當基底，其餘移除，
+    #   一律用「依 pages 頁數複製基底」產生，避免輸出夾帶範本原有的預填頁。
+    #   要連同關聯一起 drop，否則孤兒 slide part 仍會被打包 → 與複製出的新頁撞名。
+    from pptx.oxml.ns import qn as _qn
+    sld_id_lst = prs.slides._sldIdLst
+    for sld_id in list(sld_id_lst)[1:]:
+        rid = sld_id.get(_qn("r:id"))
+        if rid:
+            prs.part.drop_rel(rid)
+        sld_id_lst.remove(sld_id)
     base = prs.slides[0]
     page_slides = [base]
     for _ in range(len(pages) - 1):

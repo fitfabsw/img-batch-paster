@@ -20,7 +20,7 @@
   <div id="root"></div>
 
   <script type="text/babel" data-presets="react">
-    const { useState, useMemo, useEffect, useRef } = React;
+    const { useState, useMemo, useEffect, useLayoutEffect, useRef } = React;
 
     const DEFAULTS = {
       folder: "",
@@ -2289,7 +2289,14 @@
 
     // 依範本 SN（PPT）預覽：直接用 HTML 畫出表格（SN｜各影像欄）+ 照片，所有東西同一座標系 →
     //   天生對齊、不需疊在渲染 PNG 上、不受 LibreOffice 列高渲染差異影響。匯出仍用實際表格座標。
-    function SnSlidePreview({ slidesTbl, slidesSnInfo, snList, sources, thumbUrl, fill, fit, perColCrop, globalCrop, slideW, slideH, stageW }) {
+    function SnSlidePreview({ slidesTbl, slidesSnInfo, snList, sources, thumbUrl, fill, fit, perColCrop, globalCrop, previewUrl, pageTbl, slideW, slideH, stageW }) {
+      const usePng = !!previewUrl;   // 有底圖（第1頁）→ 表格結構/表頭/SN 由 PNG 提供（像素級一致），HTML 只疊圖片
+      const snRowStart = slidesSnInfo?.snRowStart || 2;   // 資料起始列(1-based)
+      // 範本該格實際文字（給「非 SN、非圖片」欄顯示原值用 → 不管選哪欄,範本的值都會顯示）
+      const tplTextAt = (ri, c1) => {
+        const cell = ((pageTbl || slidesTbl).cells || []).find((x) => x.r === snRowStart + ri && x.c === c1);
+        return cell ? String(cell.text || "").trim() : "";
+      };
       const cw = slidesTbl.col_widths_cm || [];
       const rhArr = slidesTbl.row_heights_cm || [];
       const snCol0 = (slidesSnInfo.snCol || 1) - 1;
@@ -2322,14 +2329,18 @@
       const tLeft = Math.round((slidesTbl.left_cm || 0) * pxPerCm);
       const tTop = Math.round((slidesTbl.top_cm || 0) * pxPerCm);
       const tWidth = Math.round(cols.reduce((a, c) => a + c.w, 0) * pxPerCm);
-      const rowH = Math.max(20, Math.round((rhArr[1] || 4.28) * pxPerCm));
-      const headerH = Math.max(16, Math.round((rhArr[0] || 1.76) * pxPerCm));
+      // 有 PNG 底圖時，用後端從 PNG 量到的「實際表頭高/列間距」→ 圖片浮層才會精準落在 PNG 的儲存格內。
+      const dataCm = (usePng && slidesTbl.row_pitch_cm != null) ? slidesTbl.row_pitch_cm : (rhArr[1] || 4.28);
+      const headerCm = (usePng && slidesTbl.data_start_cm != null)
+        ? Math.max(0.3, slidesTbl.data_start_cm - (slidesTbl.top_cm || 0)) : (rhArr[0] || 1.76);
+      const rowH = Math.max(20, Math.round(dataCm * pxPerCm));
+      const headerH = Math.max(16, Math.round(headerCm * pxPerCm));
       const f = Math.max(0.05, Math.min(1, (fill ?? 90) / 100));
       // SN 清單未產生時，顯示範本表格結構（表頭 + dataRows 個空白列），讓使用者確認範本載入正確
       const rows = snList.length ? snList : Array.from({ length: Math.max(1, dataRows) }, () => ({ sn: "" }));
       const isEmpty = snList.length === 0;
       // 等高對齊：取所有圖「都放得下」的共同高度(佔格高比例)→ 保比例、不裁切、全部同高
-      const chCm = rhArr[1] || 4.28;
+      const chCm = dataCm;
       let alignFrac = f;
       if (fit === "contain_align") {
         for (const item of rows) {
@@ -2346,15 +2357,33 @@
           }
         }
       }
+      // HTML 表格實際渲染會比「指定列高總和」略高（邊框/行高累積），對佔滿投影片高度的表格就會溢出下緣。
+      //   量測表格真實高度，若超出投影片框 → 整體等比縮小至剛好放下（錨左上、保比例），預覽外觀才和範本一致。
+      const stageRef = useRef(null);
+      const tblRef = useRef(null);
+      const [fitScale, setFitScale] = useState(1);
+      const [imgTick, setImgTick] = useState(0);   // 圖片載入後 +1 → 觸發 fitScale 重新量測（圖載入會讓 natH 變）
+      useLayoutEffect(() => {
+        const tbl = tblRef.current, stage = stageRef.current;
+        if (!tbl) return;
+        const natH = tbl.offsetHeight;                  // 實際渲染高（含 HTML 邊框/行高 overhead）
+        const computedH = headerH + rows.length * rowH; // 依範本列高的應有高度（含下方留白才會正確）
+        const avail = stage ? (stage.clientHeight - tbl.offsetTop - 1) : Infinity;
+        // 校正 overhead 回「應有高度」→ 表格＝真實 cm 尺寸、下方留出範本該有的 margin；且絕不超出框。
+        const want = Math.min(1, computedH > 0 ? computedH / natH : 1, natH > 0 ? avail / natH : 1);
+        setFitScale((prev) => (Math.abs(prev - want) > 0.003 ? want : prev));
+      }, [boxH, tTop, headerH, rowH, rows.length, cols.length, tWidth, imgTick]);
       return (
-        <div className="stage border relative overflow-hidden" style={{ width: STAGE, height: boxH, background: "#fff" }}>
-          <table style={{ position: "absolute", left: tLeft, top: tTop, width: tWidth, borderCollapse: "collapse", tableLayout: "fixed", background: "#fff" }}>
+        <div ref={stageRef} className="stage border relative overflow-hidden shrink-0"
+          style={{ width: STAGE, height: boxH, background: "#fff" }}>
+          <div ref={tblRef} style={{ position: "absolute", left: tLeft, top: tTop, transform: usePng ? undefined : `scaleY(${fitScale})`, transformOrigin: "top left" }}>
+          <table style={{ width: tWidth, borderCollapse: "collapse", tableLayout: "fixed", background: usePng ? "transparent" : "#fff" }}>
             <colgroup>{cols.map((c, i) => <col key={i} style={{ width: Math.round(c.w * pxPerCm) }} />)}</colgroup>
             <thead>
               <tr style={{ height: headerH }}>
                 {cols.map((c, i) => (
-                  <th key={i} className="border border-slate-400 text-[11px] font-semibold text-slate-700 px-1 truncate">
-                    {c.sn ? (c.header || "SN") : c.header}
+                  <th key={i} className={`px-1 text-center align-middle ${usePng ? "border-transparent text-transparent" : "border border-slate-400 text-[11px] font-semibold text-slate-700"}`}>
+                    {usePng ? "" : (c.sn ? (c.header || "SN") : c.header)}
                   </th>
                 ))}
               </tr>
@@ -2363,11 +2392,14 @@
               {rows.map((item, ri) => (
                 <tr key={ri} style={{ height: rowH }} title={ri >= dataRows ? "超出範本列數 → 匯出時換頁" : undefined}>
                   {cols.map((c, ci) => {
-                    if (c.sn) return (
+                    if (c.sn) return (   // SN 欄：顯示 SN 清單值 + highlight（綠底）
                       <td key={ci} className="border border-slate-400 text-center text-xs font-semibold"
-                        style={{ background: isEmpty ? "transparent" : (ri >= dataRows ? "#fff7ed" : "#ecfdf5") }}>{item.sn}</td>
+                        style={{ background: ri >= dataRows ? "#fff7ed" : "#ecfdf5" }}>{item.sn}</td>
                     );
                     const s = srcForHeader(c.header);
+                    if (!s) return (   // 非 SN、非圖片欄（如 XX 標籤欄）→ 顯示範本實際文字（不管選哪欄都會顯示）
+                      <td key={ci} className="border border-slate-400 text-center text-xs">{tplTextAt(ri, ci + 1)}</td>
+                    );
                     const file = fileFor(s, item.sn);
                     const crop = perColCrop ? (s?.crop?.enabled ? s.crop : null) : globalCrop;
                     // 尺寸都用「相對固定高度容器」的百分比 → 即使 100% 也不會把列撐高
@@ -2381,10 +2413,10 @@
                       // 完整貼邊：整張塞進格內(同時受寬高限制)
                       : { maxHeight: `${f * 100}%`, maxWidth: "94%", objectFit: "contain", display: "block" };
                     return (
-                      <td key={ci} className="border border-slate-400 p-0">
+                      <td key={ci} className={`p-0 ${usePng ? "border-transparent" : "border border-slate-400"}`}>
                         {/* 固定高度 = 列高、overflow hidden → 圖片再大也不撐高列 */}
                         <div style={{ height: rowH, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
-                          {file ? <img src={thumbUrl(file.path, 240, crop)} style={imgStyle} /> : null}
+                          {file ? <img src={thumbUrl(file.path, 240, crop)} style={imgStyle} onLoad={() => setImgTick((t) => t + 1)} /> : null}
                         </div>
                       </td>
                     );
@@ -2393,6 +2425,7 @@
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       );
     }
@@ -3347,13 +3380,47 @@
           const text = cell ? String(cell.text || "").trim() : "";
           if (text) headers.push(text);
         }
-        // SN 欄資料列已填的值 → 供「讀範本欄」直接讀取(pptx 用，不碰 openpyxl)
-        const snCells = (slidesTbl.cells || [])
-          .filter((x) => x.c === d.snCol && x.r >= d.snRowStart && String(x.text || "").trim())
-          .sort((a, b) => a.r - b.r)
-          .map((x) => String(x.text).trim());
+        // SN 欄資料列已填的值 → 供「依範本 SN」直接讀取(pptx 用，不碰 openpyxl)。
+        //   範本若有多頁（每頁一個同結構表格），跨「所有頁」依序彙整 SN → 自動湊成多頁的 SN 清單。
+        const allTbls = (tableInfo?.tables || []);
+        const snCells = [];
+        for (const tbl of allTbls) {
+          (tbl.cells || [])
+            .filter((x) => x.c === d.snCol && x.r >= d.snRowStart && String(x.text || "").trim())
+            .sort((a, b) => a.r - b.r)
+            .forEach((x) => snCells.push(String(x.text).trim()));
+        }
         return { ...d, headers, snCells, ncols, dataRows: Math.max(0, (slidesTbl.rows || 0) - (d.snRowStart - 1)) };
       })();
+
+      // 載入範本時自動選 SN 欄（每個範本一次）：表頭關鍵字優先 → 只有一欄有資料 → 都不符合就不選(留第1欄手選)
+      const snAutoColRef = useRef(-1);
+      useEffect(() => {
+        const KW = /sn|sample|config|序[號号]|樣品|样品|編[號号]|编[號号]|serial/i;
+        const pick = (cells, ncols, headerR, dataStartR, colBase) => {
+          for (let c = 1; c <= ncols; c++) {   // 1) 表頭含關鍵字
+            const hc = cells.find((x) => x.r === headerR && x.c === (colBase + c - 1));
+            if (hc && KW.test(String(hc.text || ""))) return c;
+          }
+          const withData = [];                 // 2) 只有一欄有資料值
+          for (let c = 1; c <= ncols; c++) {
+            if (cells.some((x) => x.c === (colBase + c - 1) && x.r >= dataStartR && String(x.text || "").trim())) withData.push(c);
+          }
+          return withData.length === 1 ? withData[0] : null;   // 3) 不確定 → null（不自動選）
+        };
+        let best = null;
+        if (mode === "slides" && slidesTbl) {
+          const d = detectSlidesTable(slidesTbl) || { snRowStart: 2 };
+          const ncols = slidesTbl.cols || (slidesTbl.col_widths_cm || []).length;
+          best = pick(slidesTbl.cells || [], ncols, d.snRowStart - 1, d.snRowStart, 1);
+        } else if (mode === "excel" && xlGrid) {
+          const d = detectExcelTable(xlGrid);
+          if (d) best = pick(xlGrid.cells || [], d.region.maxC - d.region.minC + 1, d.region.minR, d.region.minR + 1, d.region.minC);
+        } else return;
+        if (snAutoColRef.current === tplLoadSeq) return;
+        snAutoColRef.current = tplLoadSeq;
+        if (best && best !== 1) setCfg((cf) => (cf.snColPick === best ? cf : { ...cf, snColPick: best }));
+      }, [slidesTbl, xlGrid, mode, tplLoadSeq]);
 
       // 依範本 SN：表格各欄選項（給「選 SN 欄」下拉用），value=相對表格的第幾欄(1-based)
       const snColOptions = (() => {
@@ -3646,8 +3713,12 @@
               for (let p = 0; p * dataRows < snList.length; p++) {
                 const sn = [], img = [];
                 for (let k = 0; k < dataRows; k++) {
-                  const idx = p * dataRows + k; if (idx >= snList.length) break;
-                  const item = snList[idx]; const r0 = dataStart0 + k;
+                  const idx = p * dataRows + k; const r0 = dataStart0 + k;
+                  if (idx >= snList.length) {   // 末頁不滿 → 寫空字串清掉範本預填的殘留 SN
+                    sn.push({ row: r0, col: snCol0, text: "", font_pt: cfg.label.font_pt || 14, bold: true });
+                    continue;
+                  }
+                  const item = snList[idx];
                   sn.push({ row: r0, col: snCol0, text: item.sn, font_pt: cfg.label.font_pt || 14, bold: true });
                   const stem = String(item.sn).toLowerCase();
                   for (const s of cfg.sources) {
@@ -4799,6 +4870,7 @@
                                 fill={cfg.snAdjust?.fill ?? 90} fit={cfg.snAdjust?.fit || "contain"}
                                 perColCrop={cfg.cropMode === "per-col"}
                                 globalCrop={cfg.crop?.enabled ? cfg.crop : null}
+                                pageTbl={(tableInfo?.tables || [])[pg] || slidesTbl}
                                 slideW={previewSlide.width_cm} slideH={previewSlide.height_cm} stageW={STAGE_W} />
                             </div>
                           ) : (
