@@ -2286,9 +2286,10 @@
       const cols = [];
       for (let c1 = 1; c1 <= ncols; c1++) {
         const w = cw[c1 - 1] || 1;
-        if (c1 - 1 === snCol0) { cols.push({ sn: true, w }); continue; }
         const cell = (slidesTbl.cells || []).find((x) => x.r === headerRow1 && x.c === c1);
-        cols.push({ sn: false, header: cell ? String(cell.text || "").trim() : "", w });
+        const header = cell ? String(cell.text || "").trim() : "";
+        if (c1 - 1 === snCol0) { cols.push({ sn: true, header, w }); continue; }
+        cols.push({ sn: false, header, w });
       }
       const srcForHeader = (h) => {
         const q = String(h || "").toLowerCase();
@@ -2339,8 +2340,8 @@
             <thead>
               <tr style={{ height: headerH }}>
                 {cols.map((c, i) => (
-                  <th key={i} className="border border-slate-400 text-[11px] font-semibold text-slate-700 px-1">
-                    {c.sn ? "SN" : c.header}
+                  <th key={i} className="border border-slate-400 text-[11px] font-semibold text-slate-700 px-1 truncate">
+                    {c.sn ? (c.header || "SN") : c.header}
                   </th>
                 ))}
               </tr>
