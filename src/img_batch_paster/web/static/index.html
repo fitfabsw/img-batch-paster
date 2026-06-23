@@ -56,6 +56,7 @@
       snSource: { col: "A", rowStart: 2 },  // SN 列號起算（commitSnList 用）
       // SN 清單來源：keyin=直接輸入 / range=範圍展開。xlsx 範本 SN 欄有值時會自動讀入 keyin 框。
       snInput: { mode: "keyin", text: "", prefix: "10B-#", from: 1, to: 8, pad: 1 },  // pad=位數(1=不補零)
+      snColPick: 1,   // 依範本 SN：哪一欄是 SN 欄（1-based，相對表格最左欄；1=最左欄＝預設）
       // 依範本 SN（PPT）圖片在儲存格內的調整：fit=填法(contain完整貼邊/cover裁切填滿/fill拉伸)
       //   fill=佔格高百分比(contain 用) / dx,dy=整體位移 / manual 微調
       snAdjust: { fit: "contain", fill: 90, dx: 0, dy: 0, manual: false },
@@ -230,17 +231,18 @@
     }
 
     // 從 ppt/key 表格資訊偵測「表頭列數 + 標籤欄 + SN 寫入位置」（比照 detectExcelTable）
-    function detectSlidesTable(t) {
+    function detectSlidesTable(t, snCol1) {
       if (!t || !t.rows || !t.cols) return null;
       const rows = t.rows, cols = t.cols;
-      // 表頭列偵測只看「影像欄」(第 1 欄之後)有沒有文字 —— SN 欄(第 1 欄)在資料列也會有值
-      //   (如已預填的 10B-8/10B-2)，若一併算入會把表頭誤判到資料列、SN 欄抓不到。
-      const textRows = new Set((t.cells || []).filter((c) => c.c > 1 && String(c.text || "").trim()).map((c) => c.r));
+      const snC = Math.max(1, Math.min(cols, snCol1 || 1));   // 1-based SN 欄（預設第 1 欄）
+      // 表頭列偵測只看「SN 欄以外」的欄有沒有文字 —— SN 欄在資料列也會有值（如已預填的
+      //   10B-8/10B-2），若一併算入會把表頭誤判到資料列、SN 欄抓不到。
+      const textRows = new Set((t.cells || []).filter((c) => c.c !== snC && String(c.text || "").trim()).map((c) => c.r));
       let skipRows = 0;
       while (skipRows < rows - 1 && textRows.has(skipRows + 1)) skipRows++;
       if (skipRows === 0) skipRows = 1;     // 無文字也假設 1 表頭列
       const skipCols = 1;                   // 第一欄當標籤/SN 欄（同 xlsx 慣例）
-      return { skipRows, skipCols, snCol: 1, snRowStart: skipRows + 1 };
+      return { skipRows, skipCols, snCol: snC, snRowStart: skipRows + 1 };
     }
 
     // slidesSnInfo 的總列數（給 UI 顯示用）：資料起始列上一列＝表頭 → rows = dataRows + 表頭數
@@ -879,7 +881,7 @@
     }
 
     // SN 對照模式：左欄 — SN 來源設定 + 多來源資料夾管理
-    function SnMatchPanel({ cfg, setCfg, ws, tplPath, mode, slidesSnInfo, xlsxSn, snList, setSnList, setStatus, setSelected, setCropOpen, setCropSourceId, pushHistory }) {
+    function SnMatchPanel({ cfg, setCfg, ws, tplPath, mode, slidesSnInfo, xlsxSn, snColOptions, snList, setSnList, setStatus, setSelected, setCropOpen, setCropSourceId, pushHistory }) {
       const isSlides = mode === "slides" && !!slidesSnInfo;
       const isExcel = mode === "excel";
       const headers = slidesSnInfo?.headers || [];
@@ -899,7 +901,7 @@
       // 依範本決定來源：有 SN 值 → 自動切「讀範本欄」並讀入；沒有 → 若停在 templateCol 則退回直接輸入
       const snAutoRef = useRef("");
       useEffect(() => {
-        const key = `${tplPath}|${templateHasSn}`;
+        const key = `${tplPath}|${cfg.snColPick || 1}|${templateHasSn}`;   // 換 SN 欄也要重讀
         if (snAutoRef.current === key) return;
         snAutoRef.current = key;
         if (templateHasSn) {
@@ -909,7 +911,7 @@
         } else if (cfg.snInput.mode === "templateCol") {
           setCfg((c) => ({ ...c, snInput: { ...c.snInput, mode: "keyin" } }));
         }
-      }, [tplPath, templateHasSn]);
+      }, [tplPath, cfg.snColPick, templateHasSn]);
 
       const dedupe = (list) => {
         const seen = new Set();
@@ -1012,6 +1014,17 @@
 
       return (
         <div className="space-y-3">
+          {/* SN 欄選擇：範本 SN 欄不一定在第一欄 → 讓使用者指定 */}
+          {(snColOptions || []).length > 1 && (
+            <div className="border rounded-lg p-2 bg-purple-50/50 flex items-center gap-2">
+              <span className="text-xs font-medium text-purple-900 shrink-0">SN 欄</span>
+              <select value={Math.min(cfg.snColPick || 1, snColOptions.length)}
+                onChange={(e) => setCfg((c) => ({ ...c, snColPick: parseInt(e.target.value) || 1 }))}
+                className="flex-1 border rounded px-2 py-1 text-xs bg-white">
+                {snColOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+          )}
           {/* SN 來源（手動提供） */}
           <div className="border rounded-lg p-2 bg-purple-50/50">
             <div className="text-sm font-medium text-purple-900 mb-2">SN 清單來源</div>
@@ -3262,14 +3275,18 @@
         if (mode !== "excel" || !xlGrid) return null;
         const d = detectExcelTable(xlGrid);
         if (!d) return null;
-        const snColIdx = colLetterToIdx(d.snCol);
+        // SN 欄＝表格最左欄 +(snColPick-1)；snColPick 是「相對表格的第幾欄」(1=最左)
+        const tblCols = d.region.maxC - d.region.minC + 1;
+        const pick = Math.max(1, Math.min(tblCols, cfg.snColPick || 1));
+        const snColIdx = d.region.minC + (pick - 1);
+        const letterOf = (ci) => ((xlGrid.cols || [])[ci - 1] || {}).letter || "";
         const headerRow = d.region.minR;   // 表格首列＝表頭（SN 標籤），SN 資料從下一列起
         const sns = (xlGrid.cells || [])
           .filter((c) => c.c === snColIdx && c.r > headerRow && String(c.text || "").trim())
           .sort((a, b) => a.r - b.r)
           .map((c) => ({ sn: String(c.text).trim(), row: c.r }));
-        return { col: d.snCol, startRow: headerRow + 1, sns };
-      }, [mode, xlGrid]);
+        return { col: letterOf(snColIdx), startRow: headerRow + 1, sns };
+      }, [mode, xlGrid, cfg.snColPick]);
 
       // 範本表頭欄位順序（給「依範本表頭」還原按鈕用；非 xlsx 表格則為空）。
       // 可靠依據：UI 的「起始 cell」——其欄＝影像欄起點、上一列＝表頭列；不靠猜 SN 欄。
@@ -3314,7 +3331,7 @@
       // 依範本 SN（PPT）：偵測表頭/SN欄/資料列，並列出可對應的表頭欄（給來源欄位下拉用）
       const slidesSnInfo = (() => {
         if (!slidesTbl) return null;
-        const d = detectSlidesTable(slidesTbl) || { snCol: 1, snRowStart: 2 };
+        const d = detectSlidesTable(slidesTbl, cfg.snColPick) || { snCol: 1, snRowStart: 2 };
         const headerRow1 = d.snRowStart - 1, snCol0 = d.snCol - 1;
         const headers = [];
         for (let c1 = 1; c1 <= (slidesTbl.cols || 0); c1++) {
@@ -3329,6 +3346,33 @@
           .sort((a, b) => a.r - b.r)
           .map((x) => String(x.text).trim());
         return { ...d, headers, snCells, dataRows: Math.max(0, (slidesTbl.rows || 0) - (d.snRowStart - 1)) };
+      })();
+
+      // 依範本 SN：表格各欄選項（給「選 SN 欄」下拉用），value=相對表格的第幾欄(1-based)
+      const snColOptions = (() => {
+        if (mode === "slides" && slidesTbl) {
+          const headerRow1 = (slidesSnInfo?.snRowStart || 2) - 1;
+          const ncols = slidesTbl.cols || (slidesTbl.col_widths_cm || []).length;
+          return Array.from({ length: ncols }, (_, i) => {
+            const c1 = i + 1;
+            const cell = (slidesTbl.cells || []).find((x) => x.r === headerRow1 && x.c === c1);
+            const h = cell ? String(cell.text || "").trim() : "";
+            return { value: c1, label: `第 ${c1} 欄${h ? `（${h}）` : ""}` };
+          });
+        }
+        if (mode === "excel" && xlGrid) {
+          const d = detectExcelTable(xlGrid);
+          if (!d) return [];
+          const opts = [];
+          for (let ci = d.region.minC; ci <= d.region.maxC; ci++) {
+            const cell = (xlGrid.cells || []).find((x) => x.r === d.region.minR && x.c === ci);
+            const h = cell ? String(cell.text || "").trim() : "";
+            const letter = ((xlGrid.cols || [])[ci - 1] || {}).letter || "";
+            opts.push({ value: ci - d.region.minC + 1, label: `${letter} 欄${h ? `（${h}）` : ""}` });
+          }
+          return opts;
+        }
+        return [];
       })();
 
       // 套用表格：用表格座標填「位置 + 圖片區總寬」，圖片欄數/列數「跟隨使用者左側設定」
@@ -3575,7 +3619,7 @@
             if (!slidesTbl) { setStatus("錯誤: 此 PPT 範本沒有表格"); return; }
             setBusy(true); setStatus("組裝 SN 對照投影片…");
             try {
-              const d = detectSlidesTable(slidesTbl) || { snCol: 1, snRowStart: 2 };
+              const d = detectSlidesTable(slidesTbl, cfg.snColPick) || { snCol: 1, snRowStart: 2 };
               const snCol0 = d.snCol - 1, dataStart0 = d.snRowStart - 1;
               const headerRow1 = d.snRowStart - 1, ncols = slidesTbl.cols || (slidesTbl.col_widths_cm || []).length;
               const headerText = (c1) => { const cell = (slidesTbl.cells || []).find((x) => x.r === headerRow1 && x.c === c1); return cell ? String(cell.text || "").trim() : ""; };
@@ -3949,7 +3993,7 @@
       // 依範本 SN（PPT）：用範本表格幾何把多來源圖依 SN 貼進儲存格 → 預覽與匯出共用
       const snSlide = (cfg.snMatchMode && mode === "slides" && slidesTbl && snList.length)
         ? (() => {
-            const d = detectSlidesTable(slidesTbl) || { snCol: 1, snRowStart: 2 };
+            const d = detectSlidesTable(slidesTbl, cfg.snColPick) || { snCol: 1, snRowStart: 2 };
             return computeSnMatchSlides(slidesTbl, snList, cfg.sources, {
               snCol1: d.snCol, dataStartRow1: d.snRowStart,
               fontPt: cfg.label.font_pt || 18,
@@ -4177,6 +4221,7 @@
                     mode={mode}
                     slidesSnInfo={slidesSnInfo}
                     xlsxSn={xlsxSn}
+                    snColOptions={snColOptions}
                     snList={snList}
                     setSnList={setSnList}
                     setStatus={setStatus}
