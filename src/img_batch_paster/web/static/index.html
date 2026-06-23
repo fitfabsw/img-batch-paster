@@ -4456,6 +4456,22 @@
                 onDragLeave={(e) => { if (e.target === e.currentTarget) { setDragOverIdx(null); stopAutoScroll(); } }}>
 
                 {cfg.snMatchMode ? (
+                  <>
+                  {/* 對不到 SN 的圖會被靜默丟棄 → 明確列出，避免「沒出現卻不知為何」 */}
+                  {(() => {
+                    if (!snList.length) return null;
+                    const snSet = new Set(snList.map((x) => String(x.sn).toLowerCase()));
+                    const unmatched = cfg.sources.flatMap((s) => s.files || [])
+                      .filter((f) => !snSet.has((f.name || "").replace(/\.[^./]+$/, "").toLowerCase()));
+                    if (!unmatched.length) return null;
+                    const sample = unmatched.slice(0, 5).map((f) => f.name).join("、");
+                    return (
+                      <div className="mb-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                        ⚠ {unmatched.length} 張圖檔名對不到任何 SN（不會貼上）：<span className="font-mono">{sample}{unmatched.length > 5 ? ` …(+${unmatched.length - 5})` : ""}</span>
+                        <div className="text-[10px] text-amber-600 mt-0.5">目前 SN：{snList.slice(0, 6).map((x) => x.sn).join("、")}{snList.length > 6 ? "…" : ""}。請確認「檔名(去副檔名) ＝ 某個 SN」。</div>
+                      </div>
+                    );
+                  })()}
                   <SnMatchMatrix
                     cfg={cfg}
                     snList={snList}
@@ -4476,6 +4492,7 @@
                       setCropOpen(true);
                     }}
                   />
+                  </>
                 ) : <>
                 {orderedFiles.length === 0 && (
                   <div className="text-xs text-slate-400 text-center py-8">
