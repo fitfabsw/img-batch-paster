@@ -182,7 +182,7 @@ def write_xlsx(
     sheet_name: str | None = None,
     embed_in_cell: bool = False,
     lock_images: bool = True,
-    img_fit: str = "cover",
+    img_fit: str = "contain",
     contain_inset: float = _DEFAULT_CONTAIN_INSET,
     crop: dict | None = None,
 ) -> Path:

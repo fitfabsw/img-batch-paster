@@ -788,7 +788,7 @@ def api_export():
         if not xl_placements:
             return jsonify({"error": "沒有可匯出的儲存格"}), 400
         embed_in_cell = bool(data.get("embedInCell"))
-        img_fit = data.get("imgFit", "cover")
+        img_fit = data.get("imgFit", "contain")
         contain_inset = float(data.get("containInset", 0.05))
         crop = data.get("crop")
         write_xlsx(xl_placements, out_path, template_path,
