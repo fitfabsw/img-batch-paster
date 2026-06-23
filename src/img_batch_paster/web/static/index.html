@@ -58,7 +58,7 @@
       snInput: { mode: "keyin", text: "", prefix: "10B-#", from: 1, to: 8, pad: 1 },  // pad=位數(1=不補零)
       // 依範本 SN（PPT）圖片在儲存格內的調整：fit=填法(contain完整貼邊/cover裁切填滿/fill拉伸)
       //   fill=佔格高百分比(contain 用) / dx,dy=整體位移 / manual 微調
-      snAdjust: { fit: "contain", fill: 90, dx: 0, dy: 0, manual: false },
+      snAdjust: { fit: "contain_align", fill: 90, dx: 0, dy: 0, manual: false },
       sources: [          // SN 對照模式專用：多個來源資料夾 (每元素: {id, name, folder, files, targetCol, crop})
       ],
       crop: { enabled: false, left: 0, top: 0, right: 1, bottom: 1 },  // 0..1 相對裁剪 (全域)
@@ -3592,7 +3592,7 @@
                 pages.push({ sn, img });
               }
               if (!mapped) throw new Error("沒有可匯出的圖片（檢查 SN 與來源檔名、來源資料夾名 vs 表頭是否對應）");
-              const fitMode = cfg.snAdjust?.fit || "contain";
+              const fitMode = cfg.snAdjust?.fit || "contain_align";
               const fillFrac = Math.max(5, Math.min(100, cfg.snAdjust?.fill ?? 90)) / 100;
               // 等高對齊：算出所有圖「都放得下」的共同高度(佔格高比例)，傳給後端 → 保比例不裁切、全部同高
               let alignFrac = fillFrac;
@@ -4684,7 +4684,7 @@
                         <ExcelPreview grid={xlGrid} cfg={cfg} orderedFiles={orderedFiles} selected={selected} thumbUrl={thumbUrl} snList={snList} />
                       )}
                       {/* 依範本 SN（PPT）：HTML 表格預覽（取代疊在 PNG 上的做法 → 天生對齊）*/}
-                      {tplPath && mode === "slides" && cfg.snMatchMode && slidesTbl && (() => {
+                      {tplPath && mode === "slides" && cfg.snMatchMode && (() => {
                         // 依目前頁碼切出該頁的 SN（每頁＝範本資料列數）→ 換頁顯示不同 SN
                         const dr = Math.max(1, slidesSnInfo?.dataRows || snList.length || 1);
                         const totalPages = Math.max(1, Math.ceil(snList.length / dr));
@@ -4696,21 +4696,41 @@
                           : [];
                         return (
                         <div className="flex flex-col items-center gap-3">
-                          {snList.length === 0 && (
+                          {snList.length === 0 && slidesTbl && (
                             <div className="text-[11px] text-slate-400">範本表格結構（左側「SN 清單來源」產生 SN 後即填入）</div>
                           )}
-                          <SnSlidePreview slidesTbl={slidesTbl} slidesSnInfo={slidesSnInfo}
-                            snList={pageSns} sources={cfg.sources} thumbUrl={thumbUrl}
-                            fill={cfg.snAdjust?.fill ?? 90} fit={cfg.snAdjust?.fit || "contain"}
-                            perColCrop={cfg.cropMode === "per-col"}
-                            globalCrop={cfg.crop?.enabled ? cfg.crop : null}
-                            slideW={previewSlide.width_cm} slideH={previewSlide.height_cm} stageW={STAGE_W} />
-                          {totalPages > 1 && (
+                          {/* 載入中 spinner overlay：與「依檔名」完全一致（同款 stage 框 + spinner） */}
+                          {slidesTbl ? (
+                            <div className="relative">
+                              {busy && (
+                                <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center z-10">
+                                  <div className="spinner mb-3"></div>
+                                  <div className="text-sm text-slate-700 font-medium px-4 text-center max-w-[80%]">{status || "載入範本中…"}</div>
+                                </div>
+                              )}
+                              <SnSlidePreview slidesTbl={slidesTbl} slidesSnInfo={slidesSnInfo}
+                                snList={pageSns} sources={cfg.sources} thumbUrl={thumbUrl}
+                                fill={cfg.snAdjust?.fill ?? 90} fit={cfg.snAdjust?.fit || "contain_align"}
+                                perColCrop={cfg.cropMode === "per-col"}
+                                globalCrop={cfg.crop?.enabled ? cfg.crop : null}
+                                slideW={previewSlide.width_cm} slideH={previewSlide.height_cm} stageW={STAGE_W} />
+                            </div>
+                          ) : (
+                            <div className="stage border relative overflow-hidden" style={{ width: STAGE_W, height: stageH }}>
+                              {busy && (
+                                <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center z-10">
+                                  <div className="spinner mb-3"></div>
+                                  <div className="text-sm text-slate-700 font-medium px-4 text-center max-w-[80%]">{status || "載入範本中…"}</div>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                          {slidesTbl && totalPages > 1 && (
                             <div className="text-[11px] text-amber-600">
                               ⚠ SN 數（{snList.length}）超過範本資料列（{dr}）→ 分成 {totalPages} 頁（用右上翻頁鈕切換；第 {pg + 1} 頁）。
                             </div>
                           )}
-                          {snList.length > 0 && (
+                          {slidesTbl && snList.length > 0 && (
                             <div className="flex flex-col items-center gap-2">
                               <div className="flex items-center gap-2">
                                 <span className="text-xs text-slate-600">圖片填法</span>
@@ -4718,13 +4738,13 @@
                                   {[{ v: "contain", label: "完整貼邊" }, { v: "contain_align", label: "等高對齊" }, { v: "fill", label: "拉伸" }].map((opt) => (
                                     <button key={opt.v}
                                       onClick={() => setCfg((c) => ({ ...c, snAdjust: { ...c.snAdjust, fit: opt.v } }))}
-                                      className={`px-2.5 py-1 ${(cfg.snAdjust?.fit || "contain") === opt.v ? "bg-slate-700 text-white" : "hover:bg-slate-100"}`}>
+                                      className={`px-2.5 py-1 ${(cfg.snAdjust?.fit || "contain_align") === opt.v ? "bg-slate-700 text-white" : "hover:bg-slate-100"}`}>
                                       {opt.label}
                                     </button>
                                   ))}
                                 </div>
                               </div>
-                              {(cfg.snAdjust?.fit || "contain") !== "fill" && (
+                              {(cfg.snAdjust?.fit || "contain_align") !== "fill" && (
                                 <div className="relative mt-1">
                                   <Stepper label="填滿格高" orient="h" step={2} value={cfg.snAdjust?.fill ?? 90}
                                     onChange={(v) => setCfg((c) => ({ ...c, snAdjust: { ...c.snAdjust, fill: Math.max(5, Math.min(100, v)) } }))} />
