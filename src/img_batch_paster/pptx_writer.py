@@ -87,6 +87,17 @@ def _find_table(slide):
     return None
 
 
+def _find_table_shape(slide):
+    """回傳 (graphicframe shape, table)；找不到回 (None, None)。浮動定位需要 shape 的 left/top。"""
+    for shp in slide.shapes:
+        try:
+            if shp.has_table:
+                return shp, shp.table
+        except Exception:
+            continue
+    return None, None
+
+
 def _write_sn_into_table(slide, placements, sn_col: int, sn_row_start: int) -> bool:
     """把含 text + row_idx 的 placement 寫進 slide 第一個表格的儲存格。
     回傳 True 表示有寫入 (table 存在)；False 則呼叫端應 fallback 用文字方塊。"""
@@ -264,14 +275,44 @@ def _set_cell_picture_fill(slide, cell, image_path: Path) -> None:
         tcPr.append(blipFill)
 
 
+def _cell_origin_emu(tbl_shape, table, r: int, c: int):
+    """儲存格 (r,c) 在投影片上的絕對位置與大小（EMU）：表格左上 + 前面欄寬/列高累加。"""
+    cx = int(tbl_shape.left) + sum(int(table.columns[i].width) for i in range(c))
+    cy = int(tbl_shape.top) + sum(int(table.rows[i].height) for i in range(r))
+    return cx, cy, int(table.columns[c].width), int(table.rows[r].height)
+
+
+def _float_rect_emu(cx, cy, cw, ch, aspect: float, fit: str, fill: float, align_frac: float):
+    """依填法算圖片在儲存格內的浮動矩形（EMU），對齊預覽：contain 置中保比例、contain_align 等高、fill 拉滿。"""
+    if fit == "fill":
+        return cx, cy, cw, ch
+    if fit == "contain_align":
+        h = ch * align_frac
+        w = h * aspect
+        if w > cw:                     # 太寬則改以寬為界
+            w = cw; h = w / aspect
+    else:                              # contain（完整貼邊）：塞進 0.94×寬、fill×高
+        bw, bh = cw * 0.94, ch * fill
+        if bw / bh > aspect:
+            h = bh; w = h * aspect
+        else:
+            w = bw; h = w / aspect
+    x = cx + (cw - w) / 2
+    y = cy + (ch - h) / 2
+    return int(x), int(y), int(w), int(h)
+
+
 def write_sn_cell_pages(template: Path, out_path: Path, pages: list[dict],
-                        fill: float = 0.9, fit: str = "contain", align_frac: float = 0.9) -> Path:
-    """依範本 SN（PPT）：把 SN 文字與照片直接填進「表格儲存格」。
-    照片成為儲存格內容（cell fill）→ 跟著儲存格走，任何檢視器都對齊（浮動圖會因列高渲染差異漂移）。
+                        fill: float = 0.9, fit: str = "contain", align_frac: float = 0.9,
+                        embed: str = "float") -> Path:
+    """依 SN 清單（PPT）：SN 文字寫進「表格儲存格」；照片依 embed 模式放置。
+    embed="float"（預設）：照片放成「浮動圖片」、精準定位在該格座標 → 可單獨拖曳/縮放，與依檔名一致。
+    embed="cell"：照片設成儲存格填滿（blipFill）→ 黏在格子裡、列高自動長高也不漂移（備援）。
     pages: 每頁 { "sn": [{row,col,text,font_pt,bold}], "img": [{row,col,path,crop}] }（row/col 0-based）。
     """
     from pptx.util import Pt
     from pptx.util import Emu as _Emu
+    from .xlsx_writer import _apply_crop
     if not pages:
         raise ValueError("pages 不可為空")
     prs = Presentation(str(template))
@@ -291,7 +332,7 @@ def write_sn_cell_pages(template: Path, out_path: Path, pages: list[dict],
         page_slides.append(_duplicate_slide(prs, base))
     tmp_dir = out_path.parent / "_cellimg"
     for slide, page in zip(page_slides, pages):
-        table = _find_table(slide)
+        tbl_shape, table = _find_table_shape(slide)
         if table is None:
             continue
         nrows, ncols = len(table.rows), len(table.columns)
@@ -309,10 +350,19 @@ def write_sn_cell_pages(template: Path, out_path: Path, pages: list[dict],
             r, c = int(ic["row"]), int(ic["col"])
             if not (0 <= r < nrows and 0 <= c < ncols) or not ic.get("path"):
                 continue
-            cw_cm = _Emu(table.columns[c].width).cm
-            rh_cm = _Emu(table.rows[r].height).cm
-            comp = _composite_cell_image(Path(ic["path"]), cw_cm, rh_cm, fill, ic.get("crop"), tmp_dir, fit, align_frac)
-            _set_cell_picture_fill(slide, table.cell(r, c), comp)
+            if embed == "cell":
+                cw_cm = _Emu(table.columns[c].width).cm
+                rh_cm = _Emu(table.rows[r].height).cm
+                comp = _composite_cell_image(Path(ic["path"]), cw_cm, rh_cm, fill, ic.get("crop"), tmp_dir, fit, align_frac)
+                _set_cell_picture_fill(slide, table.cell(r, c), comp)
+            else:   # float（預設）：裁切後放成浮動圖片，定位在該格座標
+                crop = ic.get("crop")
+                src = _apply_crop(Path(ic["path"]), crop, tmp_dir) if crop else Path(ic["path"])
+                ar = _image_aspect(src)                  # _image_aspect 回 h/w
+                aspect = (1.0 / ar) if ar else 1.0       # → w/h（_float_rect_emu 需要）
+                cx, cy, cw, ch = _cell_origin_emu(tbl_shape, table, r, c)
+                x, y, w, h = _float_rect_emu(cx, cy, cw, ch, aspect, fit, fill, align_frac)
+                slide.shapes.add_picture(str(src), x, y, width=w, height=h)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     prs.save(str(out_path))
     return out_path
