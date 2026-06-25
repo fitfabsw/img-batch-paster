@@ -55,7 +55,7 @@
       snMatchMode: false, // SN 對照模式：手動提供 SN list、每個 SN 從多來源資料夾找對應圖
       snSource: { col: "A", rowStart: 2 },  // SN 列號起算（產生 SN 清單時 row 從這裡算）
       // SN 清單來源：keyin=直接輸入 / range=範圍展開。xlsx 範本 SN 欄有值時會自動讀入 keyin 框。
-      snInput: { mode: "keyin", text: "", prefix: "10B-#", from: 1, to: 8, pad: 1 },  // pad=位數(1=不補零)
+      snInput: { mode: "keyin", text: "", prefix: "", from: 1, to: 8, pad: 1 },  // pad=位數(1=不補零)；prefix 預設空白＝不預填(PD #29)
       snColPick: 1,   // 依範本 SN：哪一欄是 SN 欄（1-based，相對表格最左欄；1=最左欄＝預設）
       // 依範本 SN（PPT）圖片在儲存格內的調整：fit=填法(contain完整貼邊/cover裁切填滿/fill拉伸)
       //   fill=佔格高百分比(contain 用) / dx,dy=整體位移 / manual 微調
@@ -933,13 +933,15 @@
         if (cfg.snInput.mode === "keyin") {
           list = (cfg.snInput.text || "").split(/[\s,，、\n]+/);   // 逗號 / 空白 / 換行分隔
         } else {
-          // 範圍展開：prefix 含 # → 用 from..to 的整數代入（可補零）
+          // 範圍展開：前綴(群組名) + 編號。前綴含 # → 把 # 換成編號(進階)；否則編號接在前綴後面。
+          //   前綴空白 → 不產生(維持 #29 不預填)。
           const { prefix, from, to, pad } = cfg.snInput;
           const a = parseInt(from), b = parseInt(to);
-          if (String(prefix).includes("#") && !isNaN(a) && !isNaN(b) && b >= a) {
+          if (String(prefix).trim() && !isNaN(a) && !isNaN(b) && b >= a) {
             const width = Math.max(1, parseInt(pad) || 1);   // 位數：1=不補零(10B-1)、2=10B-01…
             for (let n = a; n <= b && list.length < 2000; n++) {
-              list.push(String(prefix).replace(/#/g, String(n).padStart(width, "0")));
+              const num = String(n).padStart(width, "0");
+              list.push(String(prefix).includes("#") ? String(prefix).replace(/#/g, num) : String(prefix) + num);
             }
           }
         }
@@ -1069,10 +1071,10 @@
             {cfg.snInput.mode === "range" && (
               <div className="space-y-1">
                 <label className="flex flex-col text-[11px] text-slate-600">
-                  <span className="mb-0.5">樣板（# 代表編號）</span>
+                  <span className="mb-0.5">前綴（群組名，編號接在後面）</span>
                   <input value={cfg.snInput.prefix}
                     onChange={(e) => setCfg((c) => ({ ...c, snInput: { ...c.snInput, prefix: e.target.value } }))}
-                    placeholder="10B-#" className="border rounded px-2 py-1 text-sm font-mono" />
+                    placeholder="序號前綴，如 10B-" className="border rounded px-2 py-1 text-sm font-mono" />
                 </label>
                 <div className="grid grid-cols-3 gap-1">
                   <label className="flex flex-col text-[11px] text-slate-600"><span className="mb-0.5">起</span>
@@ -1088,13 +1090,13 @@
                       onChange={(e) => setCfg((c) => ({ ...c, snInput: { ...c.snInput, pad: Math.max(1, parseInt(e.target.value) || 1) } }))}
                       className="border rounded px-2 py-1 text-sm" /></label>
                 </div>
-                {String(cfg.snInput.prefix).includes("#") && (
-                  <div className="text-[10px] text-slate-400 font-mono">
-                    例：{String(cfg.snInput.prefix).replace(/#/g, String(cfg.snInput.from).padStart(Math.max(1, parseInt(cfg.snInput.pad) || 1), "0"))}
-                    {" … "}
-                    {String(cfg.snInput.prefix).replace(/#/g, String(cfg.snInput.to).padStart(Math.max(1, parseInt(cfg.snInput.pad) || 1), "0"))}
-                  </div>
-                )}
+                {String(cfg.snInput.prefix).trim() && (() => {
+                  const w = Math.max(1, parseInt(cfg.snInput.pad) || 1);
+                  const ex = (v) => { const num = String(v).padStart(w, "0"); const p = String(cfg.snInput.prefix); return p.includes("#") ? p.replace(/#/g, num) : p + num; };
+                  return (
+                    <div className="text-[10px] text-slate-400 font-mono">例：{ex(cfg.snInput.from)} … {ex(cfg.snInput.to)}</div>
+                  );
+                })()}
               </div>
             )}
 
