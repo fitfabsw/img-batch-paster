@@ -54,8 +54,8 @@
       autoAlign: true,    // 依檔名 group+idx 對位 (固定；「依順序」模式已移除)
       snMatchMode: false, // SN 對照模式：手動提供 SN list、每個 SN 從多來源資料夾找對應圖
       snSource: { col: "A", rowStart: 2 },  // SN 列號起算（產生 SN 清單時 row 從這裡算）
-      // SN 清單來源：keyin=直接輸入 / range=範圍展開。xlsx 範本 SN 欄有值時會自動讀入 keyin 框。
-      snInput: { mode: "keyin", text: "", prefix: "", from: 1, to: 8, pad: 1 },  // pad=位數(1=不補零)；prefix 預設空白＝不預填(PD #29)
+      // SN 清單來源：autoSrc=自動(來源檔名聯集，預設) / keyin=直接輸入 / range=範圍 / templateCol=依範本 SN。
+      snInput: { mode: "autoSrc", text: "", prefix: "", from: 1, to: 8, pad: 1 },  // pad=位數(1=不補零)；prefix 預設空白＝不預填(PD #29)
       snColPick: 1,   // 依範本 SN：哪一欄是 SN 欄（1-based，相對表格最左欄；1=最左欄＝預設）
       // 依範本 SN（PPT）圖片在儲存格內的調整：fit=填法(contain完整貼邊/cover裁切填滿/fill拉伸)
       //   fill=佔格高百分比(contain 用) / dx,dy=整體位移 / manual 微調
@@ -911,8 +911,8 @@
           setSnList(templateSns);
           setStatus(`已讀取範本 SN 欄（${tmplSnColLabel}）${templateSns.length} 個`);
         } else if (cfg.snInput.mode === "templateCol") {
-          // 新選的欄沒有 SN 值 → 退回手動，並清掉上一欄自動讀進來的 SN（否則殘留會畫到新欄）
-          setCfg((c) => ({ ...c, snInput: { ...c.snInput, mode: "keyin" } }));
+          // 新選的欄沒有 SN 值 → 退回「自動(來源)」，並清掉上一欄自動讀進來的 SN（否則殘留會畫到新欄）
+          setCfg((c) => ({ ...c, snInput: { ...c.snInput, mode: "autoSrc" } }));
           setSnList([]);
         }
       }, [tplLoadSeq, tplPath, cfg.snColPick, templateHasSn]);
@@ -949,6 +949,17 @@
         const rowStart = cfg.snSource.rowStart || 2;
         setSnList(clean.map((sn, i) => ({ sn, row: rowStart + i })));
       }, [cfg.snInput.mode, cfg.snInput.text, cfg.snInput.prefix, cfg.snInput.from, cfg.snInput.to, cfg.snInput.pad]);
+
+      // 自動(來源)（PD #30）：SN 清單 = 所有資料來源資料夾「檔名(去副檔名)」的聯集(superset)，
+      //   去重 + 字母/數字排序。上傳來源後即時長出，免另外提供 SN 清單。
+      useEffect(() => {
+        if (cfg.snInput.mode !== "autoSrc") return;
+        const stems = (cfg.sources || []).flatMap((s) => (s.files || [])
+          .map((f) => (f.name || "").replace(/\.[^./]+$/, "")));
+        const clean = dedupe(stems).sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
+        const rowStart = cfg.snSource.rowStart || 2;
+        setSnList(clean.map((sn, i) => ({ sn, row: rowStart + i })));
+      }, [cfg.snInput.mode, cfg.sources, cfg.snSource.rowStart]);
 
       const uploadSource = async (sid, files) => {
         if (!ws || !files || !files.length) return;
@@ -1034,13 +1045,20 @@
           {/* SN 來源（手動提供） */}
           <div className="border rounded-lg p-2 bg-purple-50/50">
             <div className="text-sm font-medium text-purple-900 mb-2">SN 清單來源</div>
-            {/* 模式選擇：範本有 SN 值 → 鎖「讀範本欄」、停用手動；沒有 → 反之 */}
-            <div className="grid grid-cols-3 gap-1 mb-2 text-[11px]">
-              {[["keyin", "直接輸入"], ["range", "範圍"], ["templateCol", "依範本 SN"]].map(([m, label]) => {
+            {/* 模式選擇：自動(來源)為預設；範本有 SN 值 → 鎖手動三項、強制「依範本 SN」；沒有 → 反之 */}
+            <div className="grid grid-cols-4 gap-1 mb-2 text-[11px]">
+              {[["autoSrc", "自動(來源)"], ["keyin", "直接輸入"], ["range", "範圍"], ["templateCol", "依範本 SN"]].map(([m, label]) => {
                 const disabled = m === "templateCol" ? !templateHasSn : templateHasSn;
                 return (
                   <button key={m} disabled={disabled}
-                    onClick={() => !disabled && setCfg((c) => ({ ...c, snInput: { ...c.snInput, mode: m } }))}
+                    onClick={() => !disabled && setCfg((c) => {
+                      const next = { ...c.snInput, mode: m };
+                      // 切到「直接輸入」時，把目前清單(自動/範圍帶出的)填入以便編輯；已有手打內容則不覆蓋
+                      if (m === "keyin" && !(c.snInput.text || "").trim() && snList.length) {
+                        next.text = snList.map((s) => s.sn).join(", ");
+                      }
+                      return { ...c, snInput: next };
+                    })}
                     title={disabled ? (m === "templateCol" ? "範本未定義 SN（資料區留空）" : "範本已定義 SN → 用「依範本 SN」") : ""}
                     className={`rounded py-1 border ${cfg.snInput.mode === m ? "bg-purple-600 text-white border-purple-700" : "bg-white text-slate-600 hover:bg-purple-100"} ${disabled ? "opacity-40 cursor-not-allowed" : ""}`}>
                     {label}
@@ -1048,6 +1066,14 @@
                 );
               })}
             </div>
+
+            {cfg.snInput.mode === "autoSrc" && (
+              <div className="text-[10px] space-y-0.5">
+                {snList.length > 0
+                  ? <div className="text-emerald-600">✓ 已由下方資料來源檔名自動擷取(聯集)。要手動指定請改用「直接輸入 / 範圍」。</div>
+                  : <div className="text-amber-600">SN 清單將自動 = 各資料來源檔名的聯集。請在下方「資料來源」上傳資料夾。</div>}
+              </div>
+            )}
 
             {cfg.snInput.mode === "templateCol" && (
               <div className="text-[11px] text-slate-600 space-y-1">
@@ -1099,6 +1125,7 @@
                 })()}
               </div>
             )}
+
 
 
             {snList.length > 0 && (
