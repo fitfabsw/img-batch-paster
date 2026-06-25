@@ -1,0 +1,28 @@
+name: deploy-lab
+
+# Push to main → self-hosted runner on lab-mac-mini pulls + restarts in place.
+# img-batch-paster MUST run on lab-mac-mini (uses Keynote, a macOS-only app).
+# Runner label: lab-mini.
+#
+# No actions/checkout: the lab already has a working git clone at
+# ~/img-batch-paster (SSH remote with an authorised key). We git-pull in place,
+# which sidesteps the global-insteadOf checkout trap entirely.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, lab-mini]
+    steps:
+      - name: Pull latest, reinstall, restart
+        run: |
+          set -euo pipefail
+          cd "$HOME/img-batch-paster"
+          git fetch origin main
+          git reset --hard origin/main      # match origin; keeps untracked (.venv, configs)
+          .venv/bin/pip install --quiet -e .   # update deps + console script (pip-based project)
+          launchctl kickstart -k "gui/$(id -u)/com.zealzel.imgbatchpaster"
+          echo "✓ deployed; img-batch-paster restarted on :5050"
