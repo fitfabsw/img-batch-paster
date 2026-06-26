@@ -45,6 +45,7 @@
         rawMode: false,            // true=直接編輯 pattern, false=分段點選
         idxSort: "auto",           // 對位模式欄位排序：auto | alpha | num | custom
         idxOrder: [],              // custom 時使用者自訂順序
+        groupSrc: "auto",          // group 軸對位來源(PD Case3)：auto(範本有值→template) | template | filename
         idxIgnore: [],             // 忽略的 idx：當作資料夾無此 idx 圖（欄位保留→留空佔位）
         idxCrops: {},              // 各欄獨立模式 (依檔名 idx)：idx字串 → crop obj
         x: 2,
@@ -314,6 +315,16 @@
       }
       return { topLabels, leftLabels, topLabelsArr, leftLabelsArr, headerRow, region: detect.region };
     }
+    // group 軸對位解析（PD Case3）：依方向取 group 軸標籤(横式=左欄、直式=頂列)，
+    //   決定 eff='template'(對到範本既有 group、不覆寫) 或 'filename'(依檔名自動產生+寫入)。
+    function resolveGroupAxis(orientation, ax, label) {
+      const gMap = orientation === "vertical" ? ax.topLabels : ax.leftLabels;     // Map(norm → 欄/列索引)
+      const gArr = orientation === "vertical" ? ax.topLabelsArr : ax.leftLabelsArr;
+      const hasTemplateGroups = (gArr || []).length > 0;
+      const src = label.groupSrc || "auto";
+      const eff = src === "auto" ? (hasTemplateGroups ? "template" : "filename") : src;
+      return { gMap, gArr, hasTemplateGroups, eff };
+    }
     // 直式的 idx(零件)順序解析：明確 idxOrder 與檔名相符 → 用它(依檔名/自訂)；否則用左欄標籤(依範本標籤)。
     function resolveTransposedIdxList(ax, label, files) {
       const fileIdx = new Set();
@@ -354,18 +365,32 @@
       const startRow = ax.headerRow + 1;              // 第一個資料列
       const idxList = resolveTransposedIdxList(ax, label, files);
       const rowOf = new Map(idxList.map((v, i) => [String(v), startRow + i * stepRow]));
-      // SN(group)→欄：依檔案出現順序(與横式列順序對稱)→ 拖曳 SN 卡片即可改欄序；要字母序按「A→Z」。
-      const snList = [], snSet = new Set();
-      for (const f of files || []) {
-        const { group } = extractGroupIdx(_fileStem(f), label.pattern);
-        const g = group || "";
-        if (g && !snSet.has(g)) { snSet.add(g); snList.push(g); }
-      }
-      const colOf = new Map(snList.map((sn, k) => [sn, startCol + k * stepCol]));
-      const cells = [], unmatched = new Set();
-      if (label && label.enabled) {                   // SN 寫進頂列標籤(對稱於横式寫進 snCol)
-        for (const sn of snList) {
-          cells.push({ row: ax.headerRow, col: colOf.get(sn), span_cols: excel.cellCols, span_rows: 1, text: sn, font_pt: label.font_pt });
+      // SN(group)→欄。group 軸：template=對到範本頂列既有 group(不覆寫)；filename=依檔案出現順序+寫入。
+      const grp = resolveGroupAxis("vertical", ax, label);
+      const cells = [], unmatched = new Set(), unmatchedGroups = new Set();
+      let colOf;
+      if (grp.eff === "template") {
+        colOf = new Map();   // 對到範本既有頂列 group 欄；不寫標籤
+        for (const f of files || []) {
+          const { group } = extractGroupIdx(_fileStem(f), label.pattern);
+          const g = group || "";
+          if (!g || colOf.has(g)) continue;
+          const c = grp.gMap.get(_normLabel(g));
+          if (c == null) { unmatchedGroups.add(g); continue; }   // 多出的 group → 跳過+警示
+          colOf.set(g, c);
+        }
+      } else {
+        const snList = [], snSet = new Set();   // 依出現順序、自動產生欄、寫入頂列標籤
+        for (const f of files || []) {
+          const { group } = extractGroupIdx(_fileStem(f), label.pattern);
+          const g = group || "";
+          if (g && !snSet.has(g)) { snSet.add(g); snList.push(g); }
+        }
+        colOf = new Map(snList.map((sn, k) => [sn, startCol + k * stepCol]));
+        if (label && label.enabled) {
+          for (const sn of snList) {
+            cells.push({ row: ax.headerRow, col: colOf.get(sn), span_cols: excel.cellCols, span_rows: 1, text: sn, font_pt: label.font_pt });
+          }
         }
       }
       const ignore = new Set((label.idxIgnore || []).map(String));
@@ -375,10 +400,10 @@
         const row = rowOf.get(String(idx));
         if (row == null) { unmatched.add(String(idx)); continue; }   // 不在 idxList → 跳過+警示
         const col = colOf.get(group || "");
-        if (col == null) continue;
+        if (col == null) continue;   // group 對不到(template 模式多出的) → 已記錄、跳過
         cells.push({ path: f.path, row, col, span_cols: excel.cellCols, span_rows: excel.cellRows });
       }
-      return { cells, unmatched: Array.from(unmatched), idxList };
+      return { cells, unmatched: Array.from(unmatched), unmatchedGroups: Array.from(unmatchedGroups), idxList, groupEff: grp.eff };
     }
     // 解析最終方向：excel.orient=auto → 偵測；否則用手選。回傳 "vertical" | "horizontal"。
     function resolveExcelOrientation(grid, excel, label, orderedFiles, autoAlign) {
@@ -388,13 +413,38 @@
       const detect = detectExcelTable(grid);
       return detect ? detectExcelOrientation(grid, detect, label, orderedFiles) : "horizontal";
     }
-    // 統一入口：依方向選 横式(現有) / 直式(轉置)。
+    // 横式 Case3：group 對到範本左欄既有 group(不覆寫)、index 依範本表頭定位；多出的 group 跳過。
+    function computeExcelCellsHorizGroupTemplate(grid, detect, ax, excel, label, files) {
+      const start = parseCell(detect.startCell);
+      const stepCol = Math.max(1, excel.cellCols);
+      const idxList = detectIdxList(files, label.pattern, label.idxSort || "auto", label.idxOrder || []);
+      const rows = buildRows(files, label.pattern, idxList, true, new Set(label.idxIgnore || []));
+      const grp = resolveGroupAxis("horizontal", ax, label);
+      const cells = [], unmatchedGroups = new Set();
+      rows.forEach(({ group, cells: rowCells }) => {
+        const r = grp.gMap.get(_normLabel(group || ""));
+        if (r == null) { if (group) unmatchedGroups.add(group); return; }   // group 不在範本左欄 → 跳過
+        rowCells.forEach((f, ci) => {
+          if (!f) return;
+          cells.push({ path: f.path, row: r, col: start.col + ci * stepCol, span_cols: excel.cellCols, span_rows: excel.cellRows });
+        });
+      });
+      return { cells, unmatchedGroups: Array.from(unmatchedGroups), idxList, groupEff: grp.eff };
+    }
+    // 統一入口：依方向 + group 軸來源選對應運算。
     function computeExcelCellsAuto(grid, excel, label, orderedFiles, autoAlign) {
-      if (resolveExcelOrientation(grid, excel, label, orderedFiles, autoAlign) === "vertical") {
-        const detect = detectExcelTable(grid);
-        if (detect) return computeExcelCellsTransposed(grid, detect, excel, label, orderedFiles).cells;
+      const orientation = resolveExcelOrientation(grid, excel, label, orderedFiles, autoAlign);
+      const detect = (grid && autoAlign) ? detectExcelTable(grid) : null;
+      if (orientation === "vertical" && detect) {
+        return computeExcelCellsTransposed(grid, detect, excel, label, orderedFiles).cells;
       }
-      return computeExcelCells(excel, label, orderedFiles, autoAlign);
+      if (detect) {
+        const ax = readAxisLabels(grid, detect);
+        if (ax && resolveGroupAxis("horizontal", ax, label).eff === "template") {
+          return computeExcelCellsHorizGroupTemplate(grid, detect, ax, excel, label, orderedFiles).cells;
+        }
+      }
+      return computeExcelCells(excel, label, orderedFiles, autoAlign);   // Case1/2（現有，不動）
     }
 
     // pattern → regex 字串：先轉義字面字元，再展開 placeholder ({group}/{idx}/{skip})
@@ -734,7 +784,7 @@
 
     // 對位模式的欄位編輯器：單一可編輯欄位清單（預設自動偵測，可拖曳排序 / ✕移除 / ＋新增 / 🚫忽略；
     //   依範本表頭 / 依檔名 為重置來源）。已無「自動/自訂」模式切換 —— 編輯時自動轉 idxSort=custom。
-    function IdxColumnsEditor({ label, allFiles, updateLabel, perColCrop, onOpenIdxCrop, headerOrder, pushHistory }) {
+    function IdxColumnsEditor({ label, allFiles, updateLabel, perColCrop, onOpenIdxCrop, headerOrder, pushHistory, hideSrc, locked }) {
       const sort = label.idxSort || "auto";
       const idxList = useMemo(
         () => detectIdxList(allFiles || [], label.pattern, sort, label.idxOrder || []),
@@ -812,14 +862,15 @@
       return (
         <div>
           <div className="text-xs text-sky-800 font-semibold mb-1">
-            對位欄位 · {idxList.length} 欄
+            Index 欄位 · {idxList.length}
+            {locked && <span className="text-[10px] text-slate-400 font-normal ml-1">（依範本：順序由範本決定，切「依檔名」可手動調整）</span>}
           </div>
           {idxList.length === 0 && fromFiles.length === 0 ? (
             <div className="text-[10px] text-amber-700 p-2 bg-amber-50 rounded">
-              ⚠ 從現有檔名中找不到 idx 段內容 — 請確認上方分段選取
+              ⚠ 從現有檔名中找不到 Index 段內容 — 請確認上方分段選取
             </div>
           ) : (
-            <>
+            <div className={locked ? "opacity-50 pointer-events-none select-none" : ""}>
               <div className="flex flex-wrap gap-1 items-center">
                 {idxList.map((s, i) => {
                   const isEmpty = !fromFiles.includes(s);
@@ -876,21 +927,23 @@
                   </div>
                 )}
                 <div className="flex items-center gap-1.5 text-[10px] flex-wrap">
-                  <span className="text-slate-500">欄位順序：</span>
-                  {hasHeader && (
+                  {!hideSrc && <span className="text-slate-500">欄位順序：</span>}
+                  {!hideSrc && hasHeader && (
                     <button onClick={loadFromHeader}
-                      title="idx 欄位依範本標籤順序（横式＝頂列表頭、直式＝左欄標籤）"
+                      title="Index 欄位依範本標籤順序（横式＝頂列表頭、直式＝左欄標籤）"
                       className={`px-1.5 py-0.5 rounded border ${headerActive ? "bg-sky-600 text-white border-sky-700 font-medium" : "border-sky-300 text-sky-700 hover:bg-sky-100"}`}>
-                      ⊞ 依範本標籤{headerActive ? " ✓" : ""}</button>
+                      ⊞ 依範本{headerActive ? " ✓" : ""}</button>
                   )}
-                  <button onClick={loadFromFiles}
-                    title="idx 欄位依檔名順序"
-                    className={`px-1.5 py-0.5 rounded border ${filesActive ? "bg-sky-600 text-white border-sky-700 font-medium" : "border-sky-300 text-sky-700 hover:bg-sky-100"}`}>
-                    ↻ 依檔名{filesActive ? " ✓" : ""}</button>
-                  <span className="text-slate-400 ml-1">拖曳排序 · 🚫 忽略 · ✕ 移除 · Enter 新增</span>
+                  {!hideSrc && (
+                    <button onClick={loadFromFiles}
+                      title="Index 欄位依檔名順序"
+                      className={`px-1.5 py-0.5 rounded border ${filesActive ? "bg-sky-600 text-white border-sky-700 font-medium" : "border-sky-300 text-sky-700 hover:bg-sky-100"}`}>
+                      ↻ 依檔名{filesActive ? " ✓" : ""}</button>
+                  )}
+                  <span className="text-slate-400">拖曳排序 · 🚫 忽略 · ✕ 移除 · Enter 新增</span>
                 </div>
               </div>
-            </>
+            </div>
           )}
         </div>
       );
@@ -1341,7 +1394,7 @@
     }
 
     // 分段點選的 SN 設定 UI：分隔符 + 各段角色 chip + 即時抽取預覽 + 命中統計
-    function SnPatternPicker({ cfgLabel, autoAlign, setCfg, firstFile, allFiles, perColCrop, onOpenIdxCrop, headerOrder, pushHistory }) {
+    function SnPatternPicker({ cfgLabel, autoAlign, setCfg, firstFile, allFiles, perColCrop, onOpenIdxCrop, headerOrder, pushHistory, hideSrc, locked }) {
       const DELIMS = [
         { v: "-", label: "-" },
         { v: "_", label: "_" },
@@ -1537,7 +1590,7 @@
                   <button onClick={() => setPos(autoPos)} className="ml-2 text-[10px] px-2 py-0.5 border rounded text-slate-600 hover:bg-slate-100" title="字母/數字邊界自動偵測">自動 ({autoPos})</button>
                 </div>
                 <div className="text-xs p-2 border rounded bg-emerald-50">
-                  抽出 SN：<b className="font-mono text-emerald-800">{preview ? preview.group : "(無法抽出)"}</b>
+                  抽出 Group：<b className="font-mono text-emerald-800">{preview ? preview.group : "(無法抽出)"}</b>
                   {autoAlign && <span className="ml-3">對位欄：<b className="font-mono text-sky-800">{preview && preview.idx != null ? preview.idx : "(無)"}</b></span>}
                   <div className="text-[10px] text-slate-500 mt-0.5">
                     {okCount === total
@@ -1548,7 +1601,7 @@
               </div>
               {autoAlign && (
                 <div className="pt-2 border-t bg-sky-50 -mx-1 px-2 py-2 rounded space-y-2">
-                  <div className="text-xs text-sky-800 font-semibold">🎯 對位欄位（切點後的數字自動展開）</div>
+                  <div className="text-xs text-sky-800 font-semibold">🎯 Index 欄位（切點後的內容自動展開）</div>
                   <IdxColumnsEditor
                     label={cfgLabel}
                     allFiles={allFiles}
@@ -1557,6 +1610,8 @@
                     onOpenIdxCrop={onOpenIdxCrop}
                     headerOrder={headerOrder}
                     pushHistory={pushHistory}
+                    hideSrc={hideSrc}
+                    locked={locked}
                   />
                 </div>
               )}
@@ -1565,14 +1620,14 @@
             <>
               <div>
                 <div className="text-xs text-slate-700 mb-1">
-                  <b>SN 取哪一段？</b>
+                  <b>Group 取哪一段？</b><span className="text-[10px] text-slate-400 ml-1">前段</span>
                   <span className="text-[10px] text-slate-400 ml-1">範例 <span className="font-mono">{firstFile.name}</span></span>
                 </div>
                 <ChipRow selectedIdx={snIdx} onPick={toggleSn} kind="sn" />
 
                 {hasSn ? (
                   <div className="text-xs mt-2 p-2 border rounded bg-emerald-50">
-                    抽出 SN：<b className="font-mono text-emerald-800">{preview ? preview.group : "(無法抽出)"}</b>
+                    抽出 Group：<b className="font-mono text-emerald-800">{preview ? preview.group : "(無法抽出)"}</b>
                     <div className="text-[10px] text-slate-500 mt-0.5">
                       {okCount === total
                         ? `全部 ${total} 個檔案皆可抽出 ✓`
@@ -1581,7 +1636,7 @@
                   </div>
                 ) : (
                   <div className="text-xs mt-2 p-2 border border-amber-300 rounded bg-amber-50 text-amber-800">
-                    ⚠ 尚未選 SN — 請點選上方任一段
+                    ⚠ 尚未選 Group — 請點選上方任一段
                   </div>
                 )}
               </div>
@@ -1589,7 +1644,7 @@
               {autoAlign && (
                 <div className="pt-2 border-t bg-sky-50 -mx-1 px-2 py-2 rounded space-y-2">
                   <div>
-                    <div className="text-xs text-sky-800 mb-1 font-semibold">🎯 對位用哪一段？</div>
+                    <div className="text-xs text-sky-800 mb-1 font-semibold">🎯 Index 取哪一段？（後段）</div>
                     <ChipRow selectedIdx={idxIdx} onPick={toggleIdx} kind="idx" />
                     {idxIdx >= 0 ? (
                       <div className="text-[10px] text-slate-600 mt-1">
@@ -1610,6 +1665,8 @@
                       onOpenIdxCrop={onOpenIdxCrop}
                       headerOrder={headerOrder}
                       pushHistory={pushHistory}
+                      hideSrc={hideSrc}
+                      locked={locked}
                     />
                   )}
                 </div>
@@ -2204,7 +2261,7 @@
               </div>
               {idxList.length === 0 ? (
                 <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
-                  ⚠ 從檔名抽不到任何 idx — 請確認「對位用哪一段」的分段選取，或檔名格式。
+                  ⚠ 從檔名抽不到任何 Index — 請確認「Index 取哪一段」的分段選取，或檔名格式。
                 </div>
               ) : (
                 <div className="flex flex-wrap gap-1.5">
@@ -3106,12 +3163,21 @@
           else for (const [, cc] of ax.topLabels) out.push({ r: ax.headerRow, c: cc });
           return out;
         };
+        // group 軸（PD Case3）：方向→group 軸(横式=左欄、直式=頂列)，eff=template/filename，含警示與標籤格
+        const grp = ax ? resolveGroupAxis(orientation, ax, cfg.label) : null;
+        const groupLabelCells = [];
+        if (ax && grp && grp.eff === "template") {
+          if (orientation === "vertical") for (const [, cc] of ax.topLabels) groupLabelCells.push({ r: ax.headerRow, c: cc });
+          else for (const [, rr] of ax.leftLabels) groupLabelCells.push({ r: rr, c: ax.region.minC });
+        }
+        const groupInfo = grp ? { groupEff: grp.eff, groupSrc: cfg.label.groupSrc || "auto", groupHasValues: grp.hasTemplateGroups, groupLabelCells } : {};
         if (orientation !== "vertical") {
           const eff = detectIdxList(orderedFiles, cfg.label.pattern, cfg.label.idxSort || "auto", cfg.label.idxOrder || []);
-          return { orientation: "horizontal", auto, idxAxisLabels, idxLabelCells: labelCellsFor(eff) };
+          const hr = (detect && grp && grp.eff === "template") ? computeExcelCellsHorizGroupTemplate(xlGrid, detect, ax, cfg.excel, cfg.label, orderedFiles) : { unmatchedGroups: [] };
+          return { orientation: "horizontal", auto, idxAxisLabels, idxLabelCells: labelCellsFor(eff), unmatchedGroups: hr.unmatchedGroups, ...groupInfo };
         }
-        const r = detect ? computeExcelCellsTransposed(xlGrid, detect, cfg.excel, cfg.label, orderedFiles) : { unmatched: [], idxList: [] };
-        return { orientation: "vertical", auto, unmatched: r.unmatched, partOrder: r.idxList, idxAxisLabels, idxLabelCells: labelCellsFor(r.idxList) };
+        const r = detect ? computeExcelCellsTransposed(xlGrid, detect, cfg.excel, cfg.label, orderedFiles) : { unmatched: [], unmatchedGroups: [], idxList: [] };
+        return { orientation: "vertical", auto, unmatched: r.unmatched, unmatchedGroups: r.unmatchedGroups, partOrder: r.idxList, idxAxisLabels, idxLabelCells: labelCellsFor(r.idxList), ...groupInfo };
       }, [cfg.snMatchMode, mode, xlGrid, cfg.autoAlign, cfg.label, cfg.excel, orderedFiles]);
 
       // 直式正規化：方向為直式、但 idxOrder 失效(載入時殘留的頂列值對不到檔名) →
@@ -3126,6 +3192,20 @@
         if (cur.length && cur.some((c) => fileIdx.has(c))) return;   // 使用者已選有效排序(依檔名/自訂) → 不覆寫
         setCfg((c) => ({ ...c, label: { ...c.label, idxSort: "custom", idxOrder: [...labels] } }));
       }, [xlOrient, orderedFiles]);
+
+      // 對位設定面板（App scope）：進階摺疊狀態 + Index 軸來源控制（依範本/依檔名，共用 idxOrder）
+      const [xlAdvOpen, setXlAdvOpen] = useState(false);
+      const _sameArrApp = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((x, i) => String(x) === String(b[i]));
+      const idxAxisLabelsBtn = (xlOrient?.idxAxisLabels || []);
+      const idxFileOrder = useMemo(
+        () => detectIdxList(orderedFiles, cfg.label.pattern, "auto", []),
+        [orderedFiles, cfg.label.pattern]
+      );
+      const idxTemplateActive = (cfg.label.idxSort === "custom") && _sameArrApp(cfg.label.idxOrder, idxAxisLabelsBtn);
+      const idxFileActive = (cfg.label.idxSort === "custom") && !idxTemplateActive && _sameArrApp(cfg.label.idxOrder, idxFileOrder);
+      const setIdxSrc = (src) => setCfg((c) => ({
+        ...c, label: { ...c.label, idxSort: "custom", idxOrder: src === "template" ? [...idxAxisLabelsBtn] : [...idxFileOrder] },
+      }));
 
       // ✨ 魔法時刻（A）+ 價值量化（B）：範本+圖片就緒、自動對齊好 → 慶祝（每批一次）
       useEffect(() => {
@@ -4620,66 +4700,97 @@
                   <div className="border-t pt-3">
                     <div className="text-sm font-semibold mb-2">Excel 配置</div>
                     <div className="space-y-2">
-                      {!cfg.snMatchMode && (
-                        <>
-                          <div className="flex gap-2">
-                            <label className="flex flex-col text-xs text-slate-600 flex-1">
-                              起始 cell
-                              <input value={cfg.excel.startCell}
-                                onChange={(e) => setCfg((c) => ({ ...c, excel: { ...c.excel, startCell: e.target.value } }))}
-                                className="border rounded px-2 py-1 text-sm mt-1 font-mono" placeholder="B5" />
-                            </label>
-                            <label className="flex flex-col text-xs text-slate-600 flex-1">
-                              SN 寫入欄（留空=不寫）
-                              <input value={cfg.excel.snCol}
-                                onChange={(e) => setCfg((c) => ({ ...c, excel: { ...c.excel, snCol: e.target.value } }))}
-                                className="border rounded px-2 py-1 text-sm mt-1 font-mono" placeholder="A" />
-                            </label>
+                      {!cfg.snMatchMode && (() => {
+                        const TriToggle = ({ value, options, onPick }) => (
+                          <div className="flex text-xs border rounded overflow-hidden">
+                            {options.map((opt) => (
+                              <button key={opt.v} onClick={() => onPick(opt.v)}
+                                className={`flex-1 px-2 py-1 ${value === opt.v ? "bg-slate-700 text-white" : "hover:bg-slate-100"}`}>
+                                {opt.label}
+                              </button>
+                            ))}
                           </div>
-                          <div className="text-[10px] text-slate-400">
-                            SN 字串從檔名 pattern「{cfg.label.pattern}」抽取
+                        );
+                        const SRC2 = [{ v: "template", label: "依範本" }, { v: "filename", label: "依檔名" }];
+                        return (
+                        <div className="space-y-2">
+                          {/* 檔名格式（{Group}-{Index}） */}
+                          <div className="text-[11px] text-slate-500 bg-slate-50 border rounded px-2 py-1">
+                            檔名格式 <span className="font-mono text-slate-700">{cfg.label.pattern}</span>
+                            <span className="text-slate-400"> · 例 2EG-BC → Group=2EG、Index=BC</span>
+                            <span className="text-slate-400">（取段見下方「對位欄位」）</span>
                           </div>
-                          {/* 範本方向（PD #31）：auto 偵測 / 手選 横式(SN在左欄) / 直式(SN在頂列) */}
+
+                          {/* 範本方向 */}
                           <div>
-                            <div className="text-xs text-slate-600 mb-1">範本方向</div>
-                            <div className="flex text-xs border rounded overflow-hidden">
-                              {[
-                                { v: "auto", label: "自動" },
-                                { v: "horizontal", label: "横式" },
-                                { v: "vertical", label: "直式" },
-                              ].map((opt) => (
-                                <button key={opt.v}
-                                  onClick={() => setCfg((c) => ({ ...c, excel: { ...c.excel, orient: opt.v } }))}
-                                  className={`flex-1 px-2 py-1 ${(cfg.excel.orient || "auto") === opt.v ? "bg-slate-700 text-white" : "hover:bg-slate-100"}`}>
-                                  {opt.label}
-                                </button>
-                              ))}
-                            </div>
-                            <div className="text-[10px] text-slate-400 mt-0.5">
-                              横式＝SN(前段)在左欄、零件在頂列；直式＝SN 在頂列、零件在左欄。
-                            </div>
+                            <div className="text-xs text-slate-600 mb-1">範本方向 <span className="text-slate-400 text-[10px]">Group / Index 哪個在列/欄</span></div>
+                            <TriToggle value={cfg.excel.orient || "auto"} onPick={(v) => setCfg((c) => ({ ...c, excel: { ...c.excel, orient: v } }))}
+                              options={[{ v: "auto", label: "自動" }, { v: "horizontal", label: "横式" }, { v: "vertical", label: "直式" }]} />
+                            <div className="text-[10px] text-slate-400 mt-0.5">横式＝Group 在左欄、Index 在頂列；直式＝相反。</div>
                             {xlOrient?.pending && (
-                              <div className="text-[10px] mt-1 rounded px-2 py-1 text-slate-500 bg-slate-50 border">
-                                ⏳ 待上傳資料夾後，依檔名規則自動判斷方向（或先手選 横式 / 直式）。
-                              </div>
+                              <div className="text-[10px] mt-1 rounded px-2 py-1 text-slate-500 bg-slate-50 border">⏳ 上傳資料夾後自動判斷方向（或先手選）。</div>
                             )}
                             {xlOrient && !xlOrient.pending && (
                               <div className={`text-[10px] mt-1 rounded px-2 py-1 ${xlOrient.orientation === "vertical" ? "text-sky-700 bg-sky-50 border border-sky-200" : "text-slate-500 bg-slate-50 border"}`}>
-                                {xlOrient.auto ? "🧭 偵測到：" : "📌 已選："}<b>{xlOrient.orientation === "vertical" ? "直式" : "横式"}</b>
-                                {xlOrient.orientation === "vertical" && "（零件在左欄、SN 自動排欄；零件順序可用左側「依範本標籤/依檔名」調整）"}
-                                {xlOrient.unmatched?.length > 0 && (
-                                  <div className="text-amber-700 mt-0.5">⚠ 有零件對不到左欄標籤(會跳過)：<span className="font-mono">{xlOrient.unmatched.join("、")}</span></div>
-                                )}
+                                {xlOrient.auto ? "🧭 偵測：" : "📌 已選："}<b>{xlOrient.orientation === "vertical" ? "直式" : "横式"}</b>
                               </div>
                             )}
                           </div>
-                          <NumberInput label="每列圖數" step={1}
-                            value={cfg.autoAlign ? Math.max(1, autoIdxList.length) : cfg.excel.imgsPerRow}
-                            disabled={cfg.autoAlign}
-                            hint={cfg.autoAlign ? `對位模式自動 = ${autoIdxList.length || 0} 欄` : undefined}
-                            onChange={(v) => setCfg((c) => ({ ...c, excel: { ...c.excel, imgsPerRow: Math.max(1, parseInt(v) || 1) } }))} />
-                        </>
-                      )}
+
+                          {xlOrient && !xlOrient.pending && (<>
+                          {/* Group 對位 */}
+                          <div>
+                            <div className="text-xs text-slate-600 mb-1">Group 對位 <span className="text-slate-400 text-[10px]">前段，如 2EG</span></div>
+                            <TriToggle value={xlOrient.groupEff} options={SRC2}
+                              onPick={(v) => setCfg((c) => ({ ...c, label: { ...c.label, groupSrc: v } }))} />
+                            <div className="text-[10px] text-slate-400 mt-0.5">依範本＝對到範本既有值(不覆寫)；依檔名＝自動產生並寫入。{!xlOrient.groupHasValues && "（範本 SN 軸無值 → 預設依檔名）"}</div>
+                            {xlOrient.unmatchedGroups?.length > 0 && (
+                              <div className="text-[10px] text-amber-700 mt-0.5">⚠ 對不到範本、會跳過：<span className="font-mono">{xlOrient.unmatchedGroups.join("、")}</span></div>
+                            )}
+                          </div>
+
+                          {/* Index 對位 */}
+                          <div>
+                            <div className="text-xs text-slate-600 mb-1">Index 對位 <span className="text-slate-400 text-[10px]">後段，如 BC</span></div>
+                            <TriToggle value={idxFileActive ? "filename" : "template"} options={SRC2}
+                              onPick={(v) => setIdxSrc(v)} />
+                            <div className="text-[10px] text-slate-400 mt-0.5">依範本＝Index 順序對到範本標籤；依檔名＝依檔名順序。細部排序見下方「對位欄位」。</div>
+                            {xlOrient.unmatched?.length > 0 && (
+                              <div className="text-[10px] text-amber-700 mt-0.5">⚠ Index 對不到標籤、會跳過：<span className="font-mono">{xlOrient.unmatched.join("、")}</span></div>
+                            )}
+                          </div>
+                          </>)}
+
+                          {/* 進階設定 */}
+                          <div className="border-t pt-1">
+                            <button onClick={() => setXlAdvOpen((v) => !v)} className="text-[11px] text-slate-500 hover:text-slate-700">
+                              {xlAdvOpen ? "▾" : "▸"} 進階設定（起始 cell、寫入欄、每列圖數）
+                            </button>
+                            {xlAdvOpen && (
+                              <div className="mt-2 space-y-2">
+                                <div className="flex gap-2">
+                                  <label className="flex flex-col text-xs text-slate-600 flex-1">起始 cell
+                                    <input value={cfg.excel.startCell}
+                                      onChange={(e) => setCfg((c) => ({ ...c, excel: { ...c.excel, startCell: e.target.value } }))}
+                                      className="border rounded px-2 py-1 text-sm mt-1 font-mono" placeholder="B5" />
+                                  </label>
+                                  <label className="flex flex-col text-xs text-slate-600 flex-1">Group 寫入欄（留空=不寫）
+                                    <input value={cfg.excel.snCol}
+                                      onChange={(e) => setCfg((c) => ({ ...c, excel: { ...c.excel, snCol: e.target.value } }))}
+                                      className="border rounded px-2 py-1 text-sm mt-1 font-mono" placeholder="A" />
+                                  </label>
+                                </div>
+                                <NumberInput label="每列圖數" step={1}
+                                  value={cfg.autoAlign ? Math.max(1, autoIdxList.length) : cfg.excel.imgsPerRow}
+                                  disabled={cfg.autoAlign}
+                                  hint={cfg.autoAlign ? `對位模式自動 = ${autoIdxList.length || 0} 欄` : undefined}
+                                  onChange={(v) => setCfg((c) => ({ ...c, excel: { ...c.excel, imgsPerRow: Math.max(1, parseInt(v) || 1) } }))} />
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        );
+                      })()}
 
                       <div className={cfg.snMatchMode ? "" : "mt-2 pt-2 border-t"}>
                         <div className="text-xs text-slate-600 mb-1">圖片填法</div>
@@ -4728,7 +4839,7 @@
                   <label className="flex items-center gap-2 text-sm font-semibold">
                     <input type="checkbox" checked={cfg.label.enabled}
                       onChange={(e) => setCfg((c) => ({ ...c, label: { ...c.label, enabled: e.target.checked } }))} />
-                    列標籤（從檔名抽出 SN）
+                    寫入 Group 標籤（從檔名抽出）
                   </label>
                   {cfg.label.enabled && (
                     <div className="mt-2 space-y-2">
@@ -4745,6 +4856,8 @@
                         }}
                         headerOrder={(xlOrient?.idxAxisLabels?.length ? xlOrient.idxAxisLabels : tblHeaderOrder)}
                         pushHistory={pushHistory}
+                        hideSrc={mode === "excel"}
+                        locked={mode === "excel" && idxTemplateActive}
                       />
                       <NumberInput label="字體" suffix="pt" step={1} value={cfg.label.font_pt}
                         onChange={(v) => setCfg((c) => ({ ...c, label: { ...c.label, font_pt: v } }))} />
@@ -5000,18 +5113,27 @@
                         </div>
                       </div>
                     )}
-                  {rows.map((row, rIdx) => (
+                  {xlOrient?.groupEff === "template" && (
+                    <div className="text-[10px] text-slate-500 bg-slate-50 border rounded px-2 py-1 mb-1">
+                      Group 對位＝依範本：順序由範本決定、不可拖曳（切「依檔名」可手動排序）。
+                    </div>
+                  )}
+                  {rows.map((row, rIdx) => {
+                    const groupSkipped = (xlOrient?.unmatchedGroups || []).map(String).includes(String(row.group));
+                    const groupLocked = xlOrient?.groupEff === "template";
+                    return (
                     <div key={row.group}
-                      draggable
-                      onDragStart={(e) => onCardDragStart(e, row.group)}
-                      onDragOver={(e) => { e.preventDefault(); if (dragOverIdx !== rIdx) setDragOverIdx(rIdx); }}
-                      onDrop={(e) => onCardDrop(e, row.group)}
+                      draggable={!groupLocked}
+                      onDragStart={(e) => !groupLocked && onCardDragStart(e, row.group)}
+                      onDragOver={(e) => { if (groupLocked) return; e.preventDefault(); if (dragOverIdx !== rIdx) setDragOverIdx(rIdx); }}
+                      onDrop={(e) => !groupLocked && onCardDrop(e, row.group)}
                       style={{ boxShadow: dragOverIdx === rIdx ? "inset 0 2px 0 0 #0284c7" : "" }}
-                      className="border border-sky-200 rounded bg-white p-2 cursor-grab active:cursor-grabbing">
+                      className={`border rounded p-2 ${groupLocked ? "cursor-default" : "cursor-grab active:cursor-grabbing"} ${groupSkipped ? "border-amber-300 bg-amber-50/40 opacity-60" : "border-sky-200 bg-white"}`}>
                       <div className="flex items-center gap-1 mb-1.5">
-                        <span className="text-slate-400">⠿</span>
+                        <span className={`text-slate-400 ${groupLocked ? "opacity-30" : ""}`}>⠿</span>
                         <span className="text-xs font-semibold text-sky-800">{row.group || <span className="text-amber-600">未分組</span>}</span>
-                        <span className="text-[10px] text-slate-400 ml-auto">第 {rIdx + 1} 列</span>
+                        {groupSkipped && <span className="text-[10px] text-amber-700 bg-amber-100 rounded px-1">跳過·不在範本</span>}
+                        <span className="text-[10px] text-slate-400 ml-auto">Group {rIdx + 1}</span>
                       </div>
                       <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
                         {row.cells.map((f, ci) => {
@@ -5044,7 +5166,8 @@
                         })}
                       </div>
                     </div>
-                  ))}
+                  );
+                  })}
                   </>;
                 })() : orderedFiles.map((f, idx) => {
                   const isSel = selectedPaths.includes(f.path);
@@ -5175,7 +5298,7 @@
                       {tplPath && mode === "excel" && (
                         <ExcelPreview grid={xlGrid} cfg={cfg} orderedFiles={orderedFiles} selected={selected} thumbUrl={thumbUrl} snList={snList}
                           snColIdx={cfg.snMatchMode && xlsxSn ? colLetterToIdx(xlsxSn.col) : 0}
-                          idxLabelCells={!cfg.snMatchMode ? (xlOrient?.idxLabelCells || []) : []} />
+                          idxLabelCells={!cfg.snMatchMode ? [...(xlOrient?.idxLabelCells || []), ...(xlOrient?.groupLabelCells || [])] : []} />
                       )}
                       {/* 依範本 SN（PPT）：HTML 表格預覽（取代疊在 PNG 上的做法 → 天生對齊）*/}
                       {tplPath && mode === "slides" && cfg.snMatchMode && (() => {
