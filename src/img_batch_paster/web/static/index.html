@@ -75,6 +75,7 @@
         embedInCell: false,
         imgFit: "contain", // cover (裁切填滿) | contain (完整貼邊) | fill (拉伸)
         containInset: 5,   // contain 模式四邊留白百分比 (%)
+        orient: "auto",    // 範本方向：auto=自動偵測 / horizontal=横式(SN在左欄) / vertical=直式(SN在頂列) (PD #31)
       },
       output: { path: "./out.pptx", template: null },
     };
@@ -287,6 +288,115 @@
       return cells;
     }
 
+    // ── 直式（轉置）xlsx 範本支援（PD #31）──────────────────────────────────
+    const _normLabel = (s) => String(s ?? "").trim().toLowerCase();
+    const _fileStem = (f) => (f.name || f.path.split("/").pop() || "");
+    // 從範本讀「雙軸標籤」：頂列(header)→欄、左欄(SN/標籤欄)→列。
+    //   *Labels = Map(normalized → 欄/列索引)；*LabelsArr = 原始大小寫、依範本順序的標籤陣列。
+    function readAxisLabels(grid, detect) {
+      if (!grid || !detect || !detect.region) return null;
+      const cells = grid.cells || [];
+      const { minR, maxR, minC, maxC } = detect.region;
+      const headerRow = parseCell(detect.startCell).row - 1;   // 資料起始列的上一列＝頂列標籤
+      const topLabels = new Map(), topLabelsArr = [];
+      for (let c = minC + 1; c <= maxC; c++) {
+        const cell = cells.find((x) => x.r === headerRow && x.c === c);
+        const raw = cell ? String(cell.text ?? "").trim() : "";
+        const t = _normLabel(raw);
+        if (t && !topLabels.has(t)) { topLabels.set(t, c); topLabelsArr.push(raw); }
+      }
+      const leftLabels = new Map(), leftLabelsArr = [];
+      for (let r = headerRow + 1; r <= maxR; r++) {
+        const cell = cells.find((x) => x.r === r && x.c === minC);
+        const raw = cell ? String(cell.text ?? "").trim() : "";
+        const t = _normLabel(raw);
+        if (t && !leftLabels.has(t)) { leftLabels.set(t, r); leftLabelsArr.push(raw); }
+      }
+      return { topLabels, leftLabels, topLabelsArr, leftLabelsArr, headerRow, region: detect.region };
+    }
+    // 直式的 idx(零件)順序解析：明確 idxOrder 與檔名相符 → 用它(依檔名/自訂)；否則用左欄標籤(依範本標籤)。
+    function resolveTransposedIdxList(ax, label, files) {
+      const fileIdx = new Set();
+      for (const f of files || []) {
+        const { idx } = extractGroupIdx(_fileStem(f), label.pattern);
+        if (idx != null) fileIdx.add(String(idx));
+      }
+      const sort = label.idxSort || "auto";
+      if (sort === "custom") {
+        const custom = (label.idxOrder || []).map(String);
+        if (custom.some((c) => fileIdx.has(c))) return custom;     // 依檔名/自訂(與檔名相符)
+      }
+      // 預設 / 對不到 → 依範本左欄標籤順序(原始大小寫)
+      return (ax.leftLabelsArr || []).slice();
+    }
+    // 偵測範本方向：檔名「零件段(idx)」多數落在左欄 → 直式(vertical)；否則維持横式(horizontal)。
+    function detectExcelOrientation(grid, detect, label, files) {
+      const ax = readAxisLabels(grid, detect);
+      if (!ax) return "horizontal";
+      let top = 0, left = 0;
+      for (const f of files || []) {
+        const { idx } = extractGroupIdx(_fileStem(f), label.pattern);
+        if (idx == null) continue;
+        const n = _normLabel(idx);
+        if (ax.topLabels.has(n)) top++;
+        if (ax.leftLabels.has(n)) left++;
+      }
+      return left > top ? "vertical" : "horizontal";
+    }
+    // 直式運算（定位式，與横式對稱）：零件(idx)→列(依 idxList 順序定位)、SN(group)→欄(字母/數字排序)。
+    //   idxList 預設＝範本左欄標籤(依範本標籤)；使用者改「依檔名」則依檔名順序。回傳 cell + unmatched。
+    function computeExcelCellsTransposed(grid, detect, excel, label, files) {
+      const ax = readAxisLabels(grid, detect);
+      if (!ax) return { cells: [], unmatched: [] };
+      const stepCol = Math.max(1, excel.cellCols);
+      const stepRow = Math.max(1, excel.cellRows) + Math.max(0, excel.gapRows || 0);
+      const startCol = ax.region.minC + 1;            // 第一個資料欄
+      const startRow = ax.headerRow + 1;              // 第一個資料列
+      const idxList = resolveTransposedIdxList(ax, label, files);
+      const rowOf = new Map(idxList.map((v, i) => [String(v), startRow + i * stepRow]));
+      // SN(group)→欄：依檔案出現順序(與横式列順序對稱)→ 拖曳 SN 卡片即可改欄序；要字母序按「A→Z」。
+      const snList = [], snSet = new Set();
+      for (const f of files || []) {
+        const { group } = extractGroupIdx(_fileStem(f), label.pattern);
+        const g = group || "";
+        if (g && !snSet.has(g)) { snSet.add(g); snList.push(g); }
+      }
+      const colOf = new Map(snList.map((sn, k) => [sn, startCol + k * stepCol]));
+      const cells = [], unmatched = new Set();
+      if (label && label.enabled) {                   // SN 寫進頂列標籤(對稱於横式寫進 snCol)
+        for (const sn of snList) {
+          cells.push({ row: ax.headerRow, col: colOf.get(sn), span_cols: excel.cellCols, span_rows: 1, text: sn, font_pt: label.font_pt });
+        }
+      }
+      const ignore = new Set((label.idxIgnore || []).map(String));
+      for (const f of files || []) {
+        const { group, idx } = extractGroupIdx(_fileStem(f), label.pattern);
+        if (idx == null || ignore.has(String(idx))) continue;
+        const row = rowOf.get(String(idx));
+        if (row == null) { unmatched.add(String(idx)); continue; }   // 不在 idxList → 跳過+警示
+        const col = colOf.get(group || "");
+        if (col == null) continue;
+        cells.push({ path: f.path, row, col, span_cols: excel.cellCols, span_rows: excel.cellRows });
+      }
+      return { cells, unmatched: Array.from(unmatched), idxList };
+    }
+    // 解析最終方向：excel.orient=auto → 偵測；否則用手選。回傳 "vertical" | "horizontal"。
+    function resolveExcelOrientation(grid, excel, label, orderedFiles, autoAlign) {
+      if (!grid || !autoAlign) return "horizontal";
+      const o = excel.orient || "auto";
+      if (o === "vertical" || o === "horizontal") return o;
+      const detect = detectExcelTable(grid);
+      return detect ? detectExcelOrientation(grid, detect, label, orderedFiles) : "horizontal";
+    }
+    // 統一入口：依方向選 横式(現有) / 直式(轉置)。
+    function computeExcelCellsAuto(grid, excel, label, orderedFiles, autoAlign) {
+      if (resolveExcelOrientation(grid, excel, label, orderedFiles, autoAlign) === "vertical") {
+        const detect = detectExcelTable(grid);
+        if (detect) return computeExcelCellsTransposed(grid, detect, excel, label, orderedFiles).cells;
+      }
+      return computeExcelCells(excel, label, orderedFiles, autoAlign);
+    }
+
     // pattern → regex 字串：先轉義字面字元，再展開 placeholder ({group}/{idx}/{skip})
     function patternToRegex(pattern, groupCapture = "(.+?)", idxCapture = "(.+?)") {
       // 用佔位符暫存避免被字面 escape 影響
@@ -345,8 +455,13 @@
         if (!seen.has(s)) { seen.add(s); seenOrder.push(s); }
       }
       if (sort === "custom") {
-        // custom：完全由使用者定義（可含檔名沒出現的 idx → 該欄全部留空）
-        return Array.isArray(customOrder) ? [...customOrder] : [];
+        // custom：使用者定義（可含檔名沒出現的 idx → 該欄全部留空）。
+        //   但若 customOrder 與實際檔名 idx「完全對不到」(如直式範本把頂列 SN 當成 idxOrder)，
+        //   退回實際偵測的 idx，避免中間分群面板全空。
+        const custom = Array.isArray(customOrder) ? customOrder.map(String) : [];
+        const matched = custom.filter((c) => seen.has(c));
+        if (custom.length && matched.length === 0) return [...seenOrder];
+        return custom;
       }
       if (sort === "alpha") return [...seenOrder].sort((a, b) => a.localeCompare(b));
       if (sort === "num") {
@@ -668,8 +783,13 @@
 
       const hasHeader = (headerOrder || []).some((h) => h);
       const loadFromHeader = () => {
-        editCols({ idxSort: "custom", idxOrder: [...(headerOrder || [])] }, "欄位依範本表頭");
+        editCols({ idxSort: "custom", idxOrder: [...(headerOrder || [])] }, "欄位依範本標籤");
       };
+      // 目前生效的來源（給按鈕高亮）：比對 idxOrder 與 範本標籤 / 檔名
+      const _sameArr = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((x, i) => String(x) === String(b[i]));
+      const isCustom = (label.idxSort || "auto") === "custom";
+      const headerActive = isCustom && _sameArr(label.idxOrder, headerOrder);
+      const filesActive = isCustom && !headerActive && _sameArr(label.idxOrder, fromFiles);
 
       // 忽略 idx：當作資料夾無此 idx 圖 → 該欄保留位置但不貼圖（自動/自訂、依表頭/依檔名 皆通用）
       const ignoreSet = new Set(label.idxIgnore || []);
@@ -755,14 +875,19 @@
                     <span className="text-slate-400 ml-1">（按「依檔名」納入）</span>
                   </div>
                 )}
-                <div className="flex gap-2 text-[10px] flex-wrap">
+                <div className="flex items-center gap-1.5 text-[10px] flex-wrap">
+                  <span className="text-slate-500">欄位順序：</span>
                   {hasHeader && (
                     <button onClick={loadFromHeader}
-                      className="text-sky-700 hover:underline font-medium">⊞ 依範本表頭</button>
+                      title="idx 欄位依範本標籤順序（横式＝頂列表頭、直式＝左欄標籤）"
+                      className={`px-1.5 py-0.5 rounded border ${headerActive ? "bg-sky-600 text-white border-sky-700 font-medium" : "border-sky-300 text-sky-700 hover:bg-sky-100"}`}>
+                      ⊞ 依範本標籤{headerActive ? " ✓" : ""}</button>
                   )}
                   <button onClick={loadFromFiles}
-                    className="text-sky-700 hover:underline">↻ 依檔名</button>
-                  <span className="text-slate-500">拖曳排序 · 🚫 忽略(留空) · 點 ✕ 移除 · Enter 新增</span>
+                    title="idx 欄位依檔名順序"
+                    className={`px-1.5 py-0.5 rounded border ${filesActive ? "bg-sky-600 text-white border-sky-700 font-medium" : "border-sky-300 text-sky-700 hover:bg-sky-100"}`}>
+                    ↻ 依檔名{filesActive ? " ✓" : ""}</button>
+                  <span className="text-slate-400 ml-1">拖曳排序 · 🚫 忽略 · ✕ 移除 · Enter 新增</span>
                 </div>
               </div>
             </>
@@ -2537,7 +2662,7 @@
       );
     }
 
-    function ExcelPreview({ grid, cfg, orderedFiles, selected, thumbUrl, snList, snColIdx }) {
+    function ExcelPreview({ grid, cfg, orderedFiles, selected, thumbUrl, snList, snColIdx, idxLabelCells }) {
       if (!grid) {
         return (
           <div className="border rounded-lg bg-slate-50 p-8 text-center text-slate-500">
@@ -2583,7 +2708,7 @@
           }
         }
       } else {
-        placements = computeExcelCells(cfg.excel, cfg.label, orderedFiles, cfg.autoAlign);
+        placements = computeExcelCellsAuto(grid, cfg.excel, cfg.label, orderedFiles, cfg.autoAlign);
         // 依檔名 idx + 各欄獨立：對每個 placement 注入 per-idx crop (沒設定者 _crop=null 表示不裁剪、避免回退全域)
         if (cfg.autoAlign && cfg.cropMode === "per-col") {
           const idxCrops = cfg.label.idxCrops || {};
@@ -2680,6 +2805,20 @@
                   position: "absolute",
                   left: HEADER_W + cumX[snColIdx - 1], top: HEADER_H + cumY[ri],
                   width: grid.cols[snColIdx - 1].w_px, height: grid.rows[ri].h_px,
+                  background: "#ecfdf5", pointerEvents: "none",
+                }} />
+              );
+            })}
+
+            {/* idx 標籤軸 highlight（依檔名：對位用的標籤欄/列標綠，直式=左欄、横式=頂列） */}
+            {(idxLabelCells || []).map(({ r, c }, i) => {
+              const ci = c - 1, ri = r - 1;
+              if (ci < 0 || ri < 0 || ci >= grid.cols.length || ri >= grid.rows.length) return null;
+              return (
+                <div key={`idxhl-${i}`} style={{
+                  position: "absolute",
+                  left: HEADER_W + cumX[ci], top: HEADER_H + cumY[ri],
+                  width: grid.cols[ci].w_px, height: grid.rows[ri].h_px,
                   background: "#ecfdf5", pointerEvents: "none",
                 }} />
               );
@@ -2945,6 +3084,48 @@
         const map = new Map(files.map((f) => [f.path, f]));
         return order.map((p) => map.get(p)).filter(Boolean);
       }, [files, order]);
+
+      // 直式（轉置）xlsx（PD #31）：解析最終方向(含手選) + 對不到左欄標籤的零件警示，給 UI 用
+      const xlOrient = useMemo(() => {
+        if (cfg.snMatchMode || mode !== "excel" || !xlGrid || !cfg.autoAlign) return null;
+        const auto = (cfg.excel.orient || "auto") === "auto";
+        // 自動模式但尚未上傳檔案 → 無檔名可比對，先不臆測方向
+        if (auto && !orderedFiles.length) return { orientation: null, auto, pending: true };
+        const orientation = resolveExcelOrientation(xlGrid, cfg.excel, cfg.label, orderedFiles, cfg.autoAlign);
+        const detect = detectExcelTable(xlGrid);
+        const ax = detect ? readAxisLabels(xlGrid, detect) : null;
+        // idxAxisLabels：依方向給「依範本標籤」按鈕用的範本 idx 軸標籤(横式=頂列、直式=左欄)
+        const idxAxisLabels = ax ? (orientation === "vertical" ? ax.leftLabelsArr : ax.topLabelsArr) : [];
+        const _sameArr = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((x, i) => String(x) === String(b[i]));
+        // idxLabelCells：對位用的標籤軸格子(直式=左欄、横式=頂列)。
+        //   只在「依範本標籤」(idx 順序＝範本標籤、圖片與標籤一一對應)時標綠；「依檔名」不標。
+        const labelCellsFor = (effIdxList) => {
+          if (!ax || !idxAxisLabels.length || !_sameArr(effIdxList, idxAxisLabels)) return [];
+          const out = [];
+          if (orientation === "vertical") for (const [, rr] of ax.leftLabels) out.push({ r: rr, c: ax.region.minC });
+          else for (const [, cc] of ax.topLabels) out.push({ r: ax.headerRow, c: cc });
+          return out;
+        };
+        if (orientation !== "vertical") {
+          const eff = detectIdxList(orderedFiles, cfg.label.pattern, cfg.label.idxSort || "auto", cfg.label.idxOrder || []);
+          return { orientation: "horizontal", auto, idxAxisLabels, idxLabelCells: labelCellsFor(eff) };
+        }
+        const r = detect ? computeExcelCellsTransposed(xlGrid, detect, cfg.excel, cfg.label, orderedFiles) : { unmatched: [], idxList: [] };
+        return { orientation: "vertical", auto, unmatched: r.unmatched, partOrder: r.idxList, idxAxisLabels, idxLabelCells: labelCellsFor(r.idxList) };
+      }, [cfg.snMatchMode, mode, xlGrid, cfg.autoAlign, cfg.label, cfg.excel, orderedFiles]);
+
+      // 直式正規化：方向為直式、但 idxOrder 失效(載入時殘留的頂列值對不到檔名) →
+      //   自動設成「依範本標籤」(左欄順序)，讓狀態與按鈕高亮一致。使用者已選有效排序則不動。
+      useEffect(() => {
+        if (xlOrient?.orientation !== "vertical") return;
+        const labels = xlOrient.idxAxisLabels || [];
+        if (!labels.length) return;
+        const cur = (cfg.label.idxSort === "custom") ? (cfg.label.idxOrder || []).map(String) : [];
+        if (cur.length === labels.length && cur.every((x, i) => x === String(labels[i]))) return;   // 已是依範本標籤
+        const fileIdx = new Set(orderedFiles.map((f) => String(extractGroupIdx(_fileStem(f), cfg.label.pattern).idx)));
+        if (cur.length && cur.some((c) => fileIdx.has(c))) return;   // 使用者已選有效排序(依檔名/自訂) → 不覆寫
+        setCfg((c) => ({ ...c, label: { ...c.label, idxSort: "custom", idxOrder: [...labels] } }));
+      }, [xlOrient, orderedFiles]);
 
       // ✨ 魔法時刻（A）+ 價值量化（B）：範本+圖片就緒、自動對齊好 → 慶祝（每批一次）
       useEffect(() => {
@@ -3946,7 +4127,7 @@
           };
           let body;
           if (mode === "excel") {
-            const cells = computeExcelCells(cfg.excel, cfg.label, arr, cfg.autoAlign).map(attachIdxCrop);
+            const cells = computeExcelCellsAuto(xlGrid, cfg.excel, cfg.label, arr, cfg.autoAlign).map(attachIdxCrop);
             if (cells.length === 0) throw new Error("沒有可匯出的圖片");
             setStatus(`匯出 Excel 中… (${cells.length} 格)`);
             body = JSON.stringify({
@@ -4458,6 +4639,40 @@
                           <div className="text-[10px] text-slate-400">
                             SN 字串從檔名 pattern「{cfg.label.pattern}」抽取
                           </div>
+                          {/* 範本方向（PD #31）：auto 偵測 / 手選 横式(SN在左欄) / 直式(SN在頂列) */}
+                          <div>
+                            <div className="text-xs text-slate-600 mb-1">範本方向</div>
+                            <div className="flex text-xs border rounded overflow-hidden">
+                              {[
+                                { v: "auto", label: "自動" },
+                                { v: "horizontal", label: "横式" },
+                                { v: "vertical", label: "直式" },
+                              ].map((opt) => (
+                                <button key={opt.v}
+                                  onClick={() => setCfg((c) => ({ ...c, excel: { ...c.excel, orient: opt.v } }))}
+                                  className={`flex-1 px-2 py-1 ${(cfg.excel.orient || "auto") === opt.v ? "bg-slate-700 text-white" : "hover:bg-slate-100"}`}>
+                                  {opt.label}
+                                </button>
+                              ))}
+                            </div>
+                            <div className="text-[10px] text-slate-400 mt-0.5">
+                              横式＝SN(前段)在左欄、零件在頂列；直式＝SN 在頂列、零件在左欄。
+                            </div>
+                            {xlOrient?.pending && (
+                              <div className="text-[10px] mt-1 rounded px-2 py-1 text-slate-500 bg-slate-50 border">
+                                ⏳ 待上傳資料夾後，依檔名規則自動判斷方向（或先手選 横式 / 直式）。
+                              </div>
+                            )}
+                            {xlOrient && !xlOrient.pending && (
+                              <div className={`text-[10px] mt-1 rounded px-2 py-1 ${xlOrient.orientation === "vertical" ? "text-sky-700 bg-sky-50 border border-sky-200" : "text-slate-500 bg-slate-50 border"}`}>
+                                {xlOrient.auto ? "🧭 偵測到：" : "📌 已選："}<b>{xlOrient.orientation === "vertical" ? "直式" : "横式"}</b>
+                                {xlOrient.orientation === "vertical" && "（零件在左欄、SN 自動排欄；零件順序可用左側「依範本標籤/依檔名」調整）"}
+                                {xlOrient.unmatched?.length > 0 && (
+                                  <div className="text-amber-700 mt-0.5">⚠ 有零件對不到左欄標籤(會跳過)：<span className="font-mono">{xlOrient.unmatched.join("、")}</span></div>
+                                )}
+                              </div>
+                            )}
+                          </div>
                           <NumberInput label="每列圖數" step={1}
                             value={cfg.autoAlign ? Math.max(1, autoIdxList.length) : cfg.excel.imgsPerRow}
                             disabled={cfg.autoAlign}
@@ -4528,7 +4743,7 @@
                           setCropIdxKey(idxKey);
                           setCropOpen(true);
                         }}
-                        headerOrder={tblHeaderOrder}
+                        headerOrder={(xlOrient?.idxAxisLabels?.length ? xlOrient.idxAxisLabels : tblHeaderOrder)}
                         pushHistory={pushHistory}
                       />
                       <NumberInput label="字體" suffix="pt" step={1} value={cfg.label.font_pt}
@@ -4757,7 +4972,10 @@
                   </div>
                 )}
                 {cfg.autoAlign && orderedFiles.length > 0 ? (() => {
-                  const idxList = detectIdxList(orderedFiles, cfg.label.pattern, cfg.label.idxSort || "auto", cfg.label.idxOrder || []);
+                  // 直式：零件順序照範本左欄(與右側預覽一致)；否則照一般偵測/自訂
+                  const idxList = (xlOrient?.orientation === "vertical" && xlOrient.partOrder?.length)
+                    ? xlOrient.partOrder
+                    : detectIdxList(orderedFiles, cfg.label.pattern, cfg.label.idxSort || "auto", cfg.label.idxOrder || []);
                   const cols = Math.max(1, idxList.length);
                   const rows = buildRows(orderedFiles, cfg.label.pattern, idxList, true, new Set(cfg.label.idxIgnore || []));
                   const showPerColCrop = cfg.cropMode === "per-col";
@@ -4956,7 +5174,8 @@
 
                       {tplPath && mode === "excel" && (
                         <ExcelPreview grid={xlGrid} cfg={cfg} orderedFiles={orderedFiles} selected={selected} thumbUrl={thumbUrl} snList={snList}
-                          snColIdx={cfg.snMatchMode && xlsxSn ? colLetterToIdx(xlsxSn.col) : 0} />
+                          snColIdx={cfg.snMatchMode && xlsxSn ? colLetterToIdx(xlsxSn.col) : 0}
+                          idxLabelCells={!cfg.snMatchMode ? (xlOrient?.idxLabelCells || []) : []} />
                       )}
                       {/* 依範本 SN（PPT）：HTML 表格預覽（取代疊在 PNG 上的做法 → 天生對齊）*/}
                       {tplPath && mode === "slides" && cfg.snMatchMode && (() => {
