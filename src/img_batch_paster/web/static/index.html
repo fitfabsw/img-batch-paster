@@ -1394,7 +1394,7 @@
     }
 
     // 分段點選的 SN 設定 UI：分隔符 + 各段角色 chip + 即時抽取預覽 + 命中統計
-    function SnPatternPicker({ cfgLabel, autoAlign, setCfg, firstFile, allFiles, perColCrop, onOpenIdxCrop, headerOrder, pushHistory, hideSrc, locked }) {
+    function SnPatternPicker({ cfgLabel, autoAlign, setCfg, firstFile, allFiles, perColCrop, onOpenIdxCrop, headerOrder, pushHistory, hideSrc, locked, hideEditor }) {
       const DELIMS = [
         { v: "-", label: "-" },
         { v: "_", label: "_" },
@@ -1599,7 +1599,7 @@
                   </div>
                 </div>
               </div>
-              {autoAlign && (
+              {autoAlign && !hideEditor && (
                 <div className="pt-2 border-t bg-sky-50 -mx-1 px-2 py-2 rounded space-y-2">
                   <div className="text-xs text-sky-800 font-semibold">🎯 Index 欄位（切點後的內容自動展開）</div>
                   <IdxColumnsEditor
@@ -1656,7 +1656,7 @@
                       </div>
                     )}
                   </div>
-                  {idxIdx >= 0 && (
+                  {idxIdx >= 0 && !hideEditor && (
                     <IdxColumnsEditor
                       label={cfgLabel}
                       allFiles={allFiles}
@@ -1668,6 +1668,9 @@
                       hideSrc={hideSrc}
                       locked={locked}
                     />
+                  )}
+                  {idxIdx >= 0 && hideEditor && (
+                    <div className="text-[10px] text-slate-400">Index 欄位的排序 / 忽略 / 刪除 / 新增，請在中間預覽區的欄標頭操作。</div>
                   )}
                 </div>
               )}
@@ -3206,6 +3209,18 @@
       const setIdxSrc = (src) => setCfg((c) => ({
         ...c, label: { ...c.label, idxSort: "custom", idxOrder: src === "template" ? [...idxAxisLabelsBtn] : [...idxFileOrder] },
       }));
+      // 中間欄標頭的 Index 欄位操作（取代左邊 editor，xlsx 依檔名用）：排序 / 忽略 / 刪除 / 新增
+      const idxColsNow = () => (xlOrient?.orientation === "vertical" && xlOrient.partOrder?.length)
+        ? xlOrient.partOrder
+        : detectIdxList(orderedFiles, cfg.label.pattern, cfg.label.idxSort || "auto", cfg.label.idxOrder || []);
+      const editIdxCols = (next) => { pushHistory?.(); setCfg((c) => ({ ...c, label: { ...c.label, idxSort: "custom", idxOrder: next } })); };
+      const idxRemoveCol = (key) => editIdxCols(idxColsNow().filter((x) => String(x) !== String(key)));
+      const idxAddCol = (name) => { const cur = idxColsNow(); const v = String(name).trim(); if (v && !cur.map(String).includes(v)) editIdxCols([...cur, v]); };
+      const idxMoveCol = (from, to) => { const cur = [...idxColsNow()]; if (from === to || from < 0 || to < 0 || from >= cur.length || to >= cur.length) return; const [m] = cur.splice(from, 1); cur.splice(to, 0, m); editIdxCols(cur); };
+      const idxToggleIgnoreCol = (key) => setCfg((c) => { const s = new Set((c.label.idxIgnore || []).map(String)); s.has(String(key)) ? s.delete(String(key)) : s.add(String(key)); return { ...c, label: { ...c.label, idxIgnore: [...s] } }; });
+      const [idxColDrag, setIdxColDrag] = useState(-1);
+      const [idxColOver, setIdxColOver] = useState(-1);
+      const [idxNewCol, setIdxNewCol] = useState("");
 
       // ✨ 魔法時刻（A）+ 價值量化（B）：範本+圖片就緒、自動對齊好 → 慶祝（每批一次）
       useEffect(() => {
@@ -4858,6 +4873,7 @@
                         pushHistory={pushHistory}
                         hideSrc={mode === "excel"}
                         locked={mode === "excel" && idxTemplateActive}
+                        hideEditor={mode === "excel"}
                       />
                       <NumberInput label="字體" suffix="pt" step={1} value={cfg.label.font_pt}
                         onChange={(v) => setCfg((c) => ({ ...c, label: { ...c.label, font_pt: v } }))} />
@@ -5118,6 +5134,50 @@
                       Group 對位＝依範本：順序由範本決定、不可拖曳（切「依檔名」可手動排序）。
                     </div>
                   )}
+                  {/* Index 欄位操作（xlsx：取代左邊 editor）：排序 / 忽略 / 刪除 / 新增 */}
+                  {mode === "excel" && (() => {
+                    const idxLocked = idxTemplateActive;
+                    const ignoreSet = new Set((cfg.label.idxIgnore || []).map(String));
+                    return (
+                      <div className="border border-sky-300 rounded bg-sky-50 p-2 mb-1 sticky top-0 z-10">
+                        <div className="text-[10px] text-sky-800 font-semibold mb-1">
+                          Index 欄位 · {idxList.length}
+                          {idxLocked && <span className="text-slate-400 font-normal ml-1">（依範本：順序由範本決定；切「依檔名」可編輯）</span>}
+                        </div>
+                        <div className="flex gap-1 overflow-x-auto pb-1">
+                          {idxList.map((key, ci) => {
+                            const ignored = ignoreSet.has(String(key));
+                            return (
+                              <div key={key}
+                                draggable={!idxLocked}
+                                onDragStart={() => !idxLocked && setIdxColDrag(ci)}
+                                onDragOver={(e) => { if (!idxLocked) { e.preventDefault(); if (idxColOver !== ci) setIdxColOver(ci); } }}
+                                onDrop={() => { if (!idxLocked) { idxMoveCol(idxColDrag, ci); setIdxColDrag(-1); setIdxColOver(-1); } }}
+                                onDragEnd={() => { setIdxColDrag(-1); setIdxColOver(-1); }}
+                                style={{ boxShadow: (idxColDrag >= 0 && idxColDrag !== ci && idxColOver === ci) ? (ci > idxColDrag ? "inset -2px 0 0 0 #0284c7" : "inset 2px 0 0 0 #0284c7") : "" }}
+                                className={`shrink-0 flex items-center gap-1 border rounded px-1.5 py-0.5 text-xs font-mono ${ignored ? "bg-amber-50 border-amber-300 text-amber-700" : "bg-white border-sky-300 text-sky-800"} ${idxLocked ? "opacity-70" : "cursor-grab active:cursor-grabbing"}`}>
+                                <span className={ignored ? "line-through" : ""}>{key}</span>
+                                {!idxLocked && (<>
+                                  <button onClick={() => idxToggleIgnoreCol(key)} title={ignored ? "取消忽略" : "忽略此欄（留空）"} className="text-[10px] leading-none opacity-50 hover:opacity-100">🚫</button>
+                                  <button onClick={() => idxRemoveCol(key)} title="刪除此欄" className="text-[10px] leading-none text-slate-400 hover:text-red-600">✕</button>
+                                </>)}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {!idxLocked && (
+                          <div className="flex items-center gap-1 mt-1">
+                            <input value={idxNewCol} onChange={(e) => setIdxNewCol(e.target.value)}
+                              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); idxAddCol(idxNewCol); setIdxNewCol(""); } }}
+                              placeholder="新增欄位名…" className="border rounded px-1.5 py-0.5 text-[10px] font-mono w-24" />
+                            <button onClick={() => { idxAddCol(idxNewCol); setIdxNewCol(""); }} disabled={!idxNewCol.trim()}
+                              className="text-[10px] px-1.5 py-0.5 rounded border bg-sky-100 hover:bg-sky-200 text-sky-800 disabled:opacity-40">+ 新增</button>
+                            <span className="text-[9px] text-slate-400 ml-1">拖曳排序 · 🚫 忽略 · ✕ 刪除</span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                   {rows.map((row, rIdx) => {
                     const groupSkipped = (xlOrient?.unmatchedGroups || []).map(String).includes(String(row.group));
                     const groupLocked = xlOrient?.groupEff === "template";
