@@ -14,6 +14,7 @@
     @keyframes spin { to { transform: rotate(360deg); } }
     .spinner { width: 36px; height: 36px; border: 4px solid #cbd5e1; border-top-color: #059669;
                border-radius: 50%; animation: spin 0.8s linear infinite; }
+    body.hide-tips .tip { display: none !important; }
   </style>
 </head>
 <body class="bg-slate-50">
@@ -863,7 +864,7 @@
         <div>
           <div className="text-xs text-sky-800 font-semibold mb-1">
             Index 欄位 · {idxList.length}
-            {locked && <span className="text-[10px] text-slate-400 font-normal ml-1">（依範本：順序由範本決定，切「依檔名」可手動調整）</span>}
+            {locked && <span className="tip text-[10px] text-slate-400 font-normal ml-1">（依範本：順序由範本決定，切「依檔名」可手動調整）</span>}
           </div>
           {idxList.length === 0 && fromFiles.length === 0 ? (
             <div className="text-[10px] text-amber-700 p-2 bg-amber-50 rounded">
@@ -1002,7 +1003,7 @@
           <div className="overflow-x-auto">
             <table className="text-xs w-full">
               <thead>
-                <tr className="text-[10px] text-slate-500">
+                <tr className="tip text-[10px] text-slate-500">
                   <th className="text-left px-1 py-0.5">SN</th>
                   {cfg.sources.map((s) => {
                     const displayName = s.files?.length ? s.name : "(未上傳)";
@@ -1259,7 +1260,7 @@
                 <div className="font-mono text-[10px] bg-white border rounded px-2 py-1 max-h-24 overflow-auto">
                   {templateSns.map((s) => s.sn).join(", ")}
                 </div>
-                <div className="text-[10px] text-slate-400">由範本 SN 欄自動帶入；要手動指定 SN 請改用「資料區留空」的範本。</div>
+                <div className="tip text-[10px] text-slate-400">由範本 SN 欄自動帶入；要手動指定 SN 請改用「資料區留空」的範本。</div>
               </div>
             )}
 
@@ -1298,7 +1299,7 @@
                   const w = Math.max(1, parseInt(cfg.snInput.pad) || 1);
                   const ex = (v) => { const num = String(v).padStart(w, "0"); const p = String(cfg.snInput.prefix); return p.includes("#") ? p.replace(/#/g, num) : p + num; };
                   return (
-                    <div className="text-[10px] text-slate-400 font-mono">例：{ex(cfg.snInput.from)} … {ex(cfg.snInput.to)}</div>
+                    <div className="tip text-[10px] text-slate-400 font-mono">例：{ex(cfg.snInput.from)} … {ex(cfg.snInput.to)}</div>
                   );
                 })()}
               </div>
@@ -1318,7 +1319,7 @@
           <div className="border rounded-lg p-2">
             <div className="text-sm font-medium text-slate-700 mb-2">資料來源 ({cfg.sources.length})</div>
             {isSlides && (
-              <div className="text-[10px] text-slate-500 bg-slate-50 border rounded px-2 py-1 mb-2">
+              <div className="tip text-[10px] text-slate-500 bg-slate-50 border rounded px-2 py-1 mb-2">
                 已辨識範本表格：<b>{slidesSnInfo.ncols || slidesSnInfo.headers.length + 1} 欄 × {slidesTblRows(slidesSnInfo)} 列</b>
                 · SN 在第 <b>{slidesSnInfo.snCol}</b> 欄、資料從第 <b>{slidesSnInfo.snRowStart}</b> 列起
                 {headers.length > 0 && <> · 可對應欄：<span className="font-mono">{headers.join(" / ")}</span></>}
@@ -1330,7 +1331,7 @@
                   <div className="flex items-center gap-1 mb-1">
                     {isSlides ? (
                       <>
-                        <span className="text-[10px] text-slate-500">對應欄</span>
+                        <span className="tip text-[10px] text-slate-500">對應欄</span>
                         <select value={s.slidesCol || ""}
                           onChange={(e) => updateSource(s.id, { slidesCol: e.target.value })}
                           className="border rounded px-1 py-0.5 text-xs flex-1 min-w-0">
@@ -1345,7 +1346,7 @@
                           );
                           // 未上傳資料夾 → 還不判斷（避免拿預設名亂分配）
                           if (!s.files?.length) return (
-                            <span className="text-[10px] text-slate-400 whitespace-nowrap">（上傳後依資料夾名判斷）</span>
+                            <span className="tip text-[10px] text-slate-400 whitespace-nowrap">（上傳後依資料夾名判斷）</span>
                           );
                           const auto = autoHeader(s.name);
                           return auto ? (
@@ -1363,7 +1364,7 @@
                       </>
                     ) : (
                       <>
-                        <span className="text-[10px] text-slate-500">寫入欄</span>
+                        <span className="tip text-[10px] text-slate-500">寫入欄</span>
                         <input value={s.targetCol}
                           onChange={(e) => updateSource(s.id, { targetCol: e.target.value.toUpperCase() })}
                           className="border rounded px-1.5 py-0.5 text-xs font-mono w-12" />
@@ -1560,7 +1561,7 @@
               <div>
                 <div className="text-xs text-slate-700 mb-1">
                   <b>SN 取前幾個字？</b>
-                  <span className="text-[10px] text-slate-400 ml-1">範例 <span className="font-mono">{firstFile.name}</span></span>
+                  <span className="tip text-[10px] text-slate-400 ml-1">範例 <span className="font-mono">{firstFile.name}</span></span>
                 </div>
                 {/* 視覺化切點：綠=SN，藍=其餘（對位數字） */}
                 <div className="flex flex-wrap items-center gap-0.5 font-mono text-sm mb-2 select-none">
@@ -1582,7 +1583,7 @@
                 <div className="text-xs p-2 border rounded bg-emerald-50">
                   抽出 Group：<b className="font-mono text-emerald-800">{preview ? preview.group : "(無法抽出)"}</b>
                   {autoAlign && <span className="ml-3">對位欄：<b className="font-mono text-sky-800">{preview && preview.idx != null ? preview.idx : "(無)"}</b></span>}
-                  <div className="text-[10px] text-slate-500 mt-0.5">
+                  <div className="tip text-[10px] text-slate-500 mt-0.5">
                     {okCount === total
                       ? `全部 ${total} 個檔案皆可抽出 ✓`
                       : `${okCount} / ${total} 個檔案可抽出${okCount < total ? "（其餘以原檔名顯示）" : ""}`}
@@ -1613,9 +1614,9 @@
                 <div>
                   Group=<b className="font-mono text-emerald-800">{preview ? preview.group : "?"}</b>
                   {autoAlign && <span className="ml-2">Index=<b className="font-mono text-sky-800">{preview && preview.idx != null ? preview.idx : "(無)"}</b></span>}
-                  <span className="text-[10px] text-slate-400 ml-2">範例 <span className="font-mono">{firstFile.name}</span></span>
+                  <span className="tip text-[10px] text-slate-400 ml-2">範例 <span className="font-mono">{firstFile.name}</span></span>
                 </div>
-                <div className="text-[10px] text-slate-500 mt-0.5">
+                <div className="tip text-[10px] text-slate-500 mt-0.5">
                   {okCount === total
                     ? `全部 ${total} 個檔案皆可抽出 ✓`
                     : `${okCount} / ${total} 個檔案可抽出${segCount < 2 ? "（找不到分隔符，請換一個）" : ""}`}
@@ -1755,11 +1756,11 @@
             onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between">
               <div className="text-sm font-semibold">✂️ 設定裁剪區域</div>
-              <div className="text-[10px] text-slate-500 font-mono">
+              <div className="tip text-[10px] text-slate-500 font-mono">
                 L {pct(box.left)}% · T {pct(box.top)}% · R {pct(box.right)}% · B {pct(box.bottom)}% · {pct(w)}×{pct(h)}%
               </div>
             </div>
-            <div className="text-[11px] text-slate-500">
+            <div className="tip text-[11px] text-slate-500">
               拖曳框內可移動 · 拖曳邊角縮放 · 拖曳框外重新框選
             </div>
             <div ref={boxRef}
@@ -1794,7 +1795,7 @@
               </div>
             </div>
             <div className="flex items-center gap-2 justify-end text-sm">
-              <div className="text-[10px] text-slate-400 mr-auto">⏎ 套用 · Esc 關閉</div>
+              <div className="tip text-[10px] text-slate-400 mr-auto">⏎ 套用 · Esc 關閉</div>
               <button onClick={() => setBox({ left: 0.15, top: 0.15, right: 0.85, bottom: 0.85 })}
                 className="border rounded px-3 py-1 hover:bg-slate-100">重置框</button>
               <button onClick={() => onApply({ enabled: false, left: 0, top: 0, right: 1, bottom: 1 })}
@@ -1872,7 +1873,7 @@
               <span className="text-rose-600 font-bold">2EG</span><span className="text-slate-400">-</span><span className="text-sky-600 font-bold">C</span><span className="text-slate-400">.jpg</span>
               <span className="font-sans text-[11px] text-slate-400 ml-2">前段＝列、後段＝欄</span>
             </div>
-            <div className="text-[11px] text-slate-500 text-center my-1">資料夾：<code className="font-mono">2EG-A 2EG-B 2EG-C 2EG-D 2JG-A 2JG-C 2JG-D 2KG-A 2KG-B 2KG-D …</code></div>
+            <div className="tip text-[11px] text-slate-500 text-center my-1">資料夾：<code className="font-mono">2EG-A 2EG-B 2EG-C 2EG-D 2JG-A 2JG-C 2JG-D 2KG-A 2KG-B 2KG-D …</code></div>
             <table className="mx-auto border-collapse text-[11px]">
               <tbody>
                 <tr>
@@ -1915,12 +1916,12 @@
             <div className="flex items-center gap-1 mb-1">
               <Lab>完整貼邊</Lab>
               <Box iw={20} ih={48} /><Box iw={64} ih={26} />
-              <span className="text-[11px] text-slate-500 ml-1">各自貼滿格 → 高度不同</span>
+              <span className="tip text-[11px] text-slate-500 ml-1">各自貼滿格 → 高度不同</span>
             </div>
             <div className="flex items-center gap-1">
               <Lab>等高對齊</Lab>
               <Box iw={11} ih={26} /><Box iw={64} ih={26} />
-              <span className="text-[11px] text-slate-500 ml-1">同列縮到等高 → A 變小、上下對齊</span>
+              <span className="tip text-[11px] text-slate-500 ml-1">同列縮到等高 → A 變小、上下對齊</span>
             </div>
           </div>
         );
@@ -2233,7 +2234,7 @@
                 <div className="flex flex-wrap gap-1.5">
                   {sortedIdx.map((s) => (
                     <span key={s} className="inline-flex items-center gap-1 px-2 py-0.5 rounded border bg-white border-sky-300 text-sky-800 text-xs font-mono">
-                      {s}<span className="text-[10px] text-slate-400">×{counts[s]}</span>
+                      {s}<span className="tip text-[10px] text-slate-400">×{counts[s]}</span>
                     </span>
                   ))}
                 </div>
@@ -2295,7 +2296,7 @@
                 {errN > 0 && <>（含 <b className="text-amber-700">{errN}</b> 個錯誤值 <span className="font-mono">#VALUE!</span>，多為內嵌圖片殘留）</>}。
                 乾淨範本此區應全部留空，由程式自動填入 SN 與圖片。</p>
               <p>殘留內容（如預填的 SN <span className="font-mono">2EG/2JG</span> 或 <span className="font-mono">#VALUE!</span>）會干擾表頭偵測、自動對位與匯出結果。</p>
-              <div className="text-[11px] text-slate-500 bg-slate-50 border rounded px-2 py-1 font-mono break-all">{sample}{cells.length > 8 ? " …" : ""}</div>
+              <div className="tip text-[11px] text-slate-500 bg-slate-50 border rounded px-2 py-1 font-mono break-all">{sample}{cells.length > 8 ? " …" : ""}</div>
               <p className="text-[13px]"><b>建議</b>：改用「只保留表頭＋框線、資料區全空」的乾淨範本，再重新載入。</p>
             </div>
             <div className="px-5 py-3 border-t flex justify-end gap-2 bg-slate-50 rounded-b-xl">
@@ -2515,7 +2516,7 @@
       const display = (
         <div className={`text-center text-xs ${isH ? "w-14" : "w-10"} flex flex-col justify-center`}
           style={{ minHeight: 36 }}>
-          <div className="text-[10px] text-slate-400 leading-none mb-0.5">{label}</div>
+          <div className="tip text-[10px] text-slate-400 leading-none mb-0.5">{label}</div>
           {editing ? (
             <input autoFocus type="number" step={step} value={value}
               onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
@@ -3027,6 +3028,8 @@
       const [configMenuOpen, setConfigMenuOpen] = useState(false);
       const [helpOpen, setHelpOpen] = useState(false);
       const [shortcutsOpen, setShortcutsOpen] = useState(false);
+      const [showTips, setShowTips] = useState(true);   // 全域提示文字顯示/隱藏（簡化 UI）
+      useEffect(() => { document.body.classList.toggle("hide-tips", !showTips); }, [showTips]);
       const [toast, setToast] = useState(null);              // {kind,title,sub}
       const [idxConfirm, setIdxConfirm] = useState(null);    // 依檔名模式：上傳後 idx 確認對話框資料 | null
       const [tplWarnAck, setTplWarnAck] = useState(false);   // 已確認「髒範本」警告（每換範本重置）
@@ -4586,6 +4589,10 @@
                 className="border rounded px-2 py-0.5 text-xs hover:bg-slate-100 disabled:opacity-40">
                 ↷ Redo {historyFuture.length > 0 && <span className="text-slate-400 ml-0.5">({historyFuture.length})</span>}
               </button>
+              <button onClick={() => setShowTips((v) => !v)} title={showTips ? "隱藏提示文字（簡化畫面）" : "顯示提示文字"}
+                className={`border rounded px-2 py-0.5 text-xs ${showTips ? "hover:bg-slate-100" : "bg-slate-700 text-white border-slate-700"}`}>
+                💡 提示{showTips ? "" : "(關)"}
+              </button>
               <button onClick={() => setShortcutsOpen(true)} title="鍵盤熱鍵"
                 className="border rounded px-2 py-0.5 text-xs hover:bg-slate-100">
                 ⌨️ 熱鍵
@@ -4616,7 +4623,7 @@
                       className="hidden"
                       onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; uploadTemplate(f); }} />
                   </div>
-                  <div className="text-[10px] text-slate-400 mt-1">可拖拉檔案；.key 需 server 在 macOS（Keynote 轉檔約 10-30 秒）</div>
+                  <div className="tip text-[10px] text-slate-400 mt-1">可拖拉檔案；.key 需 server 在 macOS（Keynote 轉檔約 10-30 秒）</div>
                 </div>
 
                 {!cfg.snMatchMode && (
@@ -4710,7 +4717,7 @@
                             <div className="text-xs text-slate-600 mb-1">範本方向 <span className="text-slate-400 text-[10px]">Group / Index 哪個在列/欄</span></div>
                             <TriToggle value={cfg.excel.orient || "auto"} onPick={(v) => setCfg((c) => ({ ...c, excel: { ...c.excel, orient: v } }))}
                               options={[{ v: "auto", label: "自動" }, { v: "horizontal", label: "横式" }, { v: "vertical", label: "直式" }]} />
-                            <div className="text-[10px] text-slate-400 mt-0.5">横式＝Group 在左欄、Index 在頂列；直式＝相反。</div>
+                            <div className="tip text-[10px] text-slate-400 mt-0.5">横式＝Group 在左欄、Index 在頂列；直式＝相反。</div>
                             {xlOrient?.pending && (
                               <div className="text-[10px] mt-1 rounded px-2 py-1 text-slate-500 bg-slate-50 border">⏳ 上傳資料夾後自動判斷方向（或先手選）。</div>
                             )}
@@ -4727,7 +4734,7 @@
                             <div className="text-xs text-slate-600 mb-1">Group 對位 <span className="text-slate-400 text-[10px]">前段，如 2EG</span></div>
                             <TriToggle value={xlOrient.groupEff} options={SRC2}
                               onPick={(v) => setCfg((c) => ({ ...c, label: { ...c.label, groupSrc: v } }))} />
-                            <div className="text-[10px] text-slate-400 mt-0.5">依範本＝對到範本既有值(不覆寫)；依檔名＝自動產生並寫入。{!xlOrient.groupHasValues && "（範本 SN 軸無值 → 預設依檔名）"}</div>
+                            <div className="tip text-[10px] text-slate-400 mt-0.5">依範本＝對到範本既有值(不覆寫)；依檔名＝自動產生並寫入。{!xlOrient.groupHasValues && "（範本 SN 軸無值 → 預設依檔名）"}</div>
                             {xlOrient.unmatchedGroups?.length > 0 && (
                               <div className="text-[10px] text-amber-700 mt-0.5">⚠ 對不到範本、會跳過：<span className="font-mono">{xlOrient.unmatchedGroups.join("、")}</span></div>
                             )}
@@ -4738,7 +4745,7 @@
                             <div className="text-xs text-slate-600 mb-1">Index 對位 <span className="text-slate-400 text-[10px]">後段，如 BC</span></div>
                             <TriToggle value={idxFileActive ? "filename" : "template"} options={SRC2}
                               onPick={(v) => setIdxSrc(v)} />
-                            <div className="text-[10px] text-slate-400 mt-0.5">依範本＝Index 順序對到範本標籤；依檔名＝依檔名順序。細部排序見下方「對位欄位」。</div>
+                            <div className="tip text-[10px] text-slate-400 mt-0.5">依範本＝Index 順序對到範本標籤；依檔名＝依檔名順序。細部排序見下方「對位欄位」。</div>
                             {xlOrient.unmatched?.length > 0 && (
                               <div className="text-[10px] text-amber-700 mt-0.5">⚠ Index 對不到標籤、會跳過：<span className="font-mono">{xlOrient.unmatched.join("、")}</span></div>
                             )}
@@ -4747,7 +4754,7 @@
 
                           {/* 進階設定 */}
                           <div className="border-t pt-1">
-                            <button onClick={() => setXlAdvOpen((v) => !v)} className="text-[11px] text-slate-500 hover:text-slate-700">
+                            <button onClick={() => setXlAdvOpen((v) => !v)} className="tip text-[11px] text-slate-500 hover:text-slate-700">
                               {xlAdvOpen ? "▾" : "▸"} 進階設定（起始 cell、寫入欄、每列圖數）
                             </button>
                             {xlAdvOpen && (
@@ -4795,7 +4802,7 @@
                           <div className="mt-2">
                             <NumberInput label="留白" suffix="%" step={1} value={cfg.excel.containInset ?? 5}
                               onChange={(v) => setCfg((c) => ({ ...c, excel: { ...c.excel, containInset: Math.max(0, Math.min(45, parseFloat(v) || 0)) } }))} />
-                            <div className="text-[10px] text-slate-400 mt-1">
+                            <div className="tip text-[10px] text-slate-400 mt-1">
                               {cfg.excel.imgFit === "contain_align"
                                 ? "等高對齊：同列圖片縮到相同高度、保比例、上下緣對齊"
                                 : cfg.excel.imgFit === "fill"
@@ -4810,7 +4817,7 @@
                           onChange={(e) => setCfg((c) => ({ ...c, excel: { ...c.excel, embedInCell: e.target.checked } }))} />
                         <span>圖片嵌入儲存格內（變成格子內容，非浮動）</span>
                       </label>
-                      <div className="text-[10px] text-slate-400">
+                      <div className="tip text-[10px] text-slate-400">
                         勾＝圖片變成<b>儲存格內容</b>（點 cell 即選取、不能拖拉），需 Excel 365 / WPS 才顯示得了；
                         不勾＝<b>浮動圖片</b>蓋在格子上（相容性較佳，預設）。
                       </div>
@@ -4846,7 +4853,7 @@
                       <NumberInput label={mode === "excel" ? "Group 文字字體" : "字體"} suffix="pt" step={1} value={cfg.label.font_pt}
                         onChange={(v) => setCfg((c) => ({ ...c, label: { ...c.label, font_pt: v } }))} />
                       {mode === "slides" && (
-                        <div className="text-[10px] text-slate-400">
+                        <div className="tip text-[10px] text-slate-400">
                           X 位置請用預覽下方的「SN X」stepper（與圖片 X 獨立，不連動）
                         </div>
                       )}
@@ -4865,7 +4872,7 @@
                                 <NumberInput label="從第幾列起" step={1} value={cfg.slidesSn.rowStart}
                                   onChange={(v) => setCfg((c) => ({ ...c, slidesSn: { ...c.slidesSn, rowStart: Math.max(1, Math.min(slidesTbl ? slidesTbl.rows : 9999, parseInt(v) || 1)) } }))} />
                               </div>
-                              <div className="text-[10px] text-slate-400 mt-1">
+                              <div className="tip text-[10px] text-slate-400 mt-1">
                                 SN 會寫進範本表格的儲存格（與圖片位置脫鉤）；預覽以<b className="text-emerald-600">綠色虛線格</b>標示寫入位置。
                                 {slidesTbl
                                   ? <span className="ml-1">· 此範本表格 <b>{slidesTbl.cols} 欄 × {slidesTbl.rows} 列</b></span>
@@ -4904,7 +4911,7 @@
                     onChange={(e) => setCfg({ ...cfg, output: { ...cfg.output, path: e.target.value } })}
                     placeholder="out.pptx"
                     className="w-full border rounded px-2 py-1 text-sm" />
-                  <div className="text-[11px] text-slate-400 mt-1">匯出後會自動下載到你電腦</div>
+                  <div className="tip text-[11px] text-slate-400 mt-1">匯出後會自動下載到你電腦</div>
                 </div>
               </div>
               <div className="border-t bg-slate-50 p-3 rounded-b-lg space-y-2">
@@ -4923,7 +4930,7 @@
             }`}>
               {/* 排列方式：兩階層模式切換 */}
               <div className="p-2 border-b">
-                <div className="text-[10px] text-slate-500 mb-1 font-semibold">分群方式</div>
+                <div className="tip text-[10px] text-slate-500 mb-1 font-semibold">分群方式</div>
                 {/* Top level: 依檔名 / 依範本 SN */}
                 <div className="grid grid-cols-2 gap-1">
                   <button onClick={() => switchMode(false)}
@@ -4943,7 +4950,7 @@
                     📋 依 SN 清單
                   </button>
                 </div>
-                <div className="text-[10px] text-slate-500 mt-1">
+                <div className="tip text-[10px] text-slate-500 mt-1">
                   {cfg.snMatchMode
                     ? "SN 清單決定列；每個資料夾對應一欄"
                     : "從一個資料夾上傳一批圖、依檔名分群"}
@@ -5100,7 +5107,7 @@
                       </div>
                     )}
                   {xlOrient?.groupEff === "template" && (
-                    <div className="text-[10px] text-slate-500 bg-slate-50 border rounded px-2 py-1 mb-1">
+                    <div className="tip text-[10px] text-slate-500 bg-slate-50 border rounded px-2 py-1 mb-1">
                       Group 對位＝依範本：順序由範本決定、不可拖曳（切「依檔名」可手動排序）。
                     </div>
                   )}
@@ -5163,7 +5170,7 @@
                         <span className={`text-slate-400 ${groupLocked ? "opacity-30" : ""}`}>⠿</span>
                         <span className="text-xs font-semibold text-sky-800">{row.group || <span className="text-amber-600">未分組</span>}</span>
                         {groupSkipped && <span className="text-[10px] text-amber-700 bg-amber-100 rounded px-1">跳過·不在範本</span>}
-                        <span className="text-[10px] text-slate-400 ml-auto">Group {rIdx + 1}</span>
+                        <span className="tip text-[10px] text-slate-400 ml-auto">Group {rIdx + 1}</span>
                       </div>
                       <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
                         {row.cells.map((f, ci) => {
@@ -5247,7 +5254,7 @@
                     className="w-full border border-red-300 text-red-600 rounded py-1 text-xs hover:bg-red-50 disabled:opacity-40">
                     刪除選取 ({selPathsOrFallback().length})
                   </button>
-                  <div className="text-[10px] text-slate-400 text-center">
+                  <div className="tip text-[10px] text-slate-400 text-center">
                     {cfg.autoAlign
                       ? "拖曳 SN 卡片＝改列順序 · 點圖＝選取 · Del／⌫ 刪除"
                       : "Shift＝範圍選取 · ⌘/Ctrl＝多選 · 拖曳＝排序 · Del／⌫ 刪除"}
@@ -5542,7 +5549,7 @@
                               title="圖片自動對齊範本表格格子。再按一次切回手動網格">
                               ✨ 智能排列：{smartOn ? "開" : "關"}
                             </button>
-                            <span className="text-[11px] text-slate-500 flex-1 min-w-[10rem]">
+                            <span className="tip text-[11px] text-slate-500 flex-1 min-w-[10rem]">
                               {tableInfoLoading ? "讀取範本表格中…"
                                 : !tbl ? "此範本沒有表格 — 智能排列不適用，改用左側「每頁網格」＋下方 steppers 手動排"
                                 : smartOn ? `圖片已對齊範本表格（${imageRows} 個圖片列）· 用上方「填滿格高」調大小`
