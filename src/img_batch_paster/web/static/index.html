@@ -269,7 +269,7 @@
       const cells = [];
       rows.forEach(({ group, cells: rowCells }, rIdx) => {
         const targetRow = start.row + rIdx * stepRow;
-        if (label && label.enabled && snCol > 0) {
+        if (snCol > 0) {   // 依檔名(自動產生)→ 一律寫入 Group 文字；留空寫入欄(snCol=0)即不寫
           cells.push({
             row: targetRow, col: snCol, span_cols: 1, span_rows: excel.cellRows,
             text: group, font_pt: label.font_pt,
@@ -387,7 +387,7 @@
           if (g && !snSet.has(g)) { snSet.add(g); snList.push(g); }
         }
         colOf = new Map(snList.map((sn, k) => [sn, startCol + k * stepCol]));
-        if (label && label.enabled) {
+        {   // 依檔名(自動產生)→ 一律把 Group 寫進頂列標籤
           for (const sn of snList) {
             cells.push({ row: ax.headerRow, col: colOf.get(sn), span_cols: excel.cellCols, span_rows: 1, text: sn, font_pt: label.font_pt });
           }
@@ -4851,12 +4851,14 @@
 
                 {!cfg.snMatchMode && (
                 <div className="border-t pt-3">
-                  <label className="flex items-center gap-2 text-sm font-semibold">
-                    <input type="checkbox" checked={cfg.label.enabled}
-                      onChange={(e) => setCfg((c) => ({ ...c, label: { ...c.label, enabled: e.target.checked } }))} />
-                    寫入 Group 標籤（從檔名抽出）
-                  </label>
-                  {cfg.label.enabled && (
+                  {mode !== "excel" && (
+                    <label className="flex items-center gap-2 text-sm font-semibold">
+                      <input type="checkbox" checked={cfg.label.enabled}
+                        onChange={(e) => setCfg((c) => ({ ...c, label: { ...c.label, enabled: e.target.checked } }))} />
+                      寫入 SN 標籤（從檔名抽出）
+                    </label>
+                  )}
+                  {(mode === "excel" || cfg.label.enabled) && (
                     <div className="mt-2 space-y-2">
                       <SnPatternPicker
                         cfgLabel={cfg.label}
