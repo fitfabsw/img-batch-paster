@@ -340,8 +340,9 @@
         const custom = (label.idxOrder || []).map(String);
         if (custom.some((c) => fileIdx.has(c))) return custom;     // 依檔名/自訂(與檔名相符)
       }
-      // 預設 / 對不到 → 依範本左欄標籤順序(原始大小寫)
-      return (ax.leftLabelsArr || []).slice();
+      // 預設 → 依範本左欄標籤順序；但範本無標籤(全空) → 退回檔名 idx 順序，否則直式全空會貼不出來
+      if ((ax.leftLabelsArr || []).length) return ax.leftLabelsArr.slice();
+      return detectIdxList(files, label.pattern, "auto", []);
     }
     // 偵測範本方向：檔名「零件段(idx)」多數落在左欄 → 直式(vertical)；否則維持横式(horizontal)。
     function detectExcelOrientation(grid, detect, label, files) {

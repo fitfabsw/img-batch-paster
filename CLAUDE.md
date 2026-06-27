@@ -9,7 +9,7 @@
 - **Type**: single-process（Flask 同時 serve API + static）
 - **Port**: 5050（見 ~/.claude/skills/infra/dev/ports.md）
 - **Deps manager**: pip（`pyproject.toml`，editable install）— uv 亦可
-- **Test**: 無單元測試；`tests/make_test_images.py` 產測試圖、`tests/templates/` 放範本
+- **Test**: `tests/run_tests.sh`（xlsx placement，node+python）；`tests/make_test_images.py` 產測試圖
 - **Deploy target**: lab-mac-mini via launchd（再經 it-server 反代對外）
 - **Entry**: `src/img_batch_paster/web/app.py`（`img-batch-paster-web` entry point）
 
@@ -32,9 +32,12 @@ python3 -m venv .venv && .venv/bin/pip install -e .
 ## 測試
 
 ```bash
-.venv/bin/python tests/make_test_images.py    # 產生測試圖到 tests/fixtures/
-# 無自動化測試，靠手動跑 web UI 驗證
+bash tests/run_tests.sh    # xlsx 依檔名 placement 測試（6 case，用真實前端函式 + sample_xlsx fixtures）
 ```
+
+- `tests/test_placement.mjs` 從 `index.html` 抽出真實 placement 函式在 node 跑，驗證 `tests/fixtures/sample_xlsx/` 的 6 個範本（横式/直式 × 全空/index/index+group）圖片落點。
+- `tests/gen_grids.py` 把範本 xlsx 轉成前端 grid JSON（比照 app.py 的 grid parser）。
+- 其餘仍靠手動跑 web UI 驗證。`tests/make_test_images.py` 產測試圖。
 
 ## Deploy
 
