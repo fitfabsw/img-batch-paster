@@ -61,7 +61,7 @@
       snColPick: 1,   // 依範本 SN：哪一欄是 SN 欄（1-based，相對表格最左欄；1=最左欄＝預設）
       // 依範本 SN（PPT）圖片在儲存格內的調整：fit=填法(contain完整貼邊/cover裁切填滿/fill拉伸)
       //   fill=佔格高百分比(contain 用) / dx,dy=整體位移 / manual 微調
-      snAdjust: { fit: "contain", fill: 90, dx: 0, dy: 0, manual: false },
+      snAdjust: { fit: "contain", fill: 88, dx: 0, dy: 0, manual: false },
       sources: [          // SN 對照模式專用：多個來源資料夾 (每元素: {id, name, folder, files, targetCol, crop})
       ],
       crop: { enabled: false, left: 0, top: 0, right: 1, bottom: 1 },  // 0..1 相對裁剪 (全域)
@@ -736,7 +736,7 @@
       const dataStart0 = Math.max(0, (opts.dataStartRow1 || 2) - 1);
       const headerRow1 = opts.dataStartRow1 - 1;     // 表頭列（1-based）＝資料起始列上一列
       const dataRows = Math.max(0, nRows - dataStart0);
-      const fill = Math.max(5, Math.min(100, opts.fill ?? 90)) / 100;   // 圖高佔格高比例
+      const fill = Math.max(5, Math.min(100, opts.fill ?? 88)) / 100;   // 圖高佔格高比例
       const dxFrac = (opts.dx || 0) / 100, dyFrac = (opts.dy || 0) / 100; // 位移（佔格寬/高比例）
       // 資料列定位：優先用後端從渲染 PNG 量到的「實際起點 + 實際列間距」，每列 = 起點 + k×間距，
       //   與渲染完全吻合（修正表頭撐高 + 各版本列高壓縮造成的逐列累積偏移）。量不到才回退規格。
@@ -2623,7 +2623,7 @@
         ? Math.max(0.3, slidesTbl.data_start_cm - (slidesTbl.top_cm || 0)) : (rhArr[0] || 1.76);
       const rowH = Math.max(20, Math.round(dataCm * pxPerCm));
       const headerH = Math.max(16, Math.round(headerCm * pxPerCm));
-      const f = Math.max(0.05, Math.min(1, (fill ?? 90) / 100));
+      const f = Math.max(0.05, Math.min(1, (fill ?? 88) / 100));
       // SN 清單未產生時，顯示範本表格結構（表頭 + dataRows 個空白列），讓使用者確認範本載入正確
       const rows = snList.length ? snList : Array.from({ length: Math.max(1, dataRows) }, () => ({ sn: "" }));
       const isEmpty = snList.length === 0;
@@ -3879,7 +3879,8 @@
               areaW: pct(imgAreaW / W * 100),    // 圖片區總寬 → 整組置中
               gap: { x: pct(dGap / W * 100), y: 0 },  // 預設等距(間距X)，可調
               rowH: pct(imgRowH / H * 100),   // 鎖死列高 → 圖片保比例、垂直置中、貼齊表格列
-              // cols / rows 都不動 → 完全跟隨左側面板「每頁網格」設定
+              // 列數：初次套用(= 載入範本) → 自動設為範本資料列數；重新開啟智能排列時保留使用者已調的列數。欄數不動。
+              rows: (preserveWidth && c.grid.rows > 0) ? c.grid.rows : imageRows,
             },
             label: {
               ...c.label,
@@ -3889,7 +3890,7 @@
             },
           };
         });
-        setStatus(`智能排列已開啟。欄、列數請用左側「每頁網格」設定（此表格有 ${Math.max(1, t.rows - sr)} 個圖片列）`);
+        setStatus(`智能排列已開啟，每頁列數自動設為 ${imageRows}（範本資料列數）；欄數可用左側「每頁網格」調整。`);
       };
 
       // 關閉智能排列：把智能排列「當下」的幾何烘焙進「舊的等比手動模型」(rowH=0)，
@@ -4122,7 +4123,7 @@
               }
               if (!mapped) throw new Error("沒有可匯出的圖片（檢查 SN 與來源檔名、來源資料夾名 vs 表頭是否對應）");
               const fitMode = cfg.snAdjust?.fit || "contain";
-              const fillFrac = Math.max(5, Math.min(100, cfg.snAdjust?.fill ?? 90)) / 100;
+              const fillFrac = Math.max(5, Math.min(100, cfg.snAdjust?.fill ?? 88)) / 100;
               // 等高對齊：算出所有圖「都放得下」的共同高度(佔格高比例)，傳給後端 → 保比例不裁切、全部同高
               let alignFrac = fillFrac;
               if (fitMode === "contain_align") {
@@ -4464,7 +4465,7 @@
             return computeSnMatchSlides(slidesTbl, snList, cfg.sources, {
               snCol1: d.snCol, dataStartRow1: d.snRowStart,
               fontPt: cfg.label.font_pt || 18,
-              fill: cfg.snAdjust?.fill ?? 90,
+              fill: cfg.snAdjust?.fill ?? 88,
               dx: cfg.snAdjust?.manual ? (cfg.snAdjust?.dx ?? 0) : 0,
               dy: cfg.snAdjust?.manual ? (cfg.snAdjust?.dy ?? 0) : 0,
               dataStartCm: slidesTbl.data_start_cm, rowPitchCm: slidesTbl.row_pitch_cm,
@@ -5426,7 +5427,7 @@
                               )}
                               <SnSlidePreview slidesTbl={slidesTbl} slidesSnInfo={slidesSnInfo}
                                 snList={pageSns} sources={cfg.sources} thumbUrl={thumbUrl}
-                                fill={cfg.snAdjust?.fill ?? 90} fit={cfg.snAdjust?.fit || "contain"}
+                                fill={cfg.snAdjust?.fill ?? 88} fit={cfg.snAdjust?.fit || "contain"}
                                 perColCrop={cfg.cropMode === "per-col"}
                                 globalCrop={cfg.crop?.enabled ? cfg.crop : null}
                                 pageTbl={(tableInfo?.tables || [])[pg] || slidesTbl}
@@ -5463,7 +5464,7 @@
                               </div>
                               {(cfg.snAdjust?.fit || "contain") !== "fill" && (
                                 <div className="relative mt-1">
-                                  <Stepper label="填滿格高" orient="h" step={2} value={cfg.snAdjust?.fill ?? 90}
+                                  <Stepper label="填滿格高" orient="h" step={2} value={cfg.snAdjust?.fill ?? 88}
                                     onChange={(v) => setCfg((c) => ({ ...c, snAdjust: { ...c.snAdjust, fill: Math.max(5, Math.min(100, v)) } }))} />
                                   <div className="absolute left-0 right-0 top-full text-[10px] text-slate-400 text-center mt-1 pointer-events-none">100% = 圖高填滿格高</div>
                                 </div>
@@ -5577,7 +5578,7 @@
                           <div className="flex justify-center mt-3">
                             <div className="relative">
                               {cfg.snMatchMode ? (
-                                <Stepper label="填滿格高" orient="h" step={2} value={cfg.snAdjust?.fill ?? 90}
+                                <Stepper label="填滿格高" orient="h" step={2} value={cfg.snAdjust?.fill ?? 88}
                                   onChange={(v) => setCfg((c) => ({ ...c, snAdjust: { ...c.snAdjust, fill: Math.max(5, Math.min(100, v)) } }))} />
                               ) : smartOn ? (
                                 <Stepper label="填滿格高" orient="h" step={2} value={smartFillRatio}
