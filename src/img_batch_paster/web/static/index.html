@@ -299,7 +299,9 @@
       if (!grid || !detect || !detect.region) return null;
       const cells = grid.cells || [];
       const { minR, maxR, minC, maxC } = detect.region;
-      const headerRow = parseCell(detect.startCell).row - 1;   // 資料起始列的上一列＝頂列標籤
+      // 頂列標籤列＝資料起始列的上一列；但若範本頂列無文字(skipRows=0)，startCell 會落在表格頂列、
+      //   減 1 就跑到表格外 → 夾在 minR(表格頂列)，避免直式 v5 那種「資料列整體上移一列」的偏移。
+      const headerRow = Math.max(minR, parseCell(detect.startCell).row - 1);
       const topLabels = new Map(), topLabelsArr = [];
       for (let c = minC + 1; c <= maxC; c++) {
         const cell = cells.find((x) => x.r === headerRow && x.c === c);
@@ -3183,7 +3185,7 @@
       const idxRemoveCol = (key) => editIdxCols(idxColsNow().filter((x) => String(x) !== String(key)));
       const idxAddCol = (name) => { const cur = idxColsNow(); const v = String(name).trim(); if (v && !cur.map(String).includes(v)) editIdxCols([...cur, v]); };
       const idxMoveCol = (from, to) => { const cur = [...idxColsNow()]; if (from === to || from < 0 || to < 0 || from >= cur.length || to >= cur.length) return; const [m] = cur.splice(from, 1); cur.splice(to, 0, m); editIdxCols(cur); };
-      const idxToggleIgnoreCol = (key) => setCfg((c) => { const s = new Set((c.label.idxIgnore || []).map(String)); s.has(String(key)) ? s.delete(String(key)) : s.add(String(key)); return { ...c, label: { ...c.label, idxIgnore: [...s] } }; });
+      const idxToggleIgnoreCol = (key) => { pushHistory?.(); setCfg((c) => { const s = new Set((c.label.idxIgnore || []).map(String)); s.has(String(key)) ? s.delete(String(key)) : s.add(String(key)); return { ...c, label: { ...c.label, idxIgnore: [...s] } }; }); };
       const [idxColDrag, setIdxColDrag] = useState(-1);
       const [idxColOver, setIdxColOver] = useState(-1);
       const [idxNewCol, setIdxNewCol] = useState("");
