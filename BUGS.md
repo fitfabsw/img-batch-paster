@@ -33,7 +33,7 @@
 - **重現**: v4_group.xlsx（直式、只有 group）Index 對位選「依範本」→ 預覽仍有圖；横式 h4 同設定為空（正確）。
 - **預期 / 實際**: 依範本但範本無 index → 應空（不貼）；實際有圖。
 - **備註**: B-020 的退回（無左欄標籤→退回檔名 idx）連「明確選依範本（idxOrder 空）」時也誤觸發。
-- **修正**: `<this commit>` — `resolveTransposedIdxList`：custom 且 idxOrder 為空 → 回空（明確依範本）；退回只在 auto 時發生。加回歸測試。
+- **修正**: `678e7ff` — `resolveTransposedIdxList`：custom 且 idxOrder 為空 → 回空（明確依範本）；退回只在 auto 時發生。加回歸測試。
 
 ### [B-022] 横式 group 在左欄時資料錨點落在表頭列（Group 依檔名 騎到範本標籤）
 
