@@ -70,4 +70,14 @@ for j, v in enumerate(GROUP): put(ws, 2, 3 + j, v)
 for i, v in enumerate(INDEX): put(ws, 3 + i, 2, v)
 save(wb, "v6_index_group.xlsx")
 
+# 只有 group、沒有 index（對稱於 h2/v5 的只有 index）
+# 横式：左欄 group BBB,CCC；頂列無 index
+wb = openpyxl.Workbook(); ws = wb.active; grid(ws, 2, 2, 1 + len(GROUP), 4)
+for i, v in enumerate(GROUP): put(ws, 3 + i, 2, v)
+save(wb, "h7_group.xlsx")
+# 直式：頂列 group BBB,CCC；左欄無 index
+wb = openpyxl.Workbook(); ws = wb.active; grid(ws, 2, 2, 4, 1 + len(GROUP))
+for j, v in enumerate(GROUP): put(ws, 2, 3 + j, v)
+save(wb, "v8_group.xlsx")
+
 print("done →", tpl_dir)

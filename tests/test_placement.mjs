@@ -62,6 +62,9 @@ const EXPECT = {
   // index+group：兩軸依範本 → 只有 BBB 對到（AAA 整組、idx=1 皆跳過）
   h3_index_group:  { "BBB-2": "C3", "BBB-3": "D3" },
   v6_index_group:  { "BBB-2": "C3", "BBB-3": "C4" },
+  // 只有 group(BBB,CCC)：Group 依範本 → AAA 跳過；Index 依檔名（方向靠 group 軸命中自動判定）
+  h7_group:        { "BBB-2": "D3", "BBB-3": "E3" },
+  v8_group:        { "BBB-2": "C4", "BBB-3": "C5" },
 };
 // v4 全空無法自動偵測直式 → 手選 vertical
 const FORCE = { v4_empty: "vertical" };

@@ -344,19 +344,27 @@
       if ((ax.leftLabelsArr || []).length) return ax.leftLabelsArr.slice();
       return detectIdxList(files, label.pattern, "auto", []);
     }
-    // 偵測範本方向：檔名「零件段(idx)」多數落在左欄 → 直式(vertical)；否則維持横式(horizontal)。
+    // 偵測範本方向：依檔名兩段在範本的命中位置投票。
+    //   直式＝idx 在左欄 + group 在頂列；横式＝idx 在頂列 + group 在左欄。
+    //   同時看兩軸 → 「只有 index」或「只有 group」的範本都能判對；都對不到才退回横式。
     function detectExcelOrientation(grid, detect, label, files) {
       const ax = readAxisLabels(grid, detect);
       if (!ax) return "horizontal";
-      let top = 0, left = 0;
+      let vert = 0, horiz = 0;
       for (const f of files || []) {
-        const { idx } = extractGroupIdx(_fileStem(f), label.pattern);
-        if (idx == null) continue;
-        const n = _normLabel(idx);
-        if (ax.topLabels.has(n)) top++;
-        if (ax.leftLabels.has(n)) left++;
+        const { group, idx } = extractGroupIdx(_fileStem(f), label.pattern);
+        if (idx != null) {
+          const n = _normLabel(idx);
+          if (ax.leftLabels.has(n)) vert++;
+          if (ax.topLabels.has(n)) horiz++;
+        }
+        if (group != null) {
+          const g = _normLabel(group);
+          if (ax.topLabels.has(g)) vert++;
+          if (ax.leftLabels.has(g)) horiz++;
+        }
       }
-      return left > top ? "vertical" : "horizontal";
+      return vert > horiz ? "vertical" : "horizontal";
     }
     // 直式運算（定位式，與横式對稱）：零件(idx)→列(依 idxList 順序定位)、SN(group)→欄(字母/數字排序)。
     //   idxList 預設＝範本左欄標籤(依範本標籤)；使用者改「依檔名」則依檔名順序。回傳 cell + unmatched。

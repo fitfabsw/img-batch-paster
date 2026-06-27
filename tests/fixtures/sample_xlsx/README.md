@@ -22,6 +22,8 @@ AAA-1.png   AAA-2.png   BBB-2.png   BBB-3.png
 | `v4_empty.xlsx` | 直式 | 全空（只有框線） | ⚠ 横式（需手選「直式」） |
 | `v5_index.xlsx` | 直式 | 左欄 index：2,3,4 | 直式 |
 | `v6_index_group.xlsx` | 直式 | 頂列 group：BBB,CCC ＋ 左欄 index：2,3,4 | 直式 |
+| `h7_group.xlsx` | 横式 | 左欄 group：BBB,CCC（無 index） | 横式 |
+| `v8_group.xlsx` | 直式 | 頂列 group：BBB,CCC（無 index） | 直式 |
 
 横式＝Group 在左欄、Index 在頂列；直式＝相反。
 
@@ -33,6 +35,9 @@ AAA-1.png   AAA-2.png   BBB-2.png   BBB-3.png
 - **index+group（h3 / v6）**：兩軸都「依範本」。
   - Group 只有 BBB,CCC → **AAA 整組跳過**；Index 只有 2,3,4 → index=1 跳過。
   - 結果：只有 `BBB-2`、`BBB-3` 貼入（對到 BBB 列/欄 × index 2,3）。
+- **只有 group（h7 / v8）**：Group「依範本」、Index「依檔名」。
+  - Group 只有 BBB,CCC → **AAA 整組跳過**；Index 依檔名自動產生。
+  - 結果：`BBB-2`、`BBB-3` 貼入（方向靠 group 軸命中自動判定，h7=横式、v8=直式）。
 
 ## 注意
 
