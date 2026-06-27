@@ -213,5 +213,26 @@ for (const name of Object.keys(grids)) {
 console.log(`  UI 顯示一致：${uiRun - uiFail}/${uiRun} 狀態通過`);
 fail += uiFail;
 
+// ── 對位鎖定政策：範本有定義該軸→禁「依檔名」；無→禁「依範本」。被禁(disabled)的選項須符合範本定義 ──
+const LOCK = {  // [group 禁用, index 禁用]  (filename=禁依檔名→鎖依範本; template=禁依範本→鎖依檔名)
+  h1_empty: ["template", "template"], v1_empty: ["template", "template"],   // 兩軸皆無定義 → 都鎖依檔名
+  h2_index: ["template", "filename"], v2_index: ["template", "filename"],   // 只有 index → index 鎖依範本
+  h3_index_group: ["filename", "filename"], v3_index_group: ["filename", "filename"], // 兩軸都鎖依範本
+  h4_group: ["filename", "template"], v4_group: ["filename", "template"],   // 只有 group → group 鎖依範本
+};
+let lockFail = 0, lockRun = 0;
+for (const [name, exp] of Object.entries(LOCK)) {
+  lockRun++;
+  const orient = FORCE_ORIENT(name);
+  const d = F.detectExcelTable(grids[name]); const ax = F.readAxisLabels(grids[name], d);
+  const groupHas = (orient === "vertical" ? ax.topLabelsArr : ax.leftLabelsArr).length > 0;
+  const idxHas = (orient === "vertical" ? ax.leftLabelsArr : ax.topLabelsArr).length > 0;
+  const got = [groupHas ? "filename" : "template", idxHas ? "filename" : "template"];
+  try { assert.deepStrictEqual(got, exp); }
+  catch (e) { lockFail++; console.log(`  ✗ 鎖定 ${name}: 期望禁 ${JSON.stringify(exp)} 實際禁 ${JSON.stringify(got)}`); }
+}
+console.log(`  對位鎖定：${lockRun - lockFail}/${lockRun} 範本通過`);
+fail += lockFail;
+
 console.log(fail ? `\n${fail} case(s) FAILED` : "\nAll cases passed ✓");
 process.exit(fail ? 1 : 0);

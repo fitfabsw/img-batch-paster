@@ -3212,6 +3212,20 @@
       const [idxColOver, setIdxColOver] = useState(-1);
       const [idxNewCol, setIdxNewCol] = useState("");
 
+      // 對位鎖定政策：範本有定義該軸→鎖「依範本」；無定義→鎖「依檔名」。
+      //   修正換範本/recipe 殘留或任何落入「被禁選項」的狀態，讓 cfg 始終是合法的鎖定值。
+      useEffect(() => {
+        if (cfg.snMatchMode || mode !== "excel" || !xlGrid || !cfg.autoAlign || !xlOrient || xlOrient.pending) return;
+        let patch = null;
+        const gSrc = cfg.label.groupSrc || "auto";   // group：有值禁 filename、無值禁 template
+        if (xlOrient.groupHasValues && gSrc === "filename") patch = { ...(patch || {}), groupSrc: "auto" };
+        else if (!xlOrient.groupHasValues && gSrc === "template") patch = { ...(patch || {}), groupSrc: "auto" };
+        const iHas = idxAxisLabelsBtn.length > 0;     // index：有標籤鎖 template、無則鎖 filename
+        if (iHas && idxShown !== "template") patch = { ...(patch || {}), idxSort: "custom", idxOrder: [...idxAxisLabelsBtn] };
+        else if (!iHas && idxShown === "template") patch = { ...(patch || {}), idxSort: "auto", idxOrder: [] };
+        if (patch) setCfg((c) => ({ ...c, label: { ...c.label, ...patch } }));
+      }, [xlOrient, idxShown, idxAxisLabelsBtn, cfg.label.groupSrc, cfg.snMatchMode, mode, xlGrid, cfg.autoAlign]);
+
       // ✨ 魔法時刻（A）+ 價值量化（B）：範本+圖片就緒、自動對齊好 → 慶祝（每批一次）
       useEffect(() => {
         const n = orderedFiles.length;
@@ -4710,14 +4724,19 @@
                     <div className="text-sm font-semibold mb-2">Excel 配置</div>
                     <div className="space-y-2">
                       {!cfg.snMatchMode && (() => {
-                        const TriToggle = ({ value, options, onPick }) => (
+                        const TriToggle = ({ value, options, onPick, disabledV }) => (
                           <div className="flex text-xs border rounded overflow-hidden">
-                            {options.map((opt) => (
-                              <button key={opt.v} onClick={() => onPick(opt.v)}
-                                className={`flex-1 px-2 py-1 ${value === opt.v ? "bg-slate-700 text-white" : "hover:bg-slate-100"}`}>
+                            {options.map((opt) => {
+                              const dis = disabledV === opt.v;
+                              return (
+                              <button key={opt.v} disabled={dis}
+                                onClick={() => !dis && onPick(opt.v)}
+                                title={dis ? "此情境不適用（範本是否定義該軸已決定）" : ""}
+                                className={`flex-1 px-2 py-1 ${value === opt.v ? "bg-slate-700 text-white" : dis ? "text-slate-300 cursor-not-allowed bg-slate-50" : "hover:bg-slate-100"}`}>
                                 {opt.label}
                               </button>
-                            ))}
+                              );
+                            })}
                           </div>
                         );
                         const SRC2 = [{ v: "template", label: "依範本" }, { v: "filename", label: "依檔名" }];
@@ -4756,7 +4775,9 @@
                           {/* Group 對位 */}
                           <div>
                             <div className="text-xs text-slate-600 mb-1">Group 對位 <span className="text-slate-400 text-[10px]">前段，如 2EG</span></div>
+                            {/* 範本有定義 group → 鎖依範本(禁依檔名)；無定義 → 鎖依檔名(禁依範本) */}
                             <TriToggle value={xlOrient.groupEff} options={SRC2}
+                              disabledV={xlOrient.groupHasValues ? "filename" : "template"}
                               onPick={(v) => setCfg((c) => ({ ...c, label: { ...c.label, groupSrc: v } }))} />
                             <div className="tip text-[10px] text-slate-400 mt-0.5">依範本＝對到範本既有值(不覆寫)；依檔名＝自動產生並寫入。{!xlOrient.groupHasValues && "（範本 SN 軸無值 → 預設依檔名）"}</div>
                             {xlOrient.unmatchedGroups?.length > 0 && (
@@ -4767,8 +4788,9 @@
                           {/* Index 對位 */}
                           <div>
                             <div className="text-xs text-slate-600 mb-1">Index 對位 <span className="text-slate-400 text-[10px]">後段，如 BC</span></div>
-                            {/* 顯示來源用 idxSrcShown（與 placement 同一判定，杜絕 B-021 顯示≠行為） */}
+                            {/* 顯示來源用 idxSrcShown；範本有 index → 鎖依範本(禁依檔名)，無 → 鎖依檔名(禁依範本) */}
                             <TriToggle value={idxShown} options={SRC2}
+                              disabledV={idxAxisLabelsBtn.length ? "filename" : "template"}
                               onPick={(v) => setIdxSrc(v)} />
                             <div className="tip text-[10px] text-slate-400 mt-0.5">依範本＝Index 順序對到範本標籤；依檔名＝依檔名順序。細部排序見下方「對位欄位」。</div>
                             {xlOrient.unmatched?.length > 0 && (
