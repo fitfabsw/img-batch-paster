@@ -33,7 +33,7 @@
 - **重現**: h1_empty.xlsx（全空）依檔名 → index 標頭被寫到表格外的 row 1，圖片從 C2 起。
 - **預期 / 實際**: 標頭應在表格頂列(row 2)、圖片從 C3 起；實際標頭 row 1、圖 C2。
 - **備註**: 加「寫 index 標頭」後，空範本沒為標頭保留一列（skipRows=0）。
-- **修正**: `<this commit>` — `detectExcelTable` 横式 `skipRows≥1`（頂列恆為標頭、資料從下一列起）。更新 h1 golden。
+- **修正**: `56ff799` — `detectExcelTable` 横式 `skipRows≥1`（頂列恆為標頭、資料從下一列起）。更新 h1 golden。
 
 ### [B-024] 移除髒範本警告後，含內嵌圖片的範本不再被擋
 - **狀態**: Fixed
