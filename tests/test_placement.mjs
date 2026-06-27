@@ -234,5 +234,34 @@ for (const [name, exp] of Object.entries(LOCK)) {
 console.log(`  對位鎖定：${lockRun - lockFail}/${lockRun} 範本通過`);
 fail += lockFail;
 
+// ── 寫入標籤：Index=依檔名(範本該軸無 index)時，index 標頭須寫入(與 group 對稱)；範本有 index 則不重寫 ──
+function writtenLabels(gridName, orient) {
+  const grid = grids[gridName]; const d = F.detectExcelTable(grid);
+  const excel = { startCell: d.startCell, snCol: d.snCol, cellCols: 1, cellRows: 1, gapRows: 0, orient };
+  const ax = F.readAxisLabels(grid, d);
+  const idxAxis = (orient === "vertical" ? ax.leftLabelsArr : ax.topLabelsArr);
+  const label = { pattern: "{group}-{idx}", idxSort: "auto", idxOrder: [], groupSrc: "auto", idxIgnore: [], font_pt: 12 };
+  if (idxAxis.length) { label.idxSort = "custom"; label.idxOrder = [...idxAxis]; }
+  const cells = F.computeExcelCellsAuto(grid, excel, label, FILES, true);
+  return cells.filter((c) => c.text != null).map((c) => get_column_letter(c.col) + c.row + "=" + c.text).sort();
+}
+const LABELS = {
+  // 範本無 index → 寫入 index 標頭(group 依範本故不寫 group)
+  h4_group: ["C2=1", "D2=2", "E2=3"],
+  v4_group: ["B3=1", "B4=2", "B5=3"],
+  // 範本有 index(2,3,4) → 不重寫；group 無定義→依檔名寫 group 標籤
+  h2_index: ["B3=AAA", "B4=BBB"],
+  v2_index: ["C2=AAA", "D2=BBB"],
+};
+let labFail = 0, labRun = 0;
+for (const [name, exp] of Object.entries(LABELS)) {
+  labRun++;
+  const got = writtenLabels(name, FORCE_ORIENT(name));
+  try { assert.deepStrictEqual(got, exp.slice().sort()); }
+  catch (e) { labFail++; console.log(`  ✗ 寫入標籤 ${name}: 期望 ${JSON.stringify(exp)} 實際 ${JSON.stringify(got)}`); }
+}
+console.log(`  寫入標籤：${labRun - labFail}/${labRun} 範本通過`);
+fail += labFail;
+
 console.log(fail ? `\n${fail} case(s) FAILED` : "\nAll cases passed ✓");
 process.exit(fail ? 1 : 0);

@@ -259,8 +259,8 @@
       return (info?.dataRows || 0) + Math.max(1, (info?.snRowStart || 2) - 1);
     }
 
-    // 計算 Excel 的儲存格 placements
-    function computeExcelCells(excel, label, orderedFiles, autoAlign) {
+    // 計算 Excel 的儲存格 placements。writeIdx=true 時把 index 標頭(2,3,4)寫進頂列(與 group 對稱)。
+    function computeExcelCells(excel, label, orderedFiles, autoAlign, writeIdx) {
       if (!orderedFiles || orderedFiles.length === 0) return [];
       const start = parseCell(excel.startCell);
       const snCol = excel.snCol ? parseCell(excel.snCol + "1").col : 0;
@@ -272,6 +272,12 @@
         : perRow;
       const rows = buildRows(orderedFiles, label.pattern, colsArg, autoAlign, new Set(label.idxIgnore || []));
       const cells = [];
+      if (writeIdx && autoAlign && Array.isArray(colsArg) && start.row - 1 >= 1) {   // index 標頭寫頂列
+        colsArg.forEach((idxKey, ci) => cells.push({
+          row: start.row - 1, col: start.col + ci * stepCol, span_cols: excel.cellCols, span_rows: 1,
+          text: String(idxKey), font_pt: label.font_pt,
+        }));
+      }
       rows.forEach(({ group, cells: rowCells }, rIdx) => {
         const targetRow = start.row + rIdx * stepRow;
         if (snCol > 0) {   // 依檔名(自動產生)→ 一律寫入 Group 文字；留空寫入欄(snCol=0)即不寫
@@ -389,9 +395,12 @@
       const startRow = ax.headerRow + 1;              // 第一個資料列
       const idxList = resolveTransposedIdxList(ax, label, files);
       const rowOf = new Map(idxList.map((v, i) => [String(v), startRow + i * stepRow]));
+      const cells = [], unmatched = new Set(), unmatchedGroups = new Set();
+      if ((ax.leftLabelsArr || []).length === 0) {   // 範本左欄無 index 標籤 → 依檔名自動產生並寫入(與 group 對稱)
+        idxList.forEach((v, i) => cells.push({ row: startRow + i * stepRow, col: ax.region.minC, span_cols: 1, span_rows: excel.cellRows, text: String(v), font_pt: label.font_pt }));
+      }
       // SN(group)→欄。group 軸：template=對到範本頂列既有 group(不覆寫)；filename=依檔案出現順序+寫入。
       const grp = resolveGroupAxis("vertical", ax, label);
-      const cells = [], unmatched = new Set(), unmatchedGroups = new Set();
       let colOf;
       if (grp.eff === "template") {
         colOf = new Map();   // 對到範本既有頂列 group 欄；不寫標籤
@@ -445,6 +454,9 @@
       const rows = buildRows(files, label.pattern, idxList, true, new Set(label.idxIgnore || []));
       const grp = resolveGroupAxis("horizontal", ax, label);
       const cells = [], unmatchedGroups = new Set();
+      if ((ax.topLabelsArr || []).length === 0 && start.row - 1 >= 1) {   // 範本頂列無 index 標籤 → 寫入(與 group 對稱)
+        idxList.forEach((idxKey, ci) => cells.push({ row: start.row - 1, col: start.col + ci * stepCol, span_cols: excel.cellCols, span_rows: 1, text: String(idxKey), font_pt: label.font_pt }));
+      }
       rows.forEach(({ group, cells: rowCells }) => {
         const r = grp.gMap.get(_normLabel(group || ""));
         if (r == null) { if (group) unmatchedGroups.add(group); return; }   // group 不在範本左欄 → 跳過
@@ -468,7 +480,9 @@
           return computeExcelCellsHorizGroupTemplate(grid, detect, ax, excel, label, orderedFiles).cells;
         }
       }
-      return computeExcelCells(excel, label, orderedFiles, autoAlign);   // Case1/2（現有，不動）
+      // Case1/2（横式 group 依檔名）：範本頂列無 index 標籤 → 一併寫入 index 標頭(與 group 對稱)
+      const topEmpty = detect ? ((readAxisLabels(grid, detect)?.topLabelsArr || []).length === 0) : true;
+      return computeExcelCells(excel, label, orderedFiles, autoAlign, topEmpty);
     }
 
     // pattern → regex 字串：先轉義字面字元，再展開 placeholder ({group}/{idx}/{skip})
