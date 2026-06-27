@@ -3198,7 +3198,6 @@
       }, [xlOrient, orderedFiles]);
 
       // 對位設定面板（App scope）：進階摺疊狀態 + Index 軸來源控制（依範本/依檔名，共用 idxOrder）
-      const [xlAdvOpen, setXlAdvOpen] = useState(false);
       const _sameArrApp = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((x, i) => String(x) === String(b[i]));
       const idxAxisLabelsBtn = (xlOrient?.idxAxisLabels || []);
       const idxFileOrder = useMemo(
@@ -4804,34 +4803,30 @@
                           </div>
                           </>)}
 
-                          {/* 進階設定 */}
-                          <div className="border-t pt-1">
-                            <button onClick={() => setXlAdvOpen((v) => !v)} className="tip text-[11px] text-slate-500 hover:text-slate-700">
-                              {xlAdvOpen ? "▾" : "▸"} 進階設定（起始 cell）
-                            </button>
-                            {xlAdvOpen && (() => {
-                              // 起始 cell 拆成 col/row：列鎖定⟺group 依範本、欄鎖定⟺index 依範本；直式由標籤定位故兩者唯讀
-                              const sc = parseCell(cfg.excel.startCell || "C3");
-                              const idx2letter = (n) => { let s = ""; while (n > 0) { s = String.fromCharCode(65 + (n - 1) % 26) + s; n = Math.floor((n - 1) / 26); } return s; };
-                              const vertical = xlOrient?.orientation === "vertical";
-                              const rowLocked = vertical || !!xlOrient?.groupHasValues;            // group 依範本 → 列鎖定
-                              const colLocked = vertical || (idxAxisLabelsBtn.length > 0);         // index 依範本 → 欄鎖定
-                              const setCol = (letter) => { const col = colLetterToIdx(letter); if (col) setCfg((c) => ({ ...c, excel: { ...c.excel, startCell: letter.toUpperCase() + sc.row } })); };
-                              const setRow = (r) => { const row = parseInt(r) || 1; setCfg((c) => ({ ...c, excel: { ...c.excel, startCell: idx2letter(sc.col) + row } })); };
-                              return (
-                              <div className="mt-2 space-y-1">
+                          {/* 圖片起始 cell（左上錨點）：col/row 各自步進；鎖定軸唯讀 */}
+                          {(() => {
+                            const sc = parseCell(cfg.excel.startCell || "C3");
+                            const idx2letter = (n) => { let s = ""; while (n > 0) { s = String.fromCharCode(65 + (n - 1) % 26) + s; n = Math.floor((n - 1) / 26); } return s; };
+                            const vertical = xlOrient?.orientation === "vertical";
+                            const rowLocked = vertical || !!xlOrient?.groupHasValues;            // group 依範本 → 列鎖定
+                            const colLocked = vertical || (idxAxisLabelsBtn.length > 0);         // index 依範本 → 欄鎖定
+                            const setColIdx = (col) => { if (col >= 1) setCfg((c) => ({ ...c, excel: { ...c.excel, startCell: idx2letter(col) + sc.row } })); };
+                            const setRow = (row) => { if (row >= 1) setCfg((c) => ({ ...c, excel: { ...c.excel, startCell: idx2letter(sc.col) + row } })); };
+                            const Stepper = ({ label, value, locked, onStep }) => (
+                              <label className="flex flex-col text-[10px] text-slate-500">{label}
+                                <div className={`flex items-center border rounded mt-0.5 overflow-hidden ${locked ? "bg-slate-100" : ""}`}>
+                                  <button disabled={locked} onClick={() => onStep(-1)} className="px-1.5 py-1 text-slate-500 hover:bg-slate-100 disabled:opacity-30">−</button>
+                                  <span className={`px-2 py-1 text-sm font-mono w-8 text-center ${locked ? "text-slate-400" : ""}`}>{value}</span>
+                                  <button disabled={locked} onClick={() => onStep(1)} className="px-1.5 py-1 text-slate-500 hover:bg-slate-100 disabled:opacity-30">+</button>
+                                </div>
+                              </label>
+                            );
+                            return (
+                              <div className="border-t pt-2 space-y-1">
                                 <div className="text-xs text-slate-600">圖片起始 cell（左上錨點）</div>
-                                <div className="flex gap-2 items-end">
-                                  <label className="flex flex-col text-[10px] text-slate-500">欄(col)
-                                    <input value={idx2letter(sc.col)} disabled={colLocked}
-                                      onChange={(e) => setCol(e.target.value)}
-                                      className={`border rounded px-2 py-1 text-sm mt-0.5 font-mono w-16 ${colLocked ? "bg-slate-100 text-slate-400" : ""}`} />
-                                  </label>
-                                  <label className="flex flex-col text-[10px] text-slate-500">列(row)
-                                    <input type="number" value={sc.row} disabled={rowLocked}
-                                      onChange={(e) => setRow(e.target.value)}
-                                      className={`border rounded px-2 py-1 text-sm mt-0.5 font-mono w-16 ${rowLocked ? "bg-slate-100 text-slate-400" : ""}`} />
-                                  </label>
+                                <div className="flex gap-2">
+                                  <Stepper label="欄(col)" value={idx2letter(sc.col)} locked={colLocked} onStep={(d) => setColIdx(sc.col + d)} />
+                                  <Stepper label="列(row)" value={sc.row} locked={rowLocked} onStep={(d) => setRow(sc.row + d)} />
                                 </div>
                                 <div className="tip text-[10px] text-slate-400">
                                   {vertical ? "直式以範本標籤定位，起始 cell 唯讀。"
@@ -4841,9 +4836,8 @@
                                     : "範本全空 → 欄列皆可調。"}
                                 </div>
                               </div>
-                              );
-                            })()}
-                          </div>
+                            );
+                          })()}
                         </div>
                         );
                       })()}
