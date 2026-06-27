@@ -1036,63 +1036,50 @@
               ? `✓ ${snList.length} 個 SN × ${cfg.sources.length} 來源 全部對到`
               : `⚠ ${snList.length} 個 SN：${cfg.sources.map((s, i) => `${s.name} 缺 ${missingPerSource[i]}`).join(" · ")}`}
           </div>
-          <div className="overflow-x-auto">
-            <table className="text-xs w-full">
-              <thead>
-                <tr className="tip text-[10px] text-slate-500">
-                  <th className="text-left px-1 py-0.5">SN</th>
-                  {cfg.sources.map((s) => {
-                    const displayName = s.files?.length ? s.name : "(未上傳)";
+          {/* 資料夾(=group)為橫條：每個來源一張卡，SN 影像依 SN 順序橫排、缺的留空
+              （與依檔名 group 卡片同版式；SN對照天生直式 → group 在欄，但中間下方一律以 group 為橫條）。
+              selectedCell 維持 r=SN-index、c=來源-index（與外部一致，勿因視覺轉置而交換）。 */}
+          {cfg.sources.map((s, i) => (
+            <div key={s.id} className="border border-emerald-200 bg-white rounded p-2">
+              <div className="flex items-center gap-1 mb-1.5">
+                <span className="text-xs font-semibold text-emerald-800 max-w-[120px] truncate" title={s.name}>{s.name || "(未命名)"}</span>
+                <span className="text-[10px] text-slate-400">→ {resolveCol(s)}</span>
+                {perColCrop && (
+                  <button onClick={() => onOpenCrop && onOpenCrop(s.id)} disabled={!s.files?.length}
+                    title={s.files?.length ? `設定來源「${s.name}」的裁剪區域` : "請先上傳此來源的圖片"}
+                    className={`text-xs border rounded px-1 py-0.5 hover:bg-slate-100 disabled:opacity-40 ${s.crop?.enabled ? "bg-emerald-100 border-emerald-400 text-emerald-800" : ""}`}>✂️</button>
+                )}
+                {missingPerSource[i] > 0 && <span className="text-[10px] text-amber-700 bg-amber-100 rounded px-1">缺 {missingPerSource[i]}</span>}
+                <span className="tip text-[10px] text-slate-400 ml-auto">Group {i + 1}</span>
+              </div>
+              <div className="flex gap-1 overflow-x-auto pb-1">
+                {snList.map(({ sn, row }, ci) => {
+                  const f = fileMaps[i].get(sn.toLowerCase());
+                  const isCellSel = selectedCell?.r === ci && selectedCell?.c === i;
+                  if (!f) {
                     return (
-                      <th key={s.id} className="text-center px-1 py-1">
-                        <div className="flex items-center justify-center gap-1">
-                          <span className="bg-purple-100 text-purple-800 px-1 rounded font-mono text-[10px] max-w-[100px] truncate" title={s.name}>{displayName}</span>
-                          <span className="text-slate-400">→</span>
-                          <span className="font-mono">{resolveCol(s)}</span>
-                          {perColCrop && (
-                            <button
-                              onClick={() => onOpenCrop && onOpenCrop(s.id)}
-                              disabled={!s.files?.length}
-                              title={s.files?.length ? `設定來源「${s.name}」的裁剪區域` : "請先上傳此來源的圖片"}
-                              className={`ml-1 text-xs border rounded px-1 py-0.5 hover:bg-slate-100 disabled:opacity-40 ${s.crop?.enabled ? "bg-emerald-100 border-emerald-400 text-emerald-800" : ""}`}>
-                              ✂️
-                            </button>
-                          )}
-                        </div>
-                      </th>
+                      <div key={row} data-r={ci} data-c={i}
+                        onClick={() => { setSelectedCell?.({ r: ci, c: i }); setSelected(null); setSelectedPaths?.([]); }}
+                        className={`shrink-0 w-16 h-16 border-2 ${isCellSel ? "border-emerald-500 ring-2 ring-emerald-300" : "border-dashed border-slate-300"} bg-slate-50 rounded flex flex-col items-center justify-center text-slate-400 cursor-pointer`}>
+                        <div className="text-[9px] font-mono truncate w-full text-center px-0.5">{sn}</div>
+                        <div className="text-[10px]">缺</div>
+                      </div>
                     );
-                  })}
-                </tr>
-              </thead>
-              <tbody>
-                {snList.map(({ sn, row }, rIdx) => (
-                  <tr key={row} className="border-b border-slate-100 hover:bg-purple-50/30">
-                    <td className="font-mono text-[10px] px-1 py-1 text-slate-600">
-                      <span className="text-slate-300">{row}</span> {sn}
-                    </td>
-                    {cfg.sources.map((s, i) => {
-                      const f = fileMaps[i].get(sn.toLowerCase());
-                      const isCellSel = selectedCell?.r === rIdx && selectedCell?.c === i;
-                      const isSel = (f && selected === f.path) || isCellSel;
-                      return (
-                        <td key={s.id} data-r={rIdx} data-c={i} className="px-1 py-0.5 text-center">
-                          {f ? (
-                            <img src={thumbUrl(f.path, 60, perColCrop ? (s.crop || null) : cfg.crop)}
-                              onClick={() => { setSelected(f.path); setSelectedCell?.({ r: rIdx, c: i }); }}
-                              title={f.name}
-                              className={`inline-block w-10 h-10 object-cover border rounded cursor-pointer ${isSel ? "ring-2 ring-emerald-500" : "border-slate-300 hover:border-slate-500"}`} />
-                          ) : (
-                            <div onClick={() => { setSelectedCell?.({ r: rIdx, c: i }); setSelected(null); setSelectedPaths?.([]); }}
-                              className={`inline-flex w-10 h-10 items-center justify-center border-2 rounded text-[10px] cursor-pointer ${isCellSel ? "border-emerald-500 ring-2 ring-emerald-300 text-emerald-700" : "border-dashed border-slate-300 text-slate-400"}`}>缺</div>
-                          )}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                  }
+                  const isSel = (selected === f.path) || isCellSel;
+                  return (
+                    <div key={row} data-r={ci} data-c={i}
+                      onClick={() => { setSelected(f.path); setSelectedCell?.({ r: ci, c: i }); }}
+                      title={f.name}
+                      className={`shrink-0 w-16 h-16 rounded overflow-hidden border cursor-pointer relative ${isSel ? "ring-2 ring-emerald-500 border-emerald-500" : "border-slate-200 hover:border-slate-400"}`}>
+                      <img src={thumbUrl(f.path, 120, perColCrop ? (s.crop || null) : cfg.crop)} className="w-full h-full object-cover pointer-events-none" />
+                      <div className="absolute bottom-0 left-0 right-0 text-[9px] text-center bg-black/50 text-white py-0.5 font-mono truncate">{sn}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
         </div>
       );
     }
@@ -2679,9 +2666,9 @@
               {rows.map((item, ri) => (
                 <tr key={ri} style={{ height: rowH }} title={ri >= dataRows ? "超出範本列數 → 匯出時換頁" : undefined}>
                   {cols.map((c, ci) => {
-                    if (c.sn) return (   // SN 欄：顯示 SN 清單值 + highlight（綠底）
+                    if (c.sn) return (   // SN 欄：顯示 SN 清單值 + highlight（灰底＝依範本；橘=超出範本列數）
                       <td key={ci} className="border border-slate-400 text-center text-xs font-semibold"
-                        style={{ background: ri >= dataRows ? "#fff7ed" : "#ecfdf5" }}>{item.sn}</td>
+                        style={{ background: ri >= dataRows ? "#fff7ed" : "#e2e8f0" }}>{item.sn}</td>
                     );
                     const s = srcForHeader(c.header);
                     if (!s) return (   // 非 SN、非圖片欄（如 XX 標籤欄）→ 顯示範本實際文字（不管選哪欄都會顯示）
@@ -2851,7 +2838,7 @@
 
             {/* (移除無 content 的 cell 分隔線；範本既有的 border 由下方獨立渲染) */}
 
-            {/* SN 欄 highlight（依範本 SN 模式，比照 ppt 預覽的綠底） */}
+            {/* SN 欄 highlight（依範本 SN 模式）→ 灰底＝依範本，與軸色(綠/藍)區隔 */}
             {cfg.snMatchMode && snColIdx > 0 && snColIdx <= grid.cols.length && (snList || []).map(({ row }, i) => {
               const ri = row - 1;
               if (ri < 0 || ri >= grid.rows.length) return null;
@@ -2860,7 +2847,7 @@
                   position: "absolute",
                   left: HEADER_W + cumX[snColIdx - 1], top: HEADER_H + cumY[ri],
                   width: grid.cols[snColIdx - 1].w_px, height: grid.rows[ri].h_px,
-                  background: "#ecfdf5", pointerEvents: "none",
+                  background: "#e2e8f0", pointerEvents: "none",
                 }} />
               );
             })}
@@ -5113,6 +5100,41 @@
                       </div>
                     );
                   })()}
+                  {/* Group / Index 總覽（與依檔名對齊）：SN對照 = 直式 → Group(資料夾)在欄、Index(SN)在列 */}
+                  <div className="border border-emerald-300 rounded bg-emerald-50 p-2 mb-1">
+                    <div className="text-[10px] text-emerald-800 font-semibold mb-1">
+                      Group · {cfg.sources.length}
+                      <span className="text-emerald-600 font-normal ml-1">→ 欄（來源資料夾）</span>
+                    </div>
+                    {cfg.sources.length === 0 ? (
+                      <div className="text-[10px] text-slate-400">（左側「資料來源」尚未加資料夾）</div>
+                    ) : (
+                      <div className="flex gap-1 overflow-x-auto pb-1">
+                        {cfg.sources.map((s) => (
+                          <div key={s.id} className="shrink-0 px-1.5 py-0.5 rounded border border-emerald-300 bg-white text-emerald-800 text-xs">
+                            {s.name || "(未命名)"}<span className="text-slate-400 ml-1">{(s.files || []).length}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="border border-sky-300 rounded bg-sky-50 p-2 mb-1">
+                    <div className="text-[10px] text-sky-800 font-semibold mb-1">
+                      Index · {snList.length}
+                      <span className="text-sky-600 font-normal ml-1">→ 列（SN）</span>
+                    </div>
+                    {snList.length === 0 ? (
+                      <div className="text-[10px] text-slate-400">（尚無 SN）</div>
+                    ) : (
+                      <div className="flex gap-1 overflow-x-auto pb-1">
+                        {snList.map((x, i) => (
+                          <div key={x.sn + i} className="shrink-0 px-1.5 py-0.5 rounded border border-sky-300 bg-white text-sky-800 text-xs font-mono">
+                            {x.sn}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                   <SnMatchMatrix
                     cfg={cfg}
                     snList={snList}
