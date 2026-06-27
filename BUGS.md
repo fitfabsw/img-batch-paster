@@ -27,13 +27,13 @@
 
 <!-- 新→舊排序（最近的放最上面）；ID 為穩定識別碼、不隨排序變動 -->
 
-### [B-027] 浮動圖在 Excel 窄欄時右側溢出 / 偶爾偏上
+### [B-027] 浮動圖在 Excel 裡水平沒置中（偏左 / 窄欄溢出），且時對時偏
 - **狀態**: Fixed
 - **發現**: 2026-06-27
-- **重現**: h2_index.xlsx（欄寬=14，窄）+ images_2 依檔名匯出 → Excel 裡圖片右側超出 cell（寬欄的真實範本 A1 正常）。
-- **預期 / 實際**: 圖應在格內；實際 Excel 渲染窄欄比估算更窄，OneCellAnchor 絕對像素尺寸（圖 92.7px、欄估 103px、僅 5% 邊距）吃不下誤差 → 溢出。垂直亦同根（偏上）。LibreOffice / 預覽正常 → 非檔案錯，是 Excel 渲染落差。
-- **備註**: 嵌入（DISPIMG）模式無此問題（Excel 控縮放）；只有浮動圖受影響。
-- **修正**: `32f5a9f` — 浮動圖改 render 成「cell 尺寸畫布」（內層除 fill 外皆保比例，`_canvas_fit`）+ **TwoCellAnchor** 從格子左上錨到右下 → 圖框隨 Excel 實際格寬/列高縮放、永不溢出、跨所有檢視器。contain/cover/align 保比例，僅 fill 拉伸。
+- **重現**: 同一份程式，有些範本匯出後圖置中、有些偏左（甚至窄欄溢出）。
+- **真因**: 浮動圖是「絕對位置」，置中與否取決於 Excel 渲染的欄寬；而 Excel 算欄寬量的是**主題「西文(latin)字體」的數字 0 寬度**（即使 cell 顯示新細明體）。不同範本主題的西文字體不同 → 寬度不同：Calibri 在 Mac Excel 偏寬（>估算 mdw 7）→ 偏左；Aptos Narrow @sz12 ≈ 7.85 → 剛好對上估算 → 置中。**非程式 bug，是字體渲染落差。** 詳見 memory `xlsx-image-centering-theme-font`。
+- **岔路（已 revert）**: `32f5a9f` 曾用 TwoCellAnchor + 白底畫布（`_canvas_fit`）想讓圖跟著實際格子走 → 但把白邊烤進圖裡、不是原圖，使用者否決；又試「正規化成 Calibri」也失敗（Mac Excel 連 Calibri 都畫寬）。全部 revert 回原始照片 OneCellAnchor。
+- **修正**: `519ecd8` — 匯出時把**輸出的主題西文字體統一成 Aptos Narrow、預設字級 12**，並以 mdw=7.85 定位 → Excel 渲染欄寬 == 估算 → **任何範本都置中**（對本來就 Aptos Narrow/12 的範本是 no-op；embed 路徑不動）。
 
 ### [B-026] 直式起始 cell 兩軸都被鎖、無法調整自由軸
 - **狀態**: Fixed
