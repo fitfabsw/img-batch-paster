@@ -570,6 +570,7 @@ def api_template_excel_grid():
         "rows": rows,
         "cells": cells,
         "borders": borders,
+        "images": len(getattr(ws, "_images", []) or []),   # 浮動/內嵌圖片數（殘留圖偵測用）
     })
 
 
