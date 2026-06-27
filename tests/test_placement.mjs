@@ -18,7 +18,8 @@ const end = script.indexOf("function computePages");
 assert(start > 0 && end > start, "找不到 placement 函式區塊");
 const block = script.slice(start, end);
 const exported = ["detectExcelTable", "readAxisLabels", "resolveExcelOrientation",
-  "computeExcelCellsAuto", "computeExcelCellsTransposed", "computeExcelCellsHorizGroupTemplate"];
+  "computeExcelCellsAuto", "computeExcelCellsTransposed", "computeExcelCellsHorizGroupTemplate",
+  "extractGroupIdx", "colLetterToIdx"];
 const F = new Function(block + "\nreturn {" + exported.join(",") + "};")();
 
 const grids = JSON.parse(fs.readFileSync(path.join(ROOT, "tests/fixtures/sample_xlsx/grids.json"), "utf8"));
@@ -115,5 +116,64 @@ for (const [name, t] of Object.entries(MANUAL)) {
     console.log(`  ✗ ${name}\n      expected ${JSON.stringify(t.expect)}\n      got      ${JSON.stringify(got)}`);
   }
 }
+// ── 完整矩陣 + 不變量：8 範本 × Group{範本/檔名} × Index{範本/檔名}，自動抓結構性 bug ──
+//   不必逐一手算每格，靠「鐵則」覆蓋 off-by-one / 依範本越界 / 空軸不該貼 / 撞格 等整類問題。
+function computeFull(gridName, orient, groupSrc, idxSrc) {
+  const grid = grids[gridName];
+  const d = F.detectExcelTable(grid);
+  const ax = F.readAxisLabels(grid, d);
+  const excel = { startCell: d.startCell, snCol: d.snCol, cellCols: 1, cellRows: 1, gapRows: 0, orient };
+  const idxAxisArr = orient === "vertical" ? ax.leftLabelsArr : ax.topLabelsArr;
+  const groupLabels = new Set([...(orient === "vertical" ? ax.topLabels : ax.leftLabels).keys()]);
+  const idxLabels = new Set([...(orient === "vertical" ? ax.leftLabels : ax.topLabels).keys()]);
+  const label = { pattern: "{group}-{idx}", idxSort: "auto", idxOrder: [], groupSrc, idxIgnore: [], font_pt: 12 };
+  if (idxSrc === "template") { label.idxSort = "custom"; label.idxOrder = [...idxAxisArr]; }
+  else { label.idxSort = "custom"; label.idxOrder = F.colLetterToIdx ? [] : []; label.idxSort = "auto"; }  // filename = auto
+  const cells = F.computeExcelCellsAuto(grid, excel, label, FILES, true);
+  const images = cells.filter((c) => c.path).map((c) => {
+    const { group, idx } = F.extractGroupIdx(c.path, label.pattern);
+    return { row: c.row, col: c.col, group: String(group).toLowerCase(), idx: String(idx).toLowerCase() };
+  });
+  // 從「範本實際標籤位置」獨立推第一個資料列(不靠 detectExcelTable，才能抓它自己的 off-by-one)：
+  //   有左欄標籤 → 從首個左欄標籤列起；否則有頂列標籤 → minR+1(表頭佔一列)；全空 → minR。
+  const minR = ax.region.minR, minC = ax.region.minC;
+  const textCells = (grid.cells || []).filter((c) => String(c.text ?? "").trim());
+  const leftRows = textCells.filter((c) => c.c === minC).map((c) => c.r);
+  const hasTopLabel = textCells.some((c) => c.c > minC);
+  const dataRowFloor = leftRows.length ? Math.min(...leftRows) : (minR + (hasTopLabel ? 1 : 0));
+  return { images, ax, region: ax.region, groupLabels, idxLabels, dataRowFloor };
+}
+const FORCE_ORIENT = (name) => (name[0] === "v" ? "vertical" : "horizontal");
+let matrixFail = 0, matrixRun = 0;
+for (const name of Object.keys(grids)) {
+  const orient = FORCE_ORIENT(name);
+  for (const groupSrc of ["template", "filename"]) {
+    for (const idxSrc of ["template", "filename"]) {
+      matrixRun++;
+      const tag = `${name} [g=${groupSrc[0]},i=${idxSrc[0]}]`;
+      let r;
+      try { r = computeFull(name, orient, groupSrc, idxSrc); }
+      catch (e) { matrixFail++; console.log(`  ✗ ${tag} 例外: ${e.message}`); continue; }
+      const { images, region, groupLabels, idxLabels, dataRowFloor } = r;
+      const minC = region.minC;
+      const errs = [];
+      // I1：圖片不得落在資料區之上(表頭列)或標籤欄(off-by-one / 騎到表頭)。dataRowFloor 由範本標籤獨立推得。
+      for (const im of images) if (im.row < dataRowFloor || im.col <= minC) errs.push(`圖 ${im.group}-${im.idx} 落在表頭/標籤(${im.col},${im.row})，資料應從第 ${dataRowFloor} 列起`);
+      // I2：依範本軸 → 貼進去的值必須是範本既有標籤（不越界、不覆寫無關列欄）
+      if (groupSrc === "template") for (const im of images) if (!groupLabels.has(im.group)) errs.push(`group 依範本但貼了範本沒有的 ${im.group}`);
+      if (idxSrc === "template") for (const im of images) if (!idxLabels.has(im.idx)) errs.push(`index 依範本但貼了範本沒有的 ${im.idx}`);
+      // I3：依範本但該軸範本無標籤 → 不該有任何圖
+      if (groupSrc === "template" && groupLabels.size === 0 && images.length) errs.push(`group 依範本+範本無 group，卻貼了 ${images.length} 張`);
+      if (idxSrc === "template" && idxLabels.size === 0 && images.length) errs.push(`index 依範本+範本無 index，卻貼了 ${images.length} 張`);
+      // I4：不得兩圖同格
+      const seen = new Set();
+      for (const im of images) { const k = im.col + "," + im.row; if (seen.has(k)) errs.push(`兩圖同格 ${k}`); seen.add(k); }
+      if (errs.length) { matrixFail++; console.log(`  ✗ ${tag}\n      ${errs.join("\n      ")}`); }
+    }
+  }
+}
+console.log(`  矩陣不變量：${matrixRun - matrixFail}/${matrixRun} 組合通過`);
+fail += matrixFail;
+
 console.log(fail ? `\n${fail} case(s) FAILED` : "\nAll cases passed ✓");
 process.exit(fail ? 1 : 0);
