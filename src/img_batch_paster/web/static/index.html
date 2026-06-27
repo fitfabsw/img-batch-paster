@@ -4806,27 +4806,16 @@
                           {/* 進階設定 */}
                           <div className="border-t pt-1">
                             <button onClick={() => setXlAdvOpen((v) => !v)} className="tip text-[11px] text-slate-500 hover:text-slate-700">
-                              {xlAdvOpen ? "▾" : "▸"} 進階設定（起始 cell、寫入欄、每列圖數）
+                              {xlAdvOpen ? "▾" : "▸"} 進階設定（起始 cell）
                             </button>
                             {xlAdvOpen && (
-                              <div className="mt-2 space-y-2">
-                                <div className="flex gap-2">
-                                  <label className="flex flex-col text-xs text-slate-600 flex-1">起始 cell
-                                    <input value={cfg.excel.startCell}
-                                      onChange={(e) => setCfg((c) => ({ ...c, excel: { ...c.excel, startCell: e.target.value } }))}
-                                      className="border rounded px-2 py-1 text-sm mt-1 font-mono" placeholder="B5" />
-                                  </label>
-                                  <label className="flex flex-col text-xs text-slate-600 flex-1">Group 寫入欄（留空=不寫）
-                                    <input value={cfg.excel.snCol}
-                                      onChange={(e) => setCfg((c) => ({ ...c, excel: { ...c.excel, snCol: e.target.value } }))}
-                                      className="border rounded px-2 py-1 text-sm mt-1 font-mono" placeholder="A" />
-                                  </label>
-                                </div>
-                                <NumberInput label="每列圖數" step={1}
-                                  value={cfg.autoAlign ? Math.max(1, autoIdxList.length) : cfg.excel.imgsPerRow}
-                                  disabled={cfg.autoAlign}
-                                  hint={cfg.autoAlign ? `對位模式自動 = ${autoIdxList.length || 0} 欄` : undefined}
-                                  onChange={(v) => setCfg((c) => ({ ...c, excel: { ...c.excel, imgsPerRow: Math.max(1, parseInt(v) || 1) } }))} />
+                              <div className="mt-2 space-y-1">
+                                <label className="flex flex-col text-xs text-slate-600">圖片起始 cell（左上錨點）
+                                  <input value={cfg.excel.startCell}
+                                    onChange={(e) => setCfg((c) => ({ ...c, excel: { ...c.excel, startCell: e.target.value } }))}
+                                    className="border rounded px-2 py-1 text-sm mt-1 font-mono w-28" placeholder="C3" />
+                                </label>
+                                <div className="tip text-[10px] text-slate-400">載入範本時自動偵測；圖片區左上角第一格。{xlOrient?.orientation === "vertical" && "（直式以範本標籤定位，此值僅供參考）"}</div>
                               </div>
                             )}
                           </div>
