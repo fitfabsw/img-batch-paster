@@ -175,49 +175,6 @@ def _cover_crop(img_path: Path, target_w: float, target_h: float, tmp_dir: Path)
         return out
 
 
-def _canvas_fit(img_path: Path, target_w: float, target_h: float, inset: float,
-                mode: str, fixed_h: float | None, tmp_dir: Path) -> Path:
-    """把圖 render 成「剛好 cell 尺寸(target_w×target_h)」的白底畫布，內層依 mode 擺放：
-      - contain：保比例縮到留白框內、置中。
-      - align  ：保比例、高度=fixed_h(該列共同高度)、置中（等高對齊）。
-      - fill   ：拉伸到留白框（**唯一會變形**）。
-    之後用 TwoCellAnchor 填滿格子，圖框就跟著 Excel 實際格子走、永不溢出，內層仍保比例。"""
-    tw = max(1, int(round(target_w)))
-    th = max(1, int(round(target_h)))
-    with PILImage.open(img_path) as im:
-        if im.mode != "RGB":   # 一律白底，避免 Excel 把透明區當 cell 背景
-            if im.mode == "P":
-                im = im.convert("RGBA" if "transparency" in im.info else "RGB")
-            if im.mode == "RGBA":
-                bg = PILImage.new("RGB", im.size, (255, 255, 255))
-                bg.paste(im, mask=im.split()[-1])
-                im = bg
-            else:
-                im = im.convert("RGB")
-        iw, ih = im.size
-        avail_w = max(1.0, tw * (1 - 2 * inset))
-        avail_h = max(1.0, th * (1 - 2 * inset))
-        if mode == "fill":
-            nw, nh = avail_w, avail_h
-        elif mode == "align" and fixed_h:
-            nh = min(float(fixed_h), avail_h)
-            nw = nh * (iw / ih) if ih else avail_w
-            if nw > avail_w:
-                nw = avail_w
-                nh = nw * (ih / iw) if iw else avail_h
-        else:  # contain
-            scale = min(avail_w / iw, avail_h / ih) if (iw and ih) else 1.0
-            nw, nh = iw * scale, ih * scale
-        nw, nh = max(1, int(round(nw))), max(1, int(round(nh)))
-        im = im.resize((nw, nh), PILImage.LANCZOS)
-        canvas = PILImage.new("RGB", (tw, th), (255, 255, 255))
-        canvas.paste(im, ((tw - nw) // 2, (th - nh) // 2))
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-        out = tmp_dir / f"_cv_{img_path.stem}_{tw}x{th}_{mode}.png"
-        canvas.save(out, "PNG")
-        return out
-
-
 def write_xlsx(
     placements: list[CellPlacement],
     out_path: Path,
@@ -246,6 +203,17 @@ def write_xlsx(
         ws = wb.active
 
     mdw = _default_mdw(wb)
+
+    # === 讓「輸出永遠置中」，不論範本原本是什麼主題 ===
+    # Excel 算欄寬是量「主題西文(latin)字體的數字 0」寬度。不同主題的西文字體寬度不同
+    # （Calibri 在 Mac Excel 偏寬→圖偏左；Aptos Narrow 才對得上估算），所以同一份程式對
+    # 不同範本會時對時偏。對策：存檔後把『主題西文字體』統一成 Aptos Narrow、預設字級 12
+    #（= 使用者 Excel 實測會置中的那組），並用對應的 mdw=7.85 定位 → Excel 渲染欄寬 ==
+    # 估算 → 任何範本都置中。對本來就是 Aptos Narrow/12 的範本是 no-op，不會弄壞。
+    NORM_MDW = 7.85
+    normalize_grid = not embed_in_cell
+    if normalize_grid:
+        mdw = NORM_MDW
 
     # contain_align（維持比例·等高）：先算每列的共同高度 = 該列各圖 contain 高度的最小值
     # 之後該列每張圖都縮到此高度（保比例、寬度隨之），讓同列圖片上下緣對齊。
@@ -283,36 +251,109 @@ def write_xlsx(
         src_path = _apply_crop(Path(p.path), p.crop or crop, out_path.parent / "_crops")
 
         target_w, target_h = _placement_pixel_size(ws, p, mdw)
-        inset = max(0.0, min(0.45, contain_inset))
-        crops_dir = out_path.parent / "_crops"
 
-        # 先把圖 render 成「剛好 cell 尺寸」的畫布（內層除 fill 外皆保比例），
-        # 再用 TwoCellAnchor 從格子左上錨到右下 → 圖框隨 Excel 實際格寬/列高縮放，
-        # 不會因為估算欄寬與 Excel 渲染不符而溢出或偏移（取代舊的 OneCellAnchor 絕對尺寸）。
-        if img_fit == "cover":
-            canvas_path = _cover_crop(src_path, target_w, target_h, crops_dir)
-        elif img_fit == "fill":
-            canvas_path = _canvas_fit(src_path, target_w, target_h, inset, "fill", None, crops_dir)
-        elif img_fit == "contain_align":
-            canvas_path = _canvas_fit(src_path, target_w, target_h, inset, "align",
-                                      row_common_h.get(p.row), crops_dir)
-        else:  # contain
-            canvas_path = _canvas_fit(src_path, target_w, target_h, inset, "contain", None, crops_dir)
-
-        img = XLImage(str(canvas_path))
-        img.anchor = TwoCellAnchor(
-            editAs="twoCell",
-            _from=AnchorMarker(col=p.col - 1, colOff=0, row=p.row - 1, rowOff=0),
-            to=AnchorMarker(col=p.col - 1 + max(1, p.span_cols), colOff=0,
-                            row=p.row - 1 + max(1, p.span_rows), rowOff=0),
-        )
-        ws._images.append(img)
+        if img_fit == "fill":
+            # 拉伸到 cell 範圍 (會變形)；四邊等量留白置中
+            inset = max(0.0, min(0.45, contain_inset))
+            fit_w = target_w * (1 - 2 * inset)
+            fit_h = target_h * (1 - 2 * inset)
+            col_off_px = max(0.0, (target_w - fit_w) / 2)
+            row_off_px = max(0.0, (target_h - fit_h) / 2)
+            img = XLImage(str(src_path))
+            img.anchor = OneCellAnchor(
+                _from=AnchorMarker(
+                    col=p.col - 1, colOff=int(round(pixels_to_EMU(col_off_px))),
+                    row=p.row - 1, rowOff=int(round(pixels_to_EMU(row_off_px))),
+                ),
+                ext=XDRPositiveSize2D(
+                    cx=int(round(pixels_to_EMU(fit_w))),
+                    cy=int(round(pixels_to_EMU(fit_h))),
+                ),
+            )
+            ws._images.append(img)
+        elif img_fit in ("contain", "contain_align"):
+            # 保長寬比、放入 cell 並四邊留白置中
+            with PILImage.open(src_path) as im:
+                iw, ih = im.size
+            aspect = ih / iw if iw else 1.0
+            inset = max(0.0, min(0.45, contain_inset))
+            if img_fit == "contain_align" and p.row in row_common_h:
+                # 等高：用該列共同高度，寬度依比例
+                fit_h = row_common_h[p.row]
+                fit_w = fit_h / aspect if aspect else target_w * (1 - 2 * inset)
+            else:
+                avail_w = target_w * (1 - 2 * inset)
+                avail_h = target_h * (1 - 2 * inset)
+                fit_w = avail_w
+                fit_h = fit_w * aspect
+                if fit_h > avail_h and avail_h > 0:
+                    fit_h = avail_h
+                    fit_w = fit_h / aspect if aspect else avail_w
+            col_off_px = max(0.0, (target_w - fit_w) / 2)
+            row_off_px = max(0.0, (target_h - fit_h) / 2)
+            img = XLImage(str(src_path))
+            img.anchor = OneCellAnchor(
+                _from=AnchorMarker(
+                    col=p.col - 1, colOff=int(round(pixels_to_EMU(col_off_px))),
+                    row=p.row - 1, rowOff=int(round(pixels_to_EMU(row_off_px))),
+                ),
+                ext=XDRPositiveSize2D(
+                    cx=int(round(pixels_to_EMU(fit_w))),
+                    cy=int(round(pixels_to_EMU(fit_h))),
+                ),
+            )
+            ws._images.append(img)
+        else:
+            # cover (default)：保長寬比、center-crop、剛好填滿 cell
+            cropped = _cover_crop(src_path, target_w, target_h, out_path.parent / "_crops")
+            img = XLImage(str(cropped))
+            img.width = int(round(target_w))
+            img.height = int(round(target_h))
+            ws.add_image(img, f"{get_column_letter(p.col)}{p.row}")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(str(out_path))
+    if normalize_grid:
+        _normalize_theme_font(out_path)   # 主題西文→Aptos Narrow、預設字級→12，與 mdw=7.85 一致
     if lock_images:
         _lock_drawing_images(out_path)
     return out_path
+
+
+def _normalize_theme_font(xlsx_path: Path) -> None:
+    """讓 Excel 用「會置中的那組字體」算欄寬：把主題的西文(latin)字體統一成 Aptos Narrow、
+    預設字體(font 0)字級設 12。Excel 算欄寬量的是「主題西文數字 0」的寬度，Aptos Narrow
+    sz12 在 Mac Excel 渲染 ≈ mdw 7.85，正好對上定位估算 → 圖置中（不論範本原主題是什麼）。
+    只動「主題西文」與「預設字級」；各 cell 既有的明確字體、中文(新細明體)顯示都不受影響。"""
+    import zipfile
+    import re
+    try:
+        with zipfile.ZipFile(xlsx_path, "r") as zin:
+            names = zin.namelist()
+            data = {n: zin.read(n) for n in names}
+
+        # 1) styles.xml：第一個 <font>(預設字體) 的 sz → 12（保留 name/scheme，西文由主題決定）
+        styles = data.get("xl/styles.xml", b"").decode("utf-8")
+        m = re.search(r"(<fonts\b[^>]*>)(<font\b.*?</font>)", styles, re.DOTALL)
+        if m:
+            f0 = m.group(2)
+            if "<sz " in f0 or "<sz/" in f0:
+                f0n = re.sub(r'<sz val="[^"]*"\s*/>', '<sz val="12"/>', f0, count=1)
+            else:
+                f0n = f0.replace("<font>", '<font><sz val="12"/>', 1)
+            data["xl/styles.xml"] = (styles[:m.start(2)] + f0n + styles[m.end(2):]).encode("utf-8")
+
+        # 2) theme*.xml：所有 <a:latin .../> 的 typeface → Aptos Narrow（欄寬量 latin 的 '0'）
+        for tn in [n for n in names if re.match(r"xl/theme/theme\d+\.xml$", n)]:
+            th = data[tn].decode("utf-8")
+            data[tn] = re.sub(r'(<a:latin\b[^>]*\btypeface=")[^"]*(")',
+                              r'\1Aptos Narrow\2', th).encode("utf-8")
+
+        with zipfile.ZipFile(xlsx_path, "w", zipfile.ZIP_DEFLATED) as zout:
+            for n in names:
+                zout.writestr(n, data[n])
+    except Exception:
+        pass   # 正規化失敗就保持原樣，不擋匯出
 
 
 def _lock_drawing_images(xlsx_path: Path) -> None:
