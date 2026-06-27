@@ -54,8 +54,8 @@ function placements(grid, forceOrient) {
 
 // 預期結果（依 README；橫式 vs 直式 = 轉置）
 const EXPECT = {
-  // *1 全空：兩軸依檔名，4 張全貼（横式資料從表格頂列起、直式從頂列下一列起）
-  h1_empty:        { "AAA-1": "C2", "AAA-2": "D2", "BBB-2": "D3", "BBB-3": "E3" },
+  // *1 全空：兩軸依檔名，4 張全貼（頂列保留給 index 標頭、資料從下一列起）
+  h1_empty:        { "AAA-1": "C3", "AAA-2": "D3", "BBB-2": "D4", "BBB-3": "E4" },
   v1_empty:        { "AAA-1": "C3", "AAA-2": "C4", "BBB-2": "D4", "BBB-3": "D5" },
   // *2 只有 index(2,3,4)：Index 依範本 → idx=1(AAA-1) 跳過；Group 依檔名(AAA 列, BBB 列)
   h2_index:        { "AAA-2": "C3", "BBB-2": "C4", "BBB-3": "D4" },

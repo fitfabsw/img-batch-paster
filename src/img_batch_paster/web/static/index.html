@@ -213,6 +213,8 @@
       //   解決「group 標籤在左欄、頂列無文字」(如 h7) 時表頭偵測不到、資料錨點誤落表格頂列的問題。
       const leftRows = cells.filter((c) => c.c === minC && c.text != null && String(c.text).trim() !== "").map((c) => c.r);
       if (leftRows.length) skipRows = Math.max(skipRows, Math.min(...leftRows) - minR);
+      // 頂列永遠是(index)表頭列：即使全空也保留一列給標頭、資料從下一列起（否則寫入的 index 標頭會擠掉資料）
+      skipRows = Math.max(skipRows, 1);
       if (minR + skipRows > maxR) skipRows = Math.max(0, maxR - minR); // 至少留 1 列放圖
       const skipCols = 1; // 第一欄當 SN/標籤欄
       const startColIdx = Math.min(maxC, minC + skipCols);
