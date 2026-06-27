@@ -69,6 +69,26 @@ const EXPECT = {
 // v4 全空無法自動偵測直式 → 手選 vertical
 const FORCE = { v4_empty: "vertical" };
 
+// 手動覆寫設定的回歸案例：{ grid, orient, groupSrc, idxSrc('template'|'filename'), expect }
+function placementsManual(gridName, { orient, groupSrc, idxSrc }) {
+  const grid = grids[gridName];
+  const d = F.detectExcelTable(grid);
+  const excel = { startCell: d.startCell, snCol: d.snCol, cellCols: 1, cellRows: 1, gapRows: 0, orient };
+  const ax = F.readAxisLabels(grid, d);
+  const idxAxis = orient === "vertical" ? ax.leftLabelsArr : ax.topLabelsArr;
+  const label = { pattern: "{group}-{idx}", idxSort: "auto", idxOrder: [], groupSrc, idxIgnore: [], font_pt: 12 };
+  if (idxSrc === "template") { label.idxSort = "custom"; label.idxOrder = [...idxAxis]; }
+  const cells = F.computeExcelCellsAuto(grid, excel, label, FILES, true);
+  const out = {};
+  for (const c of cells) if (c.path) out[c.path.replace(/\.[^.]+$/, "")] = get_column_letter(c.col) + c.row;
+  return out;
+}
+const MANUAL = {
+  // B-022 回歸：h7（group 在左欄）+ Group/Index 都依檔名 → 資料須從表頭下一列(第3列)起，不騎到範本標籤
+  "h7 group=檔名,index=檔名": { gridName: "h7_group", cfg: { orient: "horizontal", groupSrc: "filename", idxSrc: "filename" },
+    expect: { "AAA-1": "C3", "AAA-2": "D3", "BBB-2": "D4", "BBB-3": "E4" } },
+};
+
 let fail = 0;
 for (const name of Object.keys(EXPECT)) {
   const got = placements(grids[name], FORCE[name]);
@@ -78,6 +98,16 @@ for (const name of Object.keys(EXPECT)) {
   } catch (e) {
     fail++;
     console.log(`  ✗ ${name}\n      expected ${JSON.stringify(EXPECT[name])}\n      got      ${JSON.stringify(got)}`);
+  }
+}
+for (const [name, t] of Object.entries(MANUAL)) {
+  const got = placementsManual(t.gridName, t.cfg);
+  try {
+    assert.deepStrictEqual(got, t.expect);
+    console.log(`  ✓ ${name}`);
+  } catch (e) {
+    fail++;
+    console.log(`  ✗ ${name}\n      expected ${JSON.stringify(t.expect)}\n      got      ${JSON.stringify(got)}`);
   }
 }
 console.log(fail ? `\n${fail} case(s) FAILED` : "\nAll cases passed ✓");

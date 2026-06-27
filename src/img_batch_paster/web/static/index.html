@@ -209,6 +209,10 @@
       );
       let skipRows = 0;
       while (minR + skipRows <= maxR && textRows.has(minR + skipRows)) skipRows++;
+      // 也看左欄(標籤欄)：若標籤從某列才開始(其上有空白列)，那空白列就是表頭 → 資料從首個左欄標籤列起。
+      //   解決「group 標籤在左欄、頂列無文字」(如 h7) 時表頭偵測不到、資料錨點誤落表格頂列的問題。
+      const leftRows = cells.filter((c) => c.c === minC && c.text != null && String(c.text).trim() !== "").map((c) => c.r);
+      if (leftRows.length) skipRows = Math.max(skipRows, Math.min(...leftRows) - minR);
       if (minR + skipRows > maxR) skipRows = Math.max(0, maxR - minR); // 至少留 1 列放圖
       const skipCols = 1; // 第一欄當 SN/標籤欄
       const startColIdx = Math.min(maxC, minC + skipCols);
