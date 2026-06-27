@@ -26,6 +26,13 @@
 
 <!-- 新→舊排序（最近的放最上面）；ID 為穩定識別碼、不隨排序變動 -->
 
+### [B-021] Index 對位按鈕載入時顯示「依範本」但實際跑「依檔名」（範本無 index 時）
+- **狀態**: Fixed
+- **發現**: 2026-06-27
+- **重現**: 載入 h7_group.xlsx（只有 group、無 index）→ Index 對位鈕亮「依範本」，但預覽有圖（實為依檔名行為）。切「依檔名」再切回才一致。
+- **備註**: Group 鈕顯示實際生效值（groupEff），Index 鈕卻比對 idxOrder，載入時兩者皆不符 → 預設誤亮「依範本」。
+- **修正**: `<this commit>` — Index 鈕改 `idxTemplateActive ? template : filename`，與底層行為一致（無 index 標籤 → 顯示依檔名）。
+
 ### [B-020] 直式全空範本 + Index 依檔名 → 圖片全不貼
 - **狀態**: Fixed
 - **發現**: 2026-06-27（由新增的 placement 測試 v4_empty 抓到）

@@ -4754,7 +4754,8 @@
                           {/* Index 對位 */}
                           <div>
                             <div className="text-xs text-slate-600 mb-1">Index 對位 <span className="text-slate-400 text-[10px]">後段，如 BC</span></div>
-                            <TriToggle value={idxFileActive ? "filename" : "template"} options={SRC2}
+                            {/* 顯示「實際生效」的來源：唯有 idxOrder＝範本標籤才是依範本；否則(含未設/auto)＝依檔名，與底層行為一致 */}
+                            <TriToggle value={idxTemplateActive ? "template" : "filename"} options={SRC2}
                               onPick={(v) => setIdxSrc(v)} />
                             <div className="tip text-[10px] text-slate-400 mt-0.5">依範本＝Index 順序對到範本標籤；依檔名＝依檔名順序。細部排序見下方「對位欄位」。</div>
                             {xlOrient.unmatched?.length > 0 && (
