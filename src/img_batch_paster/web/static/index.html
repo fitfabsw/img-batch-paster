@@ -450,7 +450,8 @@
     }
     // 横式 Case3：group 對到範本左欄既有 group(不覆寫)、index 依範本表頭定位；多出的 group 跳過。
     function computeExcelCellsHorizGroupTemplate(grid, detect, ax, excel, label, files) {
-      const start = parseCell(detect.startCell);
+      // 列由範本左欄 group 標籤決定(鎖定)；欄(index 自由)可由 excel.startCell 的 col 調整。
+      const start = parseCell(excel.startCell || detect.startCell);
       const stepCol = Math.max(1, excel.cellCols);
       const idxList = detectIdxList(files, label.pattern, label.idxSort || "auto", label.idxOrder || []);
       const rows = buildRows(files, label.pattern, idxList, true, new Set(label.idxIgnore || []));
@@ -4808,16 +4809,40 @@
                             <button onClick={() => setXlAdvOpen((v) => !v)} className="tip text-[11px] text-slate-500 hover:text-slate-700">
                               {xlAdvOpen ? "▾" : "▸"} 進階設定（起始 cell）
                             </button>
-                            {xlAdvOpen && (
+                            {xlAdvOpen && (() => {
+                              // 起始 cell 拆成 col/row：列鎖定⟺group 依範本、欄鎖定⟺index 依範本；直式由標籤定位故兩者唯讀
+                              const sc = parseCell(cfg.excel.startCell || "C3");
+                              const idx2letter = (n) => { let s = ""; while (n > 0) { s = String.fromCharCode(65 + (n - 1) % 26) + s; n = Math.floor((n - 1) / 26); } return s; };
+                              const vertical = xlOrient?.orientation === "vertical";
+                              const rowLocked = vertical || !!xlOrient?.groupHasValues;            // group 依範本 → 列鎖定
+                              const colLocked = vertical || (idxAxisLabelsBtn.length > 0);         // index 依範本 → 欄鎖定
+                              const setCol = (letter) => { const col = colLetterToIdx(letter); if (col) setCfg((c) => ({ ...c, excel: { ...c.excel, startCell: letter.toUpperCase() + sc.row } })); };
+                              const setRow = (r) => { const row = parseInt(r) || 1; setCfg((c) => ({ ...c, excel: { ...c.excel, startCell: idx2letter(sc.col) + row } })); };
+                              return (
                               <div className="mt-2 space-y-1">
-                                <label className="flex flex-col text-xs text-slate-600">圖片起始 cell（左上錨點）
-                                  <input value={cfg.excel.startCell}
-                                    onChange={(e) => setCfg((c) => ({ ...c, excel: { ...c.excel, startCell: e.target.value } }))}
-                                    className="border rounded px-2 py-1 text-sm mt-1 font-mono w-28" placeholder="C3" />
-                                </label>
-                                <div className="tip text-[10px] text-slate-400">載入範本時自動偵測；圖片區左上角第一格。{xlOrient?.orientation === "vertical" && "（直式以範本標籤定位，此值僅供參考）"}</div>
+                                <div className="text-xs text-slate-600">圖片起始 cell（左上錨點）</div>
+                                <div className="flex gap-2 items-end">
+                                  <label className="flex flex-col text-[10px] text-slate-500">欄(col)
+                                    <input value={idx2letter(sc.col)} disabled={colLocked}
+                                      onChange={(e) => setCol(e.target.value)}
+                                      className={`border rounded px-2 py-1 text-sm mt-0.5 font-mono w-16 ${colLocked ? "bg-slate-100 text-slate-400" : ""}`} />
+                                  </label>
+                                  <label className="flex flex-col text-[10px] text-slate-500">列(row)
+                                    <input type="number" value={sc.row} disabled={rowLocked}
+                                      onChange={(e) => setRow(e.target.value)}
+                                      className={`border rounded px-2 py-1 text-sm mt-0.5 font-mono w-16 ${rowLocked ? "bg-slate-100 text-slate-400" : ""}`} />
+                                  </label>
+                                </div>
+                                <div className="tip text-[10px] text-slate-400">
+                                  {vertical ? "直式以範本標籤定位，起始 cell 唯讀。"
+                                    : (rowLocked && colLocked) ? "範本兩軸都有標籤 → 錨點由範本決定、唯讀。"
+                                    : rowLocked ? "列由範本 group 標籤鎖定；欄(index 依檔名)可調。"
+                                    : colLocked ? "欄由範本 index 標籤鎖定；列(group 依檔名)可調。"
+                                    : "範本全空 → 欄列皆可調。"}
+                                </div>
                               </div>
-                            )}
+                              );
+                            })()}
                           </div>
                         </div>
                         );
