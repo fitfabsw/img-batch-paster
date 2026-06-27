@@ -31,7 +31,7 @@
 - **發現**: 2026-06-27（由新增的 placement 測試 v4_empty 抓到）
 - **重現**: v4_empty.xlsx（直式、全空無標籤）+ Index 依檔名 → 一張都沒貼上。
 - **備註**: `resolveTransposedIdxList` 在範本無左欄標籤時回傳空陣列（横式 empty 會退回檔名 idx，直式漏了）。
-- **修正**: `ffb7b09` — 無左欄標籤時退回 `detectIdxList`（檔名 idx 順序）。
+- **修正**: `90de1f3` — 無左欄標籤時退回 `detectIdxList`（檔名 idx 順序）。
 
 ### [B-002] 直式 xlsx 圖片落點整體偏移一列/一欄
 - **狀態**: Fixed
