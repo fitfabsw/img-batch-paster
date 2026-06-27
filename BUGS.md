@@ -27,6 +27,13 @@
 
 <!-- 新→舊排序（最近的放最上面）；ID 為穩定識別碼、不隨排序變動 -->
 
+### [B-026] 直式起始 cell 兩軸都被鎖、無法調整自由軸
+- **狀態**: Fixed
+- **發現**: 2026-06-27
+- **重現**: v1_empty.xlsx 設直式 → 起始 cell 欄/列皆 disabled（應皆可調，因全空）。
+- **備註**: 起始 cell 拆 col/row 時只做了横式；直式一律鎖死，且 transposed placement 不吃 excel.startCell。
+- **修正**: `<this commit>` — 鎖定邏輯改 per-orientation（直式 col⟺group、row⟺index）；transposed 自由軸吃 excel.startCell，標籤隨自由軸移動。
+
 ### [B-025] 横式空範本錨點錯誤：寫 index 標頭後資料仍從頂列起（應下移一列）
 - **狀態**: Fixed
 - **發現**: 2026-06-27

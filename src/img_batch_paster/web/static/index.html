@@ -393,13 +393,19 @@
       if (!ax) return { cells: [], unmatched: [] };
       const stepCol = Math.max(1, excel.cellCols);
       const stepRow = Math.max(1, excel.cellRows) + Math.max(0, excel.gapRows || 0);
-      const startCol = ax.region.minC + 1;            // 第一個資料欄
-      const startRow = ax.headerRow + 1;              // 第一個資料列
+      // 自由軸(依檔名)可由 excel.startCell 調整；鎖定軸(依範本)用範本標籤位置。
+      //   直式：group=欄(頂列)、index=列(左欄)。group 依檔名→欄自由；index 依檔名(左欄無標籤)→列自由。
+      const anchor = parseCell(excel.startCell || detect.startCell);
+      const idxIsFilename = (ax.leftLabelsArr || []).length === 0;
+      const groupIsFilename = resolveGroupAxis("vertical", ax, label).eff === "filename";
+      const startCol = groupIsFilename ? anchor.col : ax.region.minC + 1;   // 第一個資料欄
+      const startRow = idxIsFilename ? anchor.row : ax.headerRow + 1;       // 第一個資料列
       const idxList = resolveTransposedIdxList(ax, label, files);
       const rowOf = new Map(idxList.map((v, i) => [String(v), startRow + i * stepRow]));
       const cells = [], unmatched = new Set(), unmatchedGroups = new Set();
-      if ((ax.leftLabelsArr || []).length === 0) {   // 範本左欄無 index 標籤 → 依檔名自動產生並寫入(與 group 對稱)
-        idxList.forEach((v, i) => cells.push({ row: startRow + i * stepRow, col: ax.region.minC, span_cols: 1, span_rows: excel.cellRows, text: String(v), font_pt: label.font_pt }));
+      const idxLabelCol = startCol - 1;   // index 標籤在資料欄左方一欄(隨自由軸移動)
+      if (idxIsFilename && idxLabelCol >= 1) {   // 範本左欄無 index 標籤 → 依檔名自動產生並寫入(與 group 對稱)
+        idxList.forEach((v, i) => cells.push({ row: startRow + i * stepRow, col: idxLabelCol, span_cols: 1, span_rows: excel.cellRows, text: String(v), font_pt: label.font_pt }));
       }
       // SN(group)→欄。group 軸：template=對到範本頂列既有 group(不覆寫)；filename=依檔案出現順序+寫入。
       const grp = resolveGroupAxis("vertical", ax, label);
@@ -422,9 +428,10 @@
           if (g && !snSet.has(g)) { snSet.add(g); snList.push(g); }
         }
         colOf = new Map(snList.map((sn, k) => [sn, startCol + k * stepCol]));
-        {   // 依檔名(自動產生)→ 一律把 Group 寫進頂列標籤
+        const grpLabelRow = startRow - 1;   // group 標籤在資料列上方一列(隨自由軸移動)
+        if (grpLabelRow >= 1) {   // 依檔名(自動產生)→ 一律把 Group 寫進頂列標籤
           for (const sn of snList) {
-            cells.push({ row: ax.headerRow, col: colOf.get(sn), span_cols: excel.cellCols, span_rows: 1, text: sn, font_pt: label.font_pt });
+            cells.push({ row: grpLabelRow, col: colOf.get(sn), span_cols: excel.cellCols, span_rows: 1, text: sn, font_pt: label.font_pt });
           }
         }
       }
@@ -4808,8 +4815,11 @@
                             const sc = parseCell(cfg.excel.startCell || "C3");
                             const idx2letter = (n) => { let s = ""; while (n > 0) { s = String.fromCharCode(65 + (n - 1) % 26) + s; n = Math.floor((n - 1) / 26); } return s; };
                             const vertical = xlOrient?.orientation === "vertical";
-                            const rowLocked = vertical || !!xlOrient?.groupHasValues;            // group 依範本 → 列鎖定
-                            const colLocked = vertical || (idxAxisLabelsBtn.length > 0);         // index 依範本 → 欄鎖定
+                            // 鎖定該軸＝那條軸由範本標籤定位。横式：group=列、index=欄；直式相反(group=欄、index=列)。
+                            const idxIsTemplate = idxAxisLabelsBtn.length > 0;
+                            const groupIsTemplate = !!xlOrient?.groupHasValues;
+                            const rowLocked = vertical ? idxIsTemplate : groupIsTemplate;
+                            const colLocked = vertical ? groupIsTemplate : idxIsTemplate;
                             const setColIdx = (col) => { if (col >= 1) setCfg((c) => ({ ...c, excel: { ...c.excel, startCell: idx2letter(col) + sc.row } })); };
                             const setRow = (row) => { if (row >= 1) setCfg((c) => ({ ...c, excel: { ...c.excel, startCell: idx2letter(sc.col) + row } })); };
                             const Stepper = ({ label, value, locked, onStep }) => (
@@ -4829,11 +4839,10 @@
                                   <Stepper label="列(row)" value={sc.row} locked={rowLocked} onStep={(d) => setRow(sc.row + d)} />
                                 </div>
                                 <div className="tip text-[10px] text-slate-400">
-                                  {vertical ? "直式以範本標籤定位，起始 cell 唯讀。"
-                                    : (rowLocked && colLocked) ? "範本兩軸都有標籤 → 錨點由範本決定、唯讀。"
-                                    : rowLocked ? "列由範本 group 標籤鎖定；欄(index 依檔名)可調。"
-                                    : colLocked ? "欄由範本 index 標籤鎖定；列(group 依檔名)可調。"
-                                    : "範本全空 → 欄列皆可調。"}
+                                  {(rowLocked && colLocked) ? "範本兩軸都有標籤 → 錨點由範本決定、唯讀。"
+                                    : (!rowLocked && !colLocked) ? "範本全空 → 欄列皆可調。"
+                                    : rowLocked ? `列由範本${vertical ? "index" : "group"}標籤鎖定；欄可調。`
+                                    : `欄由範本${vertical ? "group" : "index"}標籤鎖定；列可調。`}
                                 </div>
                               </div>
                             );
