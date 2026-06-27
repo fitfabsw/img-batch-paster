@@ -175,6 +175,49 @@ def _cover_crop(img_path: Path, target_w: float, target_h: float, tmp_dir: Path)
         return out
 
 
+def _canvas_fit(img_path: Path, target_w: float, target_h: float, inset: float,
+                mode: str, fixed_h: float | None, tmp_dir: Path) -> Path:
+    """把圖 render 成「剛好 cell 尺寸(target_w×target_h)」的白底畫布，內層依 mode 擺放：
+      - contain：保比例縮到留白框內、置中。
+      - align  ：保比例、高度=fixed_h(該列共同高度)、置中（等高對齊）。
+      - fill   ：拉伸到留白框（**唯一會變形**）。
+    之後用 TwoCellAnchor 填滿格子，圖框就跟著 Excel 實際格子走、永不溢出，內層仍保比例。"""
+    tw = max(1, int(round(target_w)))
+    th = max(1, int(round(target_h)))
+    with PILImage.open(img_path) as im:
+        if im.mode != "RGB":   # 一律白底，避免 Excel 把透明區當 cell 背景
+            if im.mode == "P":
+                im = im.convert("RGBA" if "transparency" in im.info else "RGB")
+            if im.mode == "RGBA":
+                bg = PILImage.new("RGB", im.size, (255, 255, 255))
+                bg.paste(im, mask=im.split()[-1])
+                im = bg
+            else:
+                im = im.convert("RGB")
+        iw, ih = im.size
+        avail_w = max(1.0, tw * (1 - 2 * inset))
+        avail_h = max(1.0, th * (1 - 2 * inset))
+        if mode == "fill":
+            nw, nh = avail_w, avail_h
+        elif mode == "align" and fixed_h:
+            nh = min(float(fixed_h), avail_h)
+            nw = nh * (iw / ih) if ih else avail_w
+            if nw > avail_w:
+                nw = avail_w
+                nh = nw * (ih / iw) if iw else avail_h
+        else:  # contain
+            scale = min(avail_w / iw, avail_h / ih) if (iw and ih) else 1.0
+            nw, nh = iw * scale, ih * scale
+        nw, nh = max(1, int(round(nw))), max(1, int(round(nh)))
+        im = im.resize((nw, nh), PILImage.LANCZOS)
+        canvas = PILImage.new("RGB", (tw, th), (255, 255, 255))
+        canvas.paste(im, ((tw - nw) // 2, (th - nh) // 2))
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        out = tmp_dir / f"_cv_{img_path.stem}_{tw}x{th}_{mode}.png"
+        canvas.save(out, "PNG")
+        return out
+
+
 def write_xlsx(
     placements: list[CellPlacement],
     out_path: Path,
@@ -240,65 +283,30 @@ def write_xlsx(
         src_path = _apply_crop(Path(p.path), p.crop or crop, out_path.parent / "_crops")
 
         target_w, target_h = _placement_pixel_size(ws, p, mdw)
+        inset = max(0.0, min(0.45, contain_inset))
+        crops_dir = out_path.parent / "_crops"
 
-        if img_fit == "fill":
-            # 拉伸到 cell 範圍 (會變形)；四邊等量留白置中
-            inset = max(0.0, min(0.45, contain_inset))
-            fit_w = target_w * (1 - 2 * inset)
-            fit_h = target_h * (1 - 2 * inset)
-            col_off_px = max(0.0, (target_w - fit_w) / 2)
-            row_off_px = max(0.0, (target_h - fit_h) / 2)
-            img = XLImage(str(src_path))
-            img.anchor = OneCellAnchor(
-                _from=AnchorMarker(
-                    col=p.col - 1, colOff=int(round(pixels_to_EMU(col_off_px))),
-                    row=p.row - 1, rowOff=int(round(pixels_to_EMU(row_off_px))),
-                ),
-                ext=XDRPositiveSize2D(
-                    cx=int(round(pixels_to_EMU(fit_w))),
-                    cy=int(round(pixels_to_EMU(fit_h))),
-                ),
-            )
-            ws._images.append(img)
-        elif img_fit in ("contain", "contain_align"):
-            # 保長寬比、放入 cell 並四邊留白置中
-            with PILImage.open(src_path) as im:
-                iw, ih = im.size
-            aspect = ih / iw if iw else 1.0
-            inset = max(0.0, min(0.45, contain_inset))
-            if img_fit == "contain_align" and p.row in row_common_h:
-                # 等高：用該列共同高度，寬度依比例
-                fit_h = row_common_h[p.row]
-                fit_w = fit_h / aspect if aspect else target_w * (1 - 2 * inset)
-            else:
-                avail_w = target_w * (1 - 2 * inset)
-                avail_h = target_h * (1 - 2 * inset)
-                fit_w = avail_w
-                fit_h = fit_w * aspect
-                if fit_h > avail_h and avail_h > 0:
-                    fit_h = avail_h
-                    fit_w = fit_h / aspect if aspect else avail_w
-            col_off_px = max(0.0, (target_w - fit_w) / 2)
-            row_off_px = max(0.0, (target_h - fit_h) / 2)
-            img = XLImage(str(src_path))
-            img.anchor = OneCellAnchor(
-                _from=AnchorMarker(
-                    col=p.col - 1, colOff=int(round(pixels_to_EMU(col_off_px))),
-                    row=p.row - 1, rowOff=int(round(pixels_to_EMU(row_off_px))),
-                ),
-                ext=XDRPositiveSize2D(
-                    cx=int(round(pixels_to_EMU(fit_w))),
-                    cy=int(round(pixels_to_EMU(fit_h))),
-                ),
-            )
-            ws._images.append(img)
-        else:
-            # cover (default)：保長寬比、center-crop、剛好填滿 cell
-            cropped = _cover_crop(src_path, target_w, target_h, out_path.parent / "_crops")
-            img = XLImage(str(cropped))
-            img.width = int(round(target_w))
-            img.height = int(round(target_h))
-            ws.add_image(img, f"{get_column_letter(p.col)}{p.row}")
+        # 先把圖 render 成「剛好 cell 尺寸」的畫布（內層除 fill 外皆保比例），
+        # 再用 TwoCellAnchor 從格子左上錨到右下 → 圖框隨 Excel 實際格寬/列高縮放，
+        # 不會因為估算欄寬與 Excel 渲染不符而溢出或偏移（取代舊的 OneCellAnchor 絕對尺寸）。
+        if img_fit == "cover":
+            canvas_path = _cover_crop(src_path, target_w, target_h, crops_dir)
+        elif img_fit == "fill":
+            canvas_path = _canvas_fit(src_path, target_w, target_h, inset, "fill", None, crops_dir)
+        elif img_fit == "contain_align":
+            canvas_path = _canvas_fit(src_path, target_w, target_h, inset, "align",
+                                      row_common_h.get(p.row), crops_dir)
+        else:  # contain
+            canvas_path = _canvas_fit(src_path, target_w, target_h, inset, "contain", None, crops_dir)
+
+        img = XLImage(str(canvas_path))
+        img.anchor = TwoCellAnchor(
+            editAs="twoCell",
+            _from=AnchorMarker(col=p.col - 1, colOff=0, row=p.row - 1, rowOff=0),
+            to=AnchorMarker(col=p.col - 1 + max(1, p.span_cols), colOff=0,
+                            row=p.row - 1 + max(1, p.span_rows), rowOff=0),
+        )
+        ws._images.append(img)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(str(out_path))

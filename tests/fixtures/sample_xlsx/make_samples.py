@@ -10,8 +10,10 @@ from openpyxl.styles import Border, Side, Alignment, Font
 
 base = Path(__file__).parent
 img_dir = base / "images"
+img2_dir = base / "images_2"
 tpl_dir = base / "templates"
 img_dir.mkdir(parents=True, exist_ok=True)
+img2_dir.mkdir(parents=True, exist_ok=True)
 tpl_dir.mkdir(parents=True, exist_ok=True)
 
 # 4 張測試圖（檔名 = {group}-{index}）
@@ -21,6 +23,14 @@ for name, rgb in colors.items():
     im = Image.new("RGB", (240, 180), rgb)
     ImageDraw.Draw(im).text((90, 80), name, fill="white")
     im.save(img_dir / f"{name}.png")
+
+# 第二組測試圖（檔名無分隔符 = {group}{index}，group={A,B}、index={1,2}）
+colors2 = {"A1": (220, 120, 120), "A2": (120, 180, 120),
+           "B1": (120, 140, 210), "B2": (210, 180, 110)}
+for name, rgb in colors2.items():
+    im = Image.new("RGB", (240, 180), rgb)
+    ImageDraw.Draw(im).text((100, 80), name, fill="white")
+    im.save(img2_dir / f"{name}.png")
 
 thin = Side(style="thin", color="000000")
 BORD = Border(left=thin, right=thin, top=thin, bottom=thin)
