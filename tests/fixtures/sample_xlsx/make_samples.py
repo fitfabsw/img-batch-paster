@@ -44,6 +44,7 @@ def save(wb, name):
 INDEX = ["2", "3", "4"]      # 3 個 index
 GROUP = ["BBB", "CCC"]       # 2 個 group（含一個對不到的 CCC）
 
+# h/v 同號＝同邏輯：*1=全空 *2=只有 index *3=index+group *4=只有 group
 # 横式：Group 在左欄、Index 在頂列
 wb = openpyxl.Workbook(); ws = wb.active; grid(ws, 2, 2, 3, 4); save(wb, "h1_empty.xlsx")
 
@@ -57,27 +58,25 @@ for j, v in enumerate(INDEX): put(ws, 2, 3 + j, v)
 for i, v in enumerate(GROUP): put(ws, 3 + i, 2, v)
 save(wb, "h3_index_group.xlsx")
 
+wb = openpyxl.Workbook(); ws = wb.active; grid(ws, 2, 2, 1 + len(GROUP), 4)
+for i, v in enumerate(GROUP): put(ws, 3 + i, 2, v)
+save(wb, "h4_group.xlsx")
+
 # 直式：Group 在頂列、Index 在左欄
-wb = openpyxl.Workbook(); ws = wb.active; grid(ws, 2, 2, 4, 4); save(wb, "v4_empty.xlsx")
+wb = openpyxl.Workbook(); ws = wb.active; grid(ws, 2, 2, 4, 4); save(wb, "v1_empty.xlsx")
 
 wb = openpyxl.Workbook(); ws = wb.active; grid(ws, 2, 2, 1 + len(INDEX), 4)
 for i, v in enumerate(INDEX): put(ws, 3 + i, 2, v)
-save(wb, "v5_index.xlsx")
+save(wb, "v2_index.xlsx")
 
 wb = openpyxl.Workbook(); ws = wb.active; grid(ws, 2, 2, 1 + len(INDEX), 1 + len(GROUP))
 put(ws, 2, 2, "Title")
 for j, v in enumerate(GROUP): put(ws, 2, 3 + j, v)
 for i, v in enumerate(INDEX): put(ws, 3 + i, 2, v)
-save(wb, "v6_index_group.xlsx")
+save(wb, "v3_index_group.xlsx")
 
-# 只有 group、沒有 index（對稱於 h2/v5 的只有 index）
-# 横式：左欄 group BBB,CCC；頂列無 index
-wb = openpyxl.Workbook(); ws = wb.active; grid(ws, 2, 2, 1 + len(GROUP), 4)
-for i, v in enumerate(GROUP): put(ws, 3 + i, 2, v)
-save(wb, "h7_group.xlsx")
-# 直式：頂列 group BBB,CCC；左欄無 index
 wb = openpyxl.Workbook(); ws = wb.active; grid(ws, 2, 2, 4, 1 + len(GROUP))
 for j, v in enumerate(GROUP): put(ws, 2, 3 + j, v)
-save(wb, "v8_group.xlsx")
+save(wb, "v4_group.xlsx")
 
 print("done →", tpl_dir)

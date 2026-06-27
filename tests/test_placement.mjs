@@ -53,21 +53,21 @@ function placements(grid, forceOrient) {
 
 // 預期結果（依 README；橫式 vs 直式 = 轉置）
 const EXPECT = {
-  // 全空：兩軸依檔名，4 張全貼（横式資料從表格頂列起、直式從頂列下一列起）
+  // *1 全空：兩軸依檔名，4 張全貼（横式資料從表格頂列起、直式從頂列下一列起）
   h1_empty:        { "AAA-1": "C2", "AAA-2": "D2", "BBB-2": "D3", "BBB-3": "E3" },
-  v4_empty:        { "AAA-1": "C3", "AAA-2": "C4", "BBB-2": "D4", "BBB-3": "D5" },
-  // 只有 index(2,3,4)：Index 依範本 → idx=1(AAA-1) 跳過；Group 依檔名(AAA 列, BBB 列)
+  v1_empty:        { "AAA-1": "C3", "AAA-2": "C4", "BBB-2": "D4", "BBB-3": "D5" },
+  // *2 只有 index(2,3,4)：Index 依範本 → idx=1(AAA-1) 跳過；Group 依檔名(AAA 列, BBB 列)
   h2_index:        { "AAA-2": "C3", "BBB-2": "C4", "BBB-3": "D4" },
-  v5_index:        { "AAA-2": "C3", "BBB-2": "D3", "BBB-3": "D4" },
-  // index+group：兩軸依範本 → 只有 BBB 對到（AAA 整組、idx=1 皆跳過）
+  v2_index:        { "AAA-2": "C3", "BBB-2": "D3", "BBB-3": "D4" },
+  // *3 index+group：兩軸依範本 → 只有 BBB 對到（AAA 整組、idx=1 皆跳過）
   h3_index_group:  { "BBB-2": "C3", "BBB-3": "D3" },
-  v6_index_group:  { "BBB-2": "C3", "BBB-3": "C4" },
-  // 只有 group(BBB,CCC)：Group 依範本 → AAA 跳過；Index 依檔名（方向靠 group 軸命中自動判定）
-  h7_group:        { "BBB-2": "D3", "BBB-3": "E3" },
-  v8_group:        { "BBB-2": "C4", "BBB-3": "C5" },
+  v3_index_group:  { "BBB-2": "C3", "BBB-3": "C4" },
+  // *4 只有 group(BBB,CCC)：Group 依範本 → AAA 跳過；Index 依檔名（方向靠 group 軸命中自動判定）
+  h4_group:        { "BBB-2": "D3", "BBB-3": "E3" },
+  v4_group:        { "BBB-2": "C4", "BBB-3": "C5" },
 };
-// v4 全空無法自動偵測直式 → 手選 vertical
-const FORCE = { v4_empty: "vertical" };
+// v1 全空無法自動偵測直式 → 手選 vertical
+const FORCE = { v1_empty: "vertical" };
 
 // 手動覆寫設定的回歸案例：{ grid, orient, groupSrc, idxSrc('template'|'filename'), expect }
 function placementsManual(gridName, { orient, groupSrc, idxSrc }) {
@@ -84,8 +84,8 @@ function placementsManual(gridName, { orient, groupSrc, idxSrc }) {
   return out;
 }
 const MANUAL = {
-  // B-022 回歸：h7（group 在左欄）+ Group/Index 都依檔名 → 資料須從表頭下一列(第3列)起，不騎到範本標籤
-  "h7 group=檔名,index=檔名": { gridName: "h7_group", cfg: { orient: "horizontal", groupSrc: "filename", idxSrc: "filename" },
+  // B-022 回歸：h4（group 在左欄）+ Group/Index 都依檔名 → 資料須從表頭下一列(第3列)起，不騎到範本標籤
+  "h4 group=檔名,index=檔名": { gridName: "h4_group", cfg: { orient: "horizontal", groupSrc: "filename", idxSrc: "filename" },
     expect: { "AAA-1": "C3", "AAA-2": "D3", "BBB-2": "D4", "BBB-3": "E4" } },
 };
 

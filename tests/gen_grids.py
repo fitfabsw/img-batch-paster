@@ -26,6 +26,8 @@ def grid_of(path: Path) -> dict:
                 borders.append({"r": cell.row, "c": cell.column})
     return {"cols": cols, "cells": cells, "borders": borders}
 
-grids = {p.stem: grid_of(p) for p in sorted(tpl_dir.glob("*.xlsx"))}
+import re
+grids = {p.stem: grid_of(p) for p in sorted(tpl_dir.glob("*.xlsx"))
+         if re.match(r"[hv][1-4]_", p.stem)}   # 只取 8 個 canonical fixtures，忽略臨時檔
 out.write_text(json.dumps(grids, ensure_ascii=False, indent=0))
 print(f"wrote {out} ({len(grids)} grids)")
