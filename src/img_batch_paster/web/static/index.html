@@ -350,6 +350,12 @@
       if ((ax.leftLabelsArr || []).length) return ax.leftLabelsArr.slice();
       return detectIdxList(files, label.pattern, "auto", []);
     }
+    // Index 對位「按鈕顯示的來源」唯一真相（避免 B-021 那種顯示≠行為）：
+    //   唯有 idxSort=custom 且 idxOrder＝範本 idx 標籤 → 顯示「依範本」；其餘(含 auto/檔名/重排) → 「依檔名」。
+    function idxSrcShown(label, idxAxisLabels) {
+      const same = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((x, i) => String(x) === String(b[i]));
+      return (label.idxSort === "custom" && same(label.idxOrder || [], idxAxisLabels || [])) ? "template" : "filename";
+    }
     // 偵測範本方向：依檔名兩段在範本的命中位置投票。
     //   直式＝idx 在左欄 + group 在頂列；横式＝idx 在頂列 + group 在左欄。
     //   同時看兩軸 → 「只有 index」或「只有 group」的範本都能判對；都對不到才退回横式。
@@ -3187,8 +3193,9 @@
         () => detectIdxList(orderedFiles, cfg.label.pattern, "auto", []),
         [orderedFiles, cfg.label.pattern]
       );
-      const idxTemplateActive = (cfg.label.idxSort === "custom") && _sameArrApp(cfg.label.idxOrder, idxAxisLabelsBtn);
-      const idxFileActive = (cfg.label.idxSort === "custom") && !idxTemplateActive && _sameArrApp(cfg.label.idxOrder, idxFileOrder);
+      const idxShown = idxSrcShown(cfg.label, idxAxisLabelsBtn);   // 顯示來源唯一真相（同 placement）
+      const idxTemplateActive = idxShown === "template";
+      const idxFileActive = idxShown === "filename" && (cfg.label.idxSort === "custom") && _sameArrApp(cfg.label.idxOrder, idxFileOrder);
       const setIdxSrc = (src) => setCfg((c) => ({
         ...c, label: { ...c.label, idxSort: "custom", idxOrder: src === "template" ? [...idxAxisLabelsBtn] : [...idxFileOrder] },
       }));
@@ -4760,8 +4767,8 @@
                           {/* Index 對位 */}
                           <div>
                             <div className="text-xs text-slate-600 mb-1">Index 對位 <span className="text-slate-400 text-[10px]">後段，如 BC</span></div>
-                            {/* 顯示「實際生效」的來源：唯有 idxOrder＝範本標籤才是依範本；否則(含未設/auto)＝依檔名，與底層行為一致 */}
-                            <TriToggle value={idxTemplateActive ? "template" : "filename"} options={SRC2}
+                            {/* 顯示來源用 idxSrcShown（與 placement 同一判定，杜絕 B-021 顯示≠行為） */}
+                            <TriToggle value={idxShown} options={SRC2}
                               onPick={(v) => setIdxSrc(v)} />
                             <div className="tip text-[10px] text-slate-400 mt-0.5">依範本＝Index 順序對到範本標籤；依檔名＝依檔名順序。細部排序見下方「對位欄位」。</div>
                             {xlOrient.unmatched?.length > 0 && (

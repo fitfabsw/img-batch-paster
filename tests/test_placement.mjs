@@ -19,7 +19,7 @@ assert(start > 0 && end > start, "找不到 placement 函式區塊");
 const block = script.slice(start, end);
 const exported = ["detectExcelTable", "readAxisLabels", "resolveExcelOrientation",
   "computeExcelCellsAuto", "computeExcelCellsTransposed", "computeExcelCellsHorizGroupTemplate",
-  "extractGroupIdx", "colLetterToIdx"];
+  "extractGroupIdx", "colLetterToIdx", "idxSrcShown", "detectIdxList"];
 const F = new Function(block + "\nreturn {" + exported.join(",") + "};")();
 
 const grids = JSON.parse(fs.readFileSync(path.join(ROOT, "tests/fixtures/sample_xlsx/grids.json"), "utf8"));
@@ -174,6 +174,44 @@ for (const name of Object.keys(grids)) {
 }
 console.log(`  矩陣不變量：${matrixRun - matrixFail}/${matrixRun} 組合通過`);
 fail += matrixFail;
+
+// ── UI 狀態：Index 對位「按鈕顯示來源」必須＝placement 實際用的來源（B-021 那類顯示≠行為）──
+//   獨立算「實際生效來源」：用真正的 idx 解析結果，對照是否＝範本標籤；再比對 idxSrcShown 的顯示。
+function effectiveIdxSrc(gridName, orient, label) {
+  const grid = grids[gridName];
+  const d = F.detectExcelTable(grid);
+  const ax = F.readAxisLabels(grid, d);
+  const idxAxis = (orient === "vertical" ? ax.leftLabelsArr : ax.topLabelsArr) || [];
+  let resolved;
+  if (orient === "vertical") resolved = F.computeExcelCellsTransposed(grid, d, { cellCols: 1, cellRows: 1, gapRows: 0 }, label, FILES).idxList || [];
+  else resolved = F.detectIdxList(FILES, label.pattern, label.idxSort || "auto", label.idxOrder || []);
+  const same = (a, b) => a.length === b.length && a.every((x, i) => String(x) === String(b[i]));
+  // 生效＝依範本：解析結果就是範本 idx 標籤（且明確選了 custom＝範本）；其餘＝依檔名
+  const choseTemplate = (label.idxSort === "custom") && same(label.idxOrder || [], idxAxis);
+  return choseTemplate ? "template" : "filename";
+}
+let uiFail = 0, uiRun = 0;
+for (const name of Object.keys(grids)) {
+  const orient = FORCE_ORIENT(name);
+  const d = F.detectExcelTable(grids[name]); const ax = F.readAxisLabels(grids[name], d);
+  const idxAxis = (orient === "vertical" ? ax.leftLabelsArr : ax.topLabelsArr) || [];
+  const fileOrder = F.detectIdxList(FILES, "{group}-{idx}", "auto", []);
+  // 涵蓋三種 label 狀態：auto 預設(B-021 案發點) / 依範本 / 依檔名
+  const states = [
+    { idxSort: "auto", idxOrder: [] },
+    { idxSort: "custom", idxOrder: [...idxAxis] },
+    { idxSort: "custom", idxOrder: [...fileOrder] },
+  ];
+  for (const s of states) {
+    uiRun++;
+    const label = { pattern: "{group}-{idx}", ...s };
+    const shown = F.idxSrcShown(label, idxAxis);
+    const eff = effectiveIdxSrc(name, orient, label);
+    if (shown !== eff) { uiFail++; console.log(`  ✗ ${name} idxSort=${s.idxSort},order=[${s.idxOrder}] 顯示=${shown} 實際=${eff}`); }
+  }
+}
+console.log(`  UI 顯示一致：${uiRun - uiFail}/${uiRun} 狀態通過`);
+fail += uiFail;
 
 console.log(fail ? `\n${fail} case(s) FAILED` : "\nAll cases passed ✓");
 process.exit(fail ? 1 : 0);
