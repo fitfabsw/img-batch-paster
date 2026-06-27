@@ -87,6 +87,11 @@ const MANUAL = {
   // B-022 回歸：h4（group 在左欄）+ Group/Index 都依檔名 → 資料須從表頭下一列(第3列)起，不騎到範本標籤
   "h4 group=檔名,index=檔名": { gridName: "h4_group", cfg: { orient: "horizontal", groupSrc: "filename", idxSrc: "filename" },
     expect: { "AAA-1": "C3", "AAA-2": "D3", "BBB-2": "D4", "BBB-3": "E4" } },
+  // B-023 回歸：v4(直式,只有 group) + Index=依範本(範本無 index) → 應全空(横式 h4 已是空，直式須一致)
+  "v4 index=依範本(無index)": { gridName: "v4_group", cfg: { orient: "vertical", groupSrc: "template", idxSrc: "template" },
+    expect: {} },
+  "h4 index=依範本(無index)": { gridName: "h4_group", cfg: { orient: "horizontal", groupSrc: "template", idxSrc: "template" },
+    expect: {} },
 };
 
 let fail = 0;

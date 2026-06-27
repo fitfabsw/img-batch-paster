@@ -342,9 +342,11 @@
       const sort = label.idxSort || "auto";
       if (sort === "custom") {
         const custom = (label.idxOrder || []).map(String);
+        if (!custom.length) return [];                             // 明確選「依範本」但範本無 index → 空(不貼)
         if (custom.some((c) => fileIdx.has(c))) return custom;     // 依檔名/自訂(與檔名相符)
+        // 非空但與檔名全不符 = 殘留 → 落到下面退回
       }
-      // 預設 → 依範本左欄標籤順序；但範本無標籤(全空) → 退回檔名 idx 順序，否則直式全空會貼不出來
+      // 預設(auto) → 依範本左欄標籤順序；範本無標籤(全空) → 退回檔名 idx，否則直式全空會貼不出來
       if ((ax.leftLabelsArr || []).length) return ax.leftLabelsArr.slice();
       return detectIdxList(files, label.pattern, "auto", []);
     }
