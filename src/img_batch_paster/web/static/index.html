@@ -3378,7 +3378,11 @@
       const is2DMode = cfg.snMatchMode || cfg.autoAlign;
       useEffect(() => {
         const onKey = (e) => {
-          const ARROWS = { ArrowDown: [1,0], ArrowUp: [-1,0], ArrowRight: [0,1], ArrowLeft: [0,-1] };
+          // navGrid 索引固定 [r=SN][c=來源]。依檔名：SN/group 在直、idx 在橫 → 上下=r、左右=c。
+          // SN對照(中間下方已轉成「來源=橫條、SN 橫排」)：左右=SN(r)、上下=來源(c) → 對調箭頭軸。
+          const ARROWS = cfg.snMatchMode
+            ? { ArrowRight: [1,0], ArrowLeft: [-1,0], ArrowDown: [0,1], ArrowUp: [0,-1] }
+            : { ArrowDown: [1,0], ArrowUp: [-1,0], ArrowRight: [0,1], ArrowLeft: [0,-1] };
           if (!ARROWS[e.key]) return;
           const t = e.target;
           const tag = t && t.tagName;
@@ -3466,7 +3470,7 @@
         };
         window.addEventListener("keydown", onKey);
         return () => window.removeEventListener("keydown", onKey);
-      }, [navGrid, selected, selectedCell, is2DMode, cfg.grid.cols, cfg.grid.rows]);
+      }, [navGrid, selected, selectedCell, is2DMode, cfg.snMatchMode, cfg.grid.cols, cfg.grid.rows]);
 
       // Delete/Backspace 鍵刪除選取的檔案 (snMatch 模式不適用 — 那邊檔案來自 sources)
       useEffect(() => {
