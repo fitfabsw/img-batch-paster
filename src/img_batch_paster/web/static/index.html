@@ -2656,7 +2656,9 @@
             <thead>
               <tr style={{ height: headerH }}>
                 {cols.map((c, i) => (
-                  <th key={i} className={`px-1 text-center align-middle ${usePng ? "border-transparent text-transparent" : "border border-slate-400 text-[11px] font-semibold text-slate-700"}`}>
+                  <th key={i}
+                    style={usePng ? undefined : { background: "#e2e8f0" }}   // 表頭＝範本標籤(SN/Group 皆 依範本) → 灰底，與 SN 欄一致
+                    className={`px-1 text-center align-middle ${usePng ? "border-transparent text-transparent" : "border border-slate-400 text-[11px] font-semibold text-slate-700"}`}>
                     {usePng ? "" : (c.sn ? (c.header || "SN") : c.header)}
                   </th>
                 ))}
