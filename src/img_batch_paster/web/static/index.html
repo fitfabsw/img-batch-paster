@@ -2865,7 +2865,8 @@
               );
             })}
 
-            {/* idx 標籤軸 highlight（依檔名：對位用的標籤欄/列標綠，直式=左欄、横式=頂列） */}
+            {/* 範本標籤格 highlight（依檔名：group + index 兩軸的範本標籤）→ 灰底＝「依範本」，
+                與中間 panel 的「軸色」(Group=綠 / Index=藍) 區隔，避免兩種語意撞色。 */}
             {(idxLabelCells || []).map(({ r, c }, i) => {
               const ci = c - 1, ri = r - 1;
               if (ci < 0 || ri < 0 || ci >= grid.cols.length || ri >= grid.rows.length) return null;
@@ -2874,7 +2875,7 @@
                   position: "absolute",
                   left: HEADER_W + cumX[ci], top: HEADER_H + cumY[ri],
                   width: grid.cols[ci].w_px, height: grid.rows[ri].h_px,
-                  background: "#ecfdf5", pointerEvents: "none",
+                  background: "#e2e8f0", pointerEvents: "none",
                 }} />
               );
             })}
