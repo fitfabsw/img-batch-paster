@@ -4895,13 +4895,7 @@
 
                 {!cfg.snMatchMode && (
                 <div className="border-t pt-3">
-                  {mode !== "excel" && (
-                    <label className="flex items-center gap-2 text-sm font-semibold">
-                      <input type="checkbox" checked={cfg.label.enabled}
-                        onChange={(e) => setCfg((c) => ({ ...c, label: { ...c.label, enabled: e.target.checked } }))} />
-                      寫入 SN 標籤（從檔名抽出）
-                    </label>
-                  )}
+                  {/* 「寫入 SN 標籤」開關已移除 → 依檔名一律寫入 group 標籤（cfg.label.enabled 預設 true） */}
                   {(mode === "excel" || cfg.label.enabled) && (
                     <div className="mt-2 space-y-2">
                       {/* excel 的檔名分段已移到上方「對位設定」；此處只給 slides */}
@@ -4916,7 +4910,7 @@
                           onOpenIdxCrop={(idxKey) => { setCropIdxKey(idxKey); setCropOpen(true); }}
                           headerOrder={(xlOrient?.idxAxisLabels?.length ? xlOrient.idxAxisLabels : tblHeaderOrder)}
                           pushHistory={pushHistory}
-                        />
+                          hideEditor={true} />
                       )}
                       <NumberInput label={mode === "excel" ? "Group 文字字體" : "字體"} suffix="pt" step={1} value={cfg.label.font_pt}
                         onChange={(v) => setCfg((c) => ({ ...c, label: { ...c.label, font_pt: v } }))} />
@@ -5177,6 +5171,20 @@
                   {xlOrient?.groupEff === "template" && (
                     <div className="tip text-[10px] text-slate-500 bg-slate-50 border rounded px-2 py-1 mb-1">
                       Group 對位＝依範本：順序由範本決定、不可拖曳（切「依檔名」可手動排序）。
+                    </div>
+                  )}
+                  {/* slides：Index 欄位編輯器搬到中間 panel（與 xlsx 一致，左側 SnPatternPicker 已 hideEditor） */}
+                  {mode !== "excel" && (
+                    <div className="border border-sky-300 rounded bg-sky-50 p-2 mb-1 sticky top-0 z-10">
+                      <IdxColumnsEditor
+                        label={cfg.label}
+                        allFiles={orderedFiles}
+                        updateLabel={(patch) => setCfg((c) => ({ ...c, label: { ...c.label, ...patch } }))}
+                        perColCrop={cfg.cropMode === "per-col"}
+                        onOpenIdxCrop={(idxKey) => { setCropIdxKey(idxKey); setCropOpen(true); }}
+                        headerOrder={tblHeaderOrder}
+                        pushHistory={pushHistory}
+                      />
                     </div>
                   )}
                   {/* Index 欄位操作（xlsx：取代左邊 editor）：排序 / 忽略 / 刪除 / 新增 */}
