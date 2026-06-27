@@ -3657,9 +3657,11 @@
       // 換範本時：清掉舊資訊、重設 auto-apply 旗標、自動讀新範本的表格 (slides + pptx)
       const autoAppliedRef = useRef(false);
       const excelAutoRef = useRef(false);   // xlsx 表格偵測：每個範本只自動套一次
+      const smartFillDefaultedRef = useRef(false);   // 智能排列「填滿格高=88%」每範本只自動設一次
       useEffect(() => {
         autoAppliedRef.current = false;
         excelAutoRef.current = false;
+        smartFillDefaultedRef.current = false;
         tableInfoReqRef.current++;   // 立即作廢前一個範本仍在飛行中的 table-info 請求
         setTableInfo(null);
         setCfg((c) => (c.snColPick === 1 ? c : { ...c, snColPick: 1 }));   // SN 欄選擇回預設第 1 欄
@@ -3995,6 +3997,15 @@
           setGrid("width", smartMaxWidthPct);
         }
       }, [smartOn, smartMaxWidthPct, cfg.grid.width]);
+      // 智能排列預設「填滿格高 = 88%」：表格自動套用後、待圖片載入(算得出 smartHeightFillW)時設一次；
+      //   之後使用者可自由調整、不再覆蓋（每範本一次）。用與 stepper 相同的公式：width = 88% × 高度填滿寬。
+      useEffect(() => {
+        if (smartOn && !smartFillDefaultedRef.current && (orderedFiles || []).length > 0
+            && isFinite(smartHeightFillW) && smartHeightFillW > 0 && isFinite(smartMaxWidthPct)) {
+          smartFillDefaultedRef.current = true;
+          setGrid("width", Math.min(Math.round(0.88 * smartHeightFillW * 100) / 100, smartMaxWidthPct));
+        }
+      }, [smartOn, smartHeightFillW, smartMaxWidthPct, orderedFiles]);
 
       // drag-drop handlers
       const onDropTemplate = async (e) => {
