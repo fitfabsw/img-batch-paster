@@ -2657,7 +2657,7 @@
               <tr style={{ height: headerH }}>
                 {cols.map((c, i) => (
                   <th key={i}
-                    style={usePng ? undefined : { background: "#e2e8f0" }}   // 表頭＝範本標籤(SN/Group 皆 依範本) → 灰底，與 SN 欄一致
+                    style={(usePng || c.sn) ? undefined : { background: "#e2e8f0" }}   // Group 表頭(Before/After)＝依範本 → 灰；SN 欄表頭是 pivot 角落(軸標題、非值)→ 不標
                     className={`px-1 text-center align-middle ${usePng ? "border-transparent text-transparent" : "border border-slate-400 text-[11px] font-semibold text-slate-700"}`}>
                     {usePng ? "" : (c.sn ? (c.header || "SN") : c.header)}
                   </th>
