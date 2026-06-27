@@ -905,7 +905,7 @@
         <div>
           <div className="text-xs text-sky-800 font-semibold mb-1">
             Index 欄位 · {idxList.length}
-            {locked && <span className="tip text-[10px] text-slate-400 font-normal ml-1">（依範本：順序由範本決定，切「依檔名」可手動調整）</span>}
+            {locked && <span className="tip text-[10px] text-slate-400 font-normal ml-1">（依範本：順序由範本決定、不可調整）</span>}
           </div>
           {idxList.length === 0 && fromFiles.length === 0 ? (
             <div className="text-[10px] text-amber-700 p-2 bg-amber-50 rounded">
@@ -1646,16 +1646,15 @@
           ) : (
             <>
               {/* 檔名 = 前段{分隔符}後段 → Group / Index 由分隔符自動決定 */}
+              {/* 瘦身：Group/Index 值已在中間 panel 的 area，這裡只留「分隔符驗證 + 精簡範例」 */}
               <div className="text-xs p-2 border rounded bg-emerald-50">
-                <div>
-                  Group=<b className="font-mono text-emerald-800">{preview ? preview.group : "?"}</b>
-                  {autoAlign && <span className="ml-2">Index=<b className="font-mono text-sky-800">{preview && preview.idx != null ? preview.idx : "(無)"}</b></span>}
-                  <span className="tip text-[10px] text-slate-400 ml-2">範例 <span className="font-mono">{firstFile.name}</span></span>
-                </div>
-                <div className="tip text-[10px] text-slate-500 mt-0.5">
+                <div className="text-[11px] text-slate-600">
                   {okCount === total
-                    ? `全部 ${total} 個檔案皆可抽出 ✓`
-                    : `${okCount} / ${total} 個檔案可抽出${segCount < 2 ? "（找不到分隔符，請換一個）" : ""}`}
+                    ? `✓ 全部 ${total} 個檔案可用此分隔符切出 Group / Index`
+                    : `⚠ ${okCount} / ${total} 個檔案可抽出${segCount < 2 ? "（找不到分隔符，請換一個）" : ""}`}
+                </div>
+                <div className="text-[10px] text-slate-400 mt-0.5">
+                  範例 <span className="font-mono">{firstFile.name}</span> → <b className="font-mono text-emerald-700">{preview ? preview.group : "?"}</b>{autoAlign && <> / <b className="font-mono text-sky-700">{preview && preview.idx != null ? preview.idx : "(無)"}</b></>}
                 </div>
               </div>
 
@@ -5171,9 +5170,32 @@
                     )}
                   {xlOrient?.groupEff === "template" && (
                     <div className="tip text-[10px] text-slate-500 bg-slate-50 border rounded px-2 py-1 mb-1">
-                      Group 對位＝依範本：順序由範本決定、不可拖曳（切「依檔名」可手動排序）。
+                      Group 對位＝依範本：順序由範本決定、不可拖曳。
                     </div>
                   )}
+                  {/* Group 總覽（綠）：與藍色 Index area 對稱，列出所有 group 標籤 + 落點方向；可水平 scroll */}
+                  <div className="border border-emerald-300 rounded bg-emerald-50 p-2 mb-1">
+                    <div className="text-[10px] text-emerald-800 font-semibold mb-1">
+                      Group · {rows.length}
+                      <span className="text-emerald-600 font-normal ml-1">{mode === "excel" ? (xlOrient?.orientation === "vertical" ? "→ 欄（頂列）" : "→ 列（左欄）") : "→ 列"}</span>
+                    </div>
+                    {rows.length === 0 ? (
+                      <div className="text-[10px] text-slate-400">（尚無 group）</div>
+                    ) : (
+                      <div className="flex gap-1 overflow-x-auto pb-1">
+                        {rows.map((r) => {
+                          const skipped = (xlOrient?.unmatchedGroups || []).map(String).includes(String(r.group));
+                          return (
+                            <div key={r.group}
+                              title={skipped ? "此 group 對不到範本標籤、會跳過" : ""}
+                              className={`shrink-0 px-1.5 py-0.5 rounded border text-xs font-mono ${skipped ? "bg-amber-50 border-amber-300 text-amber-700 line-through" : "bg-white border-emerald-300 text-emerald-800"}`}>
+                              {r.group}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                   {/* slides：Index 欄位編輯器搬到中間 panel（與 xlsx 一致，左側 SnPatternPicker 已 hideEditor） */}
                   {mode !== "excel" && (
                     <div className="border border-sky-300 rounded bg-sky-50 p-2 mb-1 sticky top-0 z-10">
@@ -5196,7 +5218,7 @@
                       <div className="border border-sky-300 rounded bg-sky-50 p-2 mb-1 sticky top-0 z-10">
                         <div className="text-[10px] text-sky-800 font-semibold mb-1">
                           Index 欄位 · {idxList.length}
-                          {idxLocked && <span className="text-slate-400 font-normal ml-1">（依範本：順序由範本決定；切「依檔名」可編輯）</span>}
+                          {idxLocked && <span className="text-slate-400 font-normal ml-1">（依範本：順序由範本決定、不可編輯）</span>}
                         </div>
                         <div className="flex gap-1 overflow-x-auto pb-1">
                           {idxList.map((key, ci) => {
