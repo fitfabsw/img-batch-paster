@@ -1076,7 +1076,7 @@
                   const isSel = (selected === f.path) || isCellSel;
                   return (
                     <div key={row} data-r={ci} data-c={i}
-                      onClick={() => { setSelected(f.path); setSelectedCell?.({ r: ci, c: i }); }}
+                      onClick={() => { setSelected(f.path); setSelectedPaths?.([f.path]); setSelectedCell?.({ r: ci, c: i }); }}
                       title={f.name}
                       className={`aspect-square rounded overflow-hidden border cursor-pointer relative ${isSel ? "ring-2 ring-emerald-500 border-emerald-500" : "border-slate-200 hover:border-slate-400"}`}>
                       <img src={thumbUrl(f.path, 120, perColCrop ? (s.crop || null) : cfg.crop)} className="w-full h-full object-cover pointer-events-none" />
@@ -1165,10 +1165,11 @@
         if (cfg.snInput.mode !== "autoSrc") return;
         const stems = (cfg.sources || []).flatMap((s) => (s.files || [])
           .map((f) => (f.name || "").replace(/\.[^./]+$/, "")));
-        const clean = dedupe(stems).sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
+        // 併入 snDeleted（被刪圖的 SN）→ 即使某 SN 在所有來源都被刪光，欄位仍保留（刪了留空、不塌欄）
+        const clean = dedupe([...stems, ...(cfg.snDeleted || [])]).sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
         const rowStart = cfg.snSource.rowStart || 2;
         setSnList(clean.map((sn, i) => ({ sn, row: rowStart + i })));
-      }, [cfg.snInput.mode, cfg.sources, cfg.snSource.rowStart]);
+      }, [cfg.snInput.mode, cfg.sources, cfg.snSource.rowStart, cfg.snDeleted]);
 
       const uploadSource = async (sid, files) => {
         if (!ws || !files || !files.length) return;
@@ -3481,9 +3482,8 @@
         return () => window.removeEventListener("keydown", onKey);
       }, [navGrid, selected, selectedCell, is2DMode, cfg.snMatchMode, cfg.grid.cols, cfg.grid.rows]);
 
-      // Delete/Backspace 鍵刪除選取的檔案 (snMatch 模式不適用 — 那邊檔案來自 sources)
+      // Delete/Backspace 鍵刪除選取的圖：FN 從批次移除；SN 從來源 files 移除（該格變空、不貼）
       useEffect(() => {
-        if (cfg.snMatchMode) return;
         const onKey = (e) => {
           if (e.key !== "Delete" && e.key !== "Backspace") return;
           const t = e.target;
@@ -3494,8 +3494,17 @@
           e.preventDefault();
           const sel = new Set(paths);
           pushHistory(`刪除 ${sel.size} 張`);
-          setOrder((o) => o.filter((p) => !sel.has(p)));
-          setFiles((fs) => fs.filter((f) => !sel.has(f.path)));
+          if (cfg.snMatchMode) {
+            const stm = (n) => (n || "").replace(/\.[^./]+$/, "");
+            setCfg((c) => {
+              const del = [];
+              const sources = c.sources.map((s) => ({ ...s, files: (s.files || []).filter((f) => { if (sel.has(f.path)) { del.push(stm(f.name)); return false; } return true; }) }));
+              return { ...c, sources, snDeleted: Array.from(new Set([...(c.snDeleted || []), ...del])) };
+            });
+          } else {
+            setOrder((o) => o.filter((p) => !sel.has(p)));
+            setFiles((fs) => fs.filter((f) => !sel.has(f.path)));
+          }
           setSelectedPaths([]);
           setSelected(null);
         };
@@ -3664,7 +3673,7 @@
         smartFillDefaultedRef.current = false;
         tableInfoReqRef.current++;   // 立即作廢前一個範本仍在飛行中的 table-info 請求
         setTableInfo(null);
-        setCfg((c) => (c.snColPick === 1 ? c : { ...c, snColPick: 1 }));   // SN 欄選擇回預設第 1 欄
+        setCfg((c) => (c.snColPick === 1 && !(c.snDeleted || []).length ? c : { ...c, snColPick: 1, snDeleted: [] }));   // SN 欄選擇回預設第 1 欄；清掉刪除保留欄(換範本=重來)
         if (tplPath && mode === "slides" && /\.pptx$/i.test(tplPath)) {
           loadTableInfo(tplPath);
         }
@@ -4337,8 +4346,19 @@
         const sel = new Set(selPathsOrFallback());
         if (!sel.size) return;
         pushHistory(`刪除 ${sel.size} 張`);
-        setOrder((o) => o.filter((p) => !sel.has(p)));
-        setFiles((fs) => fs.filter((f) => !sel.has(f.path)));
+        if (cfg.snMatchMode) {
+          // SN：從來源 files 移除該圖（cascade → 預覽/匯出/導覽 都不貼），並把它的 SN 記進 snDeleted
+          //   → 自動(來源)清單用「聯集 ∪ snDeleted」保留該欄（FN 式固定欄：刪了留空、不塌欄）。可 Undo。
+          const stm = (n) => (n || "").replace(/\.[^./]+$/, "");
+          setCfg((c) => {
+            const del = [];
+            const sources = c.sources.map((s) => ({ ...s, files: (s.files || []).filter((f) => { if (sel.has(f.path)) { del.push(stm(f.name)); return false; } return true; }) }));
+            return { ...c, sources, snDeleted: Array.from(new Set([...(c.snDeleted || []), ...del])) };
+          });
+        } else {
+          setOrder((o) => o.filter((p) => !sel.has(p)));
+          setFiles((fs) => fs.filter((f) => !sel.has(f.path)));
+        }
         setSelectedPaths([]);
         setSelected(null);
       };
@@ -5168,6 +5188,13 @@
                       setCropOpen(true);
                     }}
                   />
+                  {selPathsOrFallback().length > 0 && (
+                    <button onClick={deleteSelected}
+                      title="Delete / Backspace 鍵也可刪除；可 Undo / 重新上傳救回"
+                      className="mt-2 w-full border border-red-300 text-red-600 rounded py-1 text-xs hover:bg-red-50">
+                      刪除選取的圖 ({selPathsOrFallback().length})　·　該格留空、不貼
+                    </button>
+                  )}
                   </>
                 ) : <>
                 {orderedFiles.length === 0 && (
