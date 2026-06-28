@@ -1278,10 +1278,10 @@
             </div>
 
             {cfg.snInput.mode === "autoSrc" && (
-              <div className="text-[10px] space-y-0.5">
+              <div className="tip text-[10px]">
                 {snList.length > 0
-                  ? <div className="text-emerald-600">✓ 已由下方資料來源檔名自動擷取(聯集)。要手動指定請改用「直接輸入 / 範圍」。</div>
-                  : <div className="text-amber-600">SN 清單將自動 = 各資料來源檔名的聯集。請在下方「資料來源」上傳資料夾。</div>}
+                  ? <div className="text-emerald-600">✓ 已自動取各來源檔名聯集為 SN（手動：直接輸入 / 範圍）</div>
+                  : <div className="text-amber-600">自動取各「資料來源」檔名聯集為 SN，下方上傳即可</div>}
               </div>
             )}
 
@@ -5133,7 +5133,8 @@
                       </div>
                     );
                   })()}
-                  {/* Group / Index 總覽（與依檔名對齊）：SN對照 = 直式 → Group(資料夾)在欄、Index(SN)在列 */}
+                  {/* Group / Index 總覽（與依檔名對齊）：SN對照 = 直式 → Group(資料夾)在欄、Index(SN)在列。空狀態(無 SN)不顯示 */}
+                  {snList.length > 0 && (<>
                   <div className="border border-emerald-300 rounded bg-emerald-50 p-2 mb-1">
                     <div className="text-[10px] text-emerald-800 font-semibold mb-1">
                       Group · {cfg.sources.length}
@@ -5168,6 +5169,7 @@
                       </div>
                     )}
                   </div>
+                  </>)}
                   <SnMatchMatrix
                     cfg={cfg}
                     snList={snList}
