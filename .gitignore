@@ -13,4 +13,5 @@ tests/output-*/
 tests/*.pptx
 /out.pptx
 /out.key
+.worktree/
 
