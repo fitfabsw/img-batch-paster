@@ -21,6 +21,16 @@
 - **備註**: 疑似 `setIdxSrc` 與「直式正規化 effect」(把 idxOrder 拉回範本標籤) 的一次 render 時序競爭。headerRow 修正 (9980b14) 或許連帶改善。再現時請記「載入哪個範本、點前狀態」。
 - **修正**: —
 
+### [B-028] FN/slide 多欄表格：圖片未自動對齊各欄 cell 中心
+
+- **狀態**: Open（Backlog）
+- **發現**: 2026-06-28
+- **重現**: 上傳多欄 slide 範本（如 SN+A+B+C 四欄）→ FN/依檔名模式 → autoAlign=true → 圖片雖落在正確欄位，但未置中於各欄 cell 範圍內；且 row_h 由圖片長寬比決定，不等於表格資料列高，可能垂直溢出。
+- **預期 / 實際**: 每張圖應填滿並置中於對應的表格欄 cell（水平＋垂直）；實際位置由 `grid.origin.x` / `width` / `rowH` 手動控制，完全不感知表格欄邊界，需人工校準。
+- **根因**: FN/slide mode 使用「浮動網格」（`computePages`）定位圖片，不讀 pptx 表格的 `col_widths_cm` / `row_heights_cm`。`row_h = w × anchorAspect`（依圖片比例），不等於表格資料列高。
+- **備註**: 目前實際應用幾乎都是單欄表格（1 個圖欄），多欄為邊緣需求。修法：當範本含 table 時，讀出欄寬 / 列高，自動換算 `grid.origin.x` / `width` / `rowH`，可共用 SN mode 的 table 解析邏輯。
+- **修正**: —
+
 ---
 
 ## Fixed
