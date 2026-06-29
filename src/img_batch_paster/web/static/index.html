@@ -401,7 +401,8 @@
       const startCol = groupIsFilename ? anchor.col : ax.region.minC + 1;   // 第一個資料欄
       const startRow = idxIsFilename ? anchor.row : ax.headerRow + 1;       // 第一個資料列
       const idxList = resolveTransposedIdxList(ax, label, files);
-      const rowOf = new Map(idxList.map((v, i) => [String(v), startRow + i * stepRow]));
+      // index(零件)→列：範本左欄有標籤 → 依「標籤實際列」定位(處理範本空列)；無標籤(依檔名)才連續產生
+      const rowOf = new Map(idxList.map((v, i) => [String(v), idxIsFilename ? (startRow + i * stepRow) : ax.leftLabels.get(_normLabel(v))]));
       const cells = [], unmatched = new Set(), unmatchedGroups = new Set();
       const idxLabelCol = startCol - 1;   // index 標籤在資料欄左方一欄(隨自由軸移動)
       if (idxIsFilename && idxLabelCol >= 1) {   // 範本左欄無 index 標籤 → 依檔名自動產生並寫入(與 group 對稱)
@@ -467,12 +468,15 @@
       if ((ax.topLabelsArr || []).length === 0 && start.row - 1 >= 1) {   // 範本頂列無 index 標籤 → 寫入(與 group 對稱)
         idxList.forEach((idxKey, ci) => cells.push({ row: start.row - 1, col: start.col + ci * stepCol, span_cols: excel.cellCols, span_rows: 1, text: String(idxKey), font_pt: label.font_pt }));
       }
+      const hasTopLabels = (ax.topLabelsArr || []).length > 0;   // 範本頂列有 index 標籤 → 依「標籤實際欄位」定位(處理範本空欄)；無標籤才連續產生
       rows.forEach(({ group, cells: rowCells }) => {
         const r = grp.gMap.get(_normLabel(group || ""));
         if (r == null) { if (group) unmatchedGroups.add(group); return; }   // group 不在範本左欄 → 跳過
         rowCells.forEach((f, ci) => {
           if (!f) return;
-          cells.push({ path: f.path, row: r, col: start.col + ci * stepCol, span_cols: excel.cellCols, span_rows: excel.cellRows });
+          const col = hasTopLabels ? ax.topLabels.get(_normLabel(idxList[ci])) : (start.col + ci * stepCol);
+          if (col == null) return;   // 零件對不到範本頂列標籤 → 跳過(不亂塞)
+          cells.push({ path: f.path, row: r, col, span_cols: excel.cellCols, span_rows: excel.cellRows });
         });
       });
       return { cells, unmatchedGroups: Array.from(unmatchedGroups), idxList, groupEff: grp.eff };

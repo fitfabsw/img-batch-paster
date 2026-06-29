@@ -263,5 +263,40 @@ for (const [name, exp] of Object.entries(LABELS)) {
 console.log(`  寫入標籤：${labRun - labFail}/${labRun} 範本通過`);
 fail += labFail;
 
+// ── 回歸（#24/#31）：範本 index 標籤之間有「空欄/空列」→ image 須對齊「標籤實際位置」、跳過空隙 ──
+//   曾把 index 落點寫死成連續 start+ci*step（group 軸有查標籤、index 軸漏了）→ 範本有間隙就錯位。
+function gridFromCells(cellList) {
+  const cells = cellList.map(([r, c, text]) => ({ r, c, text }));
+  const rs = cellList.map((x) => x[0]), cs = cellList.map((x) => x[1]);
+  const minR = Math.min(...rs), maxR = Math.max(...rs), minC = Math.min(...cs), maxC = Math.max(...cs);
+  const borders = [];
+  for (let r = minR; r <= maxR; r++) for (let c = minC; c <= maxC; c++) borders.push({ r, c });
+  const cols = []; for (let c = 1; c <= maxC + 3; c++) cols.push({ letter: get_column_letter(c) });
+  return { cols, cells, borders };
+}
+function placeGap(grid, orient) {
+  const d = F.detectExcelTable(grid);
+  const ax = F.readAxisLabels(grid, d);
+  const excel = { startCell: d.startCell, snCol: d.snCol, cellCols: 1, cellRows: 1, gapRows: 0, orient };
+  const idxAxis = orient === "vertical" ? ax.leftLabelsArr : ax.topLabelsArr;
+  const label = { pattern: "{group}-{idx}", idxSort: "custom", idxOrder: [...idxAxis], groupSrc: "auto", idxIgnore: [], font_pt: 12 };
+  const out = {};
+  for (const c of F.computeExcelCellsAuto(grid, excel, label, FILES, true)) if (c.path) out[c.path.replace(/\.[^.]+$/, "")] = get_column_letter(c.col) + c.row;
+  return out;
+}
+const GAP = {
+  // 横式：index 標籤 2@C2、(D2 空)、3@E2 → BBB-3 須到 E（跳過空欄 D），非連續的 D
+  "横式·index 標籤有空欄": { grid: gridFromCells([[2,2,"Title"],[2,3,"2"],[2,5,"3"],[3,2,"BBB"],[4,2,"CCC"]]),
+    orient: "horizontal", expect: { "BBB-2": "C3", "BBB-3": "E3" } },
+  // 直式：index 標籤 2@B3、(B4 空)、3@B5 → BBB-3 須到第 5 列（跳過空列 4）
+  "直式·index 標籤有空列": { grid: gridFromCells([[2,2,"Title"],[2,3,"BBB"],[2,4,"CCC"],[3,2,"2"],[5,2,"3"]]),
+    orient: "vertical", expect: { "BBB-2": "C3", "BBB-3": "C5" } },
+};
+for (const [name, t] of Object.entries(GAP)) {
+  const got = placeGap(t.grid, t.orient);
+  try { assert.deepStrictEqual(got, t.expect); console.log(`  ✓ ${name}`); }
+  catch (e) { fail++; console.log(`  ✗ ${name}\n      expected ${JSON.stringify(t.expect)}\n      got      ${JSON.stringify(got)}`); }
+}
+
 console.log(fail ? `\n${fail} case(s) FAILED` : "\nAll cases passed ✓");
 process.exit(fail ? 1 : 0);
