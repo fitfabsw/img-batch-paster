@@ -3721,16 +3721,18 @@
         if (!d) return;
         excelAutoRef.current = true;
         const headerOrder = (d.headerCols || []).slice();
+        // 無名空欄(範本純間隔)不當 index 欄位 → Index 區不冒出 🚫× 空欄(與直式一致)；
+        //   落點靠 topLabels 查實際欄位、能處理空隙，所以 idxOrder 去掉空欄不影響對位。
+        const ord = headerOrder.filter((h) => h);
         setCfg((c) => {
           const next = { ...c, excel: { ...c.excel, startCell: d.startCell, snCol: d.snCol, imgsPerRow: d.imgsPerRow } };
           // 表頭有文字 → 自動把 idx 欄位排成跟表頭一致（依檔名字母後綴自動對位，免手動排序）
-          if (headerOrder.some((h) => h)) {
-            next.label = { ...c.label, idxSort: "custom", idxOrder: headerOrder };
+          if (ord.length) {
+            next.label = { ...c.label, idxSort: "custom", idxOrder: ord };
           }
           return next;
         });
         const L = (ci) => ((xlGrid.cols || [])[ci - 1] || {}).letter || "";
-        const ord = headerOrder.filter((h) => h);
         setStatus(`偵測到表格 ${L(d.region.minC)}${d.region.minR}:${L(d.region.maxC)}${d.region.maxR} → 起始 ${d.startCell}、SN 欄 ${d.snCol}`
           + (ord.length ? `、欄位依表頭對位（${ord.join(" / ")}）` : ""));
       }, [xlGrid]);
