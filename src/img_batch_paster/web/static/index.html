@@ -97,7 +97,8 @@
       const files = [];
       const readEntry = (entry) => new Promise((resolve) => {
         if (entry.isFile) {
-          entry.file((f) => { files.push(f); resolve(); }, () => resolve());
+          // 拖曳的 File 沒有 webkitRelativePath → 從 entry.fullPath 補 relPath(含資料夾名)，供來源命名等用
+          entry.file((f) => { try { f.relPath = (entry.fullPath || "").replace(/^\//, ""); } catch (_) {} files.push(f); resolve(); }, () => resolve());
         } else if (entry.isDirectory) {
           const reader = entry.createReader();
           const readBatch = () => {
@@ -1107,6 +1108,7 @@
         return headers.find((h) => h.toLowerCase() === q) || "";
       };
       const inputRefs = useRef({});
+      const [dragSrcId, setDragSrcId] = useState(null);   // 哪個來源正被拖入(視覺回饋)
       // 範本內已定義的 SN（xlsx: SN 欄值 / pptx: 表格 SN 欄值）→ 有值時鎖定「讀範本欄」、停用手動輸入
       const templateSns = isExcel ? (xlsxSn?.sns || [])
         : isSlides ? (slidesSnInfo?.snCells || []).map((sn, i) => ({ sn, row: (slidesSnInfo.snRowStart || 2) + i }))
@@ -1183,9 +1185,8 @@
         // 從 webkitRelativePath 取資料夾名稱 (e.g. "TA 106PCS L/img.jpg" → "TA 106PCS L")
         const detectedFolderName = (() => {
           for (const f of files) {
-            const rel = f.webkitRelativePath || "";
-            const seg = rel.split("/")[0];
-            if (seg) return seg;
+            const rel = f.webkitRelativePath || f.relPath || "";   // 檔案選擇器=webkitRelativePath；拖曳=relPath
+            if (rel.includes("/")) { const seg = rel.split("/")[0]; if (seg) return seg; }   // 需在資料夾內才取夾名
           }
           return "";
         })();
@@ -1410,9 +1411,12 @@
                   </div>
                   <button
                     onClick={() => inputRefs.current[s.id]?.click()}
-                    title={s.files?.length ? s.name : "點擊選擇資料夾"}
-                    className="w-full border rounded px-2 py-1 text-xs text-left truncate hover:bg-slate-50">
-                    📤 {s.files?.length ? `${s.name} (${s.files.length} 張)` : "上傳資料夾…"}
+                    onDragOver={(e) => { e.preventDefault(); if (dragSrcId !== s.id) setDragSrcId(s.id); }}
+                    onDragLeave={() => setDragSrcId((d) => (d === s.id ? null : d))}
+                    onDrop={async (e) => { e.preventDefault(); setDragSrcId(null); const fs = await filesFromDrop(e.dataTransfer); if (fs.length) uploadSource(s.id, fs); }}
+                    title={s.files?.length ? s.name : "點擊或拖入資料夾"}
+                    className={`w-full border rounded px-2 py-1 text-xs text-left truncate ${dragSrcId === s.id ? "border-emerald-500 bg-emerald-50" : "hover:bg-slate-50"}`}>
+                    📤 {s.files?.length ? `${s.name} (${s.files.length} 張)` : (dragSrcId === s.id ? "放開以上傳…" : "上傳 / 拖入資料夾…")}
                   </button>
                   <input ref={(el) => { inputRefs.current[s.id] = el; }}
                     type="file" multiple webkitdirectory="" directory="" className="hidden"
