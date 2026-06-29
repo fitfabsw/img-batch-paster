@@ -5383,8 +5383,8 @@
                           if (!f) {
                             return (
                               <div key={ci} data-r={rIdx} data-c={ci}
-                                onClick={() => { setSelectedCell({ r: rIdx, c: ci }); setSelected(null); setSelectedPaths([]); }}
-                                className={`aspect-square border-2 ${isCellSel ? "border-emerald-500 ring-2 ring-emerald-300" : "border-dashed border-slate-300"} bg-slate-50 rounded flex flex-col items-center justify-center text-slate-400 cursor-pointer`}>
+                                onClick={groupSkipped ? undefined : () => { setSelectedCell({ r: rIdx, c: ci }); setSelected(null); setSelectedPaths([]); }}
+                                className={`aspect-square border-2 ${!groupSkipped && isCellSel ? "border-emerald-500 ring-2 ring-emerald-300" : "border-dashed border-slate-300"} bg-slate-50 rounded flex flex-col items-center justify-center text-slate-400 ${groupSkipped ? "cursor-default" : "cursor-pointer"}`}>
                                 <div className="text-[10px] font-mono">{colLabel}</div>
                                 <div className="text-[10px]">空</div>
                               </div>
@@ -5393,11 +5393,12 @@
                           const isSel = selectedPaths.includes(f.path) || isCellSel;
                           return (
                             <div key={ci} data-r={rIdx} data-c={ci}
-                              onClick={(e) => { onItemClick(e, f.path, orderedFiles.indexOf(f)); setSelectedCell({ r: rIdx, c: ci }); }}
+                              onClick={groupSkipped ? undefined : (e) => { onItemClick(e, f.path, orderedFiles.indexOf(f)); setSelectedCell({ r: rIdx, c: ci }); }}
                               draggable={false}
-                              title={f.name}
-                              className={`aspect-square rounded overflow-hidden border cursor-pointer relative ${
-                                isSel ? "ring-2 ring-emerald-500 border-emerald-500" : "border-slate-200 hover:border-slate-400"
+                              title={groupSkipped ? `${f.name}（跳過·不在範本，不會輸出）` : f.name}
+                              className={`aspect-square rounded overflow-hidden border relative ${
+                                groupSkipped ? "cursor-default border-slate-200"
+                                  : (isSel ? "ring-2 ring-emerald-500 border-emerald-500 cursor-pointer" : "border-slate-200 hover:border-slate-400 cursor-pointer")
                               }`}>
                               <img src={thumbUrl(f.path, 120, showPerColCrop ? ((cfg.label.idxCrops || {})[idxList[ci]] || null) : undefined)}
                                 className="w-full h-full object-cover pointer-events-none" />
