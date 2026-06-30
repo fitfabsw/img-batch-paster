@@ -68,7 +68,7 @@
       cropMode: "global",   // "global" 全部統一一套 crop | "per-col" 每欄獨立 (僅 依檔名 idx / 範本 SN 模式)
       slidesSn: { inCell: false, col: 1, rowStart: 2 },  // PPT/Keynote SN 寫入表格 cell (1-based)
       excel: {
-        startCell: "B5",
+        startCell: "B2",   // 無框線/偵測不到表格時的預設錨點：資料 B2 起、表頭第1列、group 在 A 欄 → 貼齊左上(有框線範本會被偵測值覆蓋)
         imgsPerRow: 4,
         cellCols: 1,
         cellRows: 1,
@@ -495,12 +495,21 @@
       });
       return { cells, unmatchedGroups: Array.from(unmatchedGroups), idxList, groupEff: grp.eff };
     }
+    // 無框線/無內容範本：偵測不到表格 → 用起始 cell 合成最小 detect，讓直式(轉置)也能依錨點運作。
+    function _anchorDetect(grid, excel) {
+      const a = parseCell(excel.startCell || "B2");
+      const snC = excel.snCol ? parseCell(excel.snCol + "1").col : Math.max(1, a.col - 1);
+      const nrows = (grid.rows || []).length || a.row, ncols = (grid.cols || []).length || a.col;
+      return { snCol: excel.snCol || null, startCell: excel.startCell, imgsPerRow: 1,
+        region: { minR: a.row, maxR: Math.max(a.row, nrows), minC: snC, maxC: Math.max(a.col, ncols) } };
+    }
     // 統一入口：依方向 + group 軸來源選對應運算。
     function computeExcelCellsAuto(grid, excel, label, orderedFiles, autoAlign) {
       const orientation = resolveExcelOrientation(grid, excel, label, orderedFiles, autoAlign);
       const detect = (grid && autoAlign) ? detectExcelTable(grid) : null;
-      if (orientation === "vertical" && detect) {
-        return computeExcelCellsTransposed(grid, detect, excel, label, orderedFiles).cells;
+      if (orientation === "vertical") {
+        // 有偵測到表格 → 用它；無框線範本 → 用起始 cell 合成的錨點 detect（讓切「直式」生效）
+        return computeExcelCellsTransposed(grid, detect || _anchorDetect(grid, excel), excel, label, orderedFiles).cells;
       }
       if (detect) {
         const ax = readAxisLabels(grid, detect);
@@ -3280,13 +3289,15 @@
           else for (const [, rr] of ax.leftLabels) groupLabelCells.push({ r: rr, c: ax.region.minC });
         }
         const groupInfo = grp ? { groupEff: grp.eff, groupSrc: cfg.label.groupSrc || "auto", groupHasValues: grp.hasTemplateGroups, groupLabelCells } : {};
+        // 兩軸皆無標籤(全空範本) → auto 無從判斷方向 → 才需顯示手動 横/直 切換；任一軸有標籤即可自動判定
+        const bothAxesEmpty = !ax || ((ax.topLabelsArr || []).length === 0 && (ax.leftLabelsArr || []).length === 0);
         if (orientation !== "vertical") {
           const eff = detectIdxList(orderedFiles, cfg.label.pattern, cfg.label.idxSort || "auto", cfg.label.idxOrder || []);
           const hr = (detect && grp && grp.eff === "template") ? computeExcelCellsHorizGroupTemplate(xlGrid, detect, ax, cfg.excel, cfg.label, orderedFiles) : { unmatchedGroups: [] };
-          return { orientation: "horizontal", auto, idxAxisLabels, idxLabelCells: labelCellsFor(eff), unmatchedGroups: hr.unmatchedGroups, ...groupInfo };
+          return { orientation: "horizontal", auto, bothAxesEmpty, idxAxisLabels, idxLabelCells: labelCellsFor(eff), unmatchedGroups: hr.unmatchedGroups, ...groupInfo };
         }
         const r = detect ? computeExcelCellsTransposed(xlGrid, detect, cfg.excel, cfg.label, orderedFiles) : { unmatched: [], unmatchedGroups: [], idxList: [] };
-        return { orientation: "vertical", auto, unmatched: r.unmatched, unmatchedGroups: r.unmatchedGroups, partOrder: r.idxList, idxAxisLabels, idxLabelCells: labelCellsFor(r.idxList), ...groupInfo };
+        return { orientation: "vertical", auto, bothAxesEmpty, unmatched: r.unmatched, unmatchedGroups: r.unmatchedGroups, partOrder: r.idxList, idxAxisLabels, idxLabelCells: labelCellsFor(r.idxList), ...groupInfo };
       }, [cfg.snMatchMode, mode, xlGrid, cfg.autoAlign, cfg.label, cfg.excel, orderedFiles]);
 
       // 直式正規化：方向為直式、但 idxOrder 失效(載入時殘留的頂列值對不到檔名) →
@@ -4901,18 +4912,23 @@
                             pushHistory={pushHistory}
                             hideSrc={true} locked={idxTemplateActive} hideEditor={true} />
 
-                          {/* 範本方向 */}
+                          {/* 範本方向：兩軸皆無標籤(全空範本) auto 無法判斷 → 顯示手動切換；
+                              任一軸有標籤 → auto 可靠 → 只顯示偵測結果(不給亂切，避免切到沒圖的方向) */}
                           <div>
                             <div className="text-xs text-slate-600 mb-1">範本方向 <span className="text-slate-400 text-[10px]">Group / Index 哪個在列/欄</span></div>
-                            <TriToggle value={cfg.excel.orient || "auto"} onPick={(v) => setCfg((c) => ({ ...c, excel: { ...c.excel, orient: v } }))}
-                              options={[{ v: "auto", label: "自動" }, { v: "horizontal", label: "横式" }, { v: "vertical", label: "直式" }]} />
-                            <div className="tip text-[10px] text-slate-400 mt-0.5">横式＝Group 在左欄、Index 在頂列；直式＝相反。</div>
+                            {xlOrient?.bothAxesEmpty ? (<>
+                              <TriToggle value={cfg.excel.orient || "auto"} onPick={(v) => setCfg((c) => ({ ...c, excel: { ...c.excel, orient: v } }))}
+                                options={[{ v: "auto", label: "自動" }, { v: "horizontal", label: "横式" }, { v: "vertical", label: "直式" }]} />
+                              <div className="tip text-[10px] text-slate-400 mt-0.5">範本無標籤、無法自動判斷方向 → 請手選。横式＝Group 在左欄、Index 在頂列；直式＝相反。</div>
+                            </>) : (
+                              <div className="tip text-[10px] text-slate-400 mt-0.5">由範本標籤自動判斷。横式＝Group 在左欄、Index 在頂列；直式＝相反。</div>
+                            )}
                             {xlOrient?.pending && (
-                              <div className="text-[10px] mt-1 rounded px-2 py-1 text-slate-500 bg-slate-50 border">⏳ 上傳資料夾後自動判斷方向（或先手選）。</div>
+                              <div className="text-[10px] mt-1 rounded px-2 py-1 text-slate-500 bg-slate-50 border">⏳ 上傳資料夾後自動判斷方向。</div>
                             )}
                             {xlOrient && !xlOrient.pending && (
                               <div className={`text-[10px] mt-1 rounded px-2 py-1 ${xlOrient.orientation === "vertical" ? "text-sky-700 bg-sky-50 border border-sky-200" : "text-slate-500 bg-slate-50 border"}`}>
-                                {xlOrient.auto ? "🧭 偵測：" : "📌 已選："}<b>{xlOrient.orientation === "vertical" ? "直式" : "横式"}</b>
+                                {(xlOrient.auto && !xlOrient.bothAxesEmpty) ? "🧭 偵測：" : "📌 方向："}<b>{xlOrient.orientation === "vertical" ? "直式" : "横式"}</b>
                               </div>
                             )}
                           </div>
