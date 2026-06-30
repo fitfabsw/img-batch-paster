@@ -2855,22 +2855,40 @@
         }
       }
 
+      // 欄位：保留 A 起的前導欄（不隱藏 A/B/C…），只裁掉「對稱點之後的多餘空白尾欄」→
+      //   讓渲染內容「對稱於表格中心」：margin-auto 置中內容＝置中表格；寬到要捲動時由 scroll 置中。
+      const _detVis = detectExcelTable(grid);
+      let _minVisC = Infinity, _maxVisC = -Infinity;
+      if (_detVis) { _minVisC = _detVis.region.minC; _maxVisC = _detVis.region.maxC; }
+      for (const pl of placements) if (pl.col) { _minVisC = Math.min(_minVisC, pl.col); _maxVisC = Math.max(_maxVisC, pl.col + (pl.span_cols || 1) - 1); }
+      const visStartC = 0, xOff = 0;
+      let visEndC = grid.cols.length;
+      if (isFinite(_minVisC) && _maxVisC > 0) {
+        const need = HEADER_W + (cumX[_minVisC - 1] || 0) + (cumX[_maxVisC] || 0);   // cumX[visEndC] 達此值 → 內容寬=2×表格中心
+        let ve = _maxVisC;
+        while (ve < grid.cols.length && cumX[ve] < need) ve++;
+        visEndC = Math.min(grid.cols.length, Math.max(_maxVisC, ve));
+      }
+      const XL = (ci) => HEADER_W + cumX[ci] - xOff;
+      const inVis = (ci) => ci >= visStartC && ci < visEndC;
+      const visW = cumX[visEndC] - xOff;
+
       return (
-        <div className="border rounded-lg bg-white">
-          <div style={{ position: "relative", width: totalW + HEADER_W, height: totalH + HEADER_H }}>
+        <div className="bg-white" style={{ width: "fit-content" }}>
+          <div style={{ position: "relative", width: visW + HEADER_W, height: totalH + HEADER_H, overflow: "hidden" }}>
             {/* 左上角空白 */}
             <div style={{ position: "absolute", left: 0, top: 0, width: HEADER_W, height: HEADER_H,
               background: "#f1f5f9", borderRight: "1px solid #cbd5e1", borderBottom: "1px solid #cbd5e1" }} />
 
-            {/* 欄字母 header */}
-            {grid.cols.map((c, i) => (
-              <div key={`col-${c.letter}`} style={{
-                position: "absolute", top: 0, left: HEADER_W + cumX[i],
-                width: c.w_px, height: HEADER_H,
+            {/* 欄字母 header（可視窗範圍） */}
+            {grid.cols.map((c, i) => i).filter(inVis).map((i) => (
+              <div key={`col-${grid.cols[i].letter}`} style={{
+                position: "absolute", top: 0, left: XL(i),
+                width: grid.cols[i].w_px, height: HEADER_H,
                 background: "#f1f5f9", borderRight: "1px solid #cbd5e1", borderBottom: "1px solid #cbd5e1",
                 display: "flex", alignItems: "center", justifyContent: "center",
                 fontSize: 11, color: "#475569",
-              }}>{c.letter}</div>
+              }}>{grid.cols[i].letter}</div>
             ))}
 
             {/* 列號 header */}
@@ -2889,11 +2907,11 @@
             {/* SN 欄 highlight（依範本 SN 模式）→ 灰底＝依範本，與軸色(綠/藍)區隔 */}
             {cfg.snMatchMode && snColIdx > 0 && snColIdx <= grid.cols.length && (snList || []).map(({ row }, i) => {
               const ri = row - 1;
-              if (ri < 0 || ri >= grid.rows.length) return null;
+              if (ri < 0 || ri >= grid.rows.length || !inVis(snColIdx - 1)) return null;
               return (
                 <div key={`snhl-${i}`} style={{
                   position: "absolute",
-                  left: HEADER_W + cumX[snColIdx - 1], top: HEADER_H + cumY[ri],
+                  left: XL(snColIdx - 1), top: HEADER_H + cumY[ri],
                   width: grid.cols[snColIdx - 1].w_px, height: grid.rows[ri].h_px,
                   background: "#e2e8f0", pointerEvents: "none",
                 }} />
@@ -2904,11 +2922,11 @@
                 與中間 panel 的「軸色」(Group=綠 / Index=藍) 區隔，避免兩種語意撞色。 */}
             {(idxLabelCells || []).map(({ r, c }, i) => {
               const ci = c - 1, ri = r - 1;
-              if (ci < 0 || ri < 0 || ci >= grid.cols.length || ri >= grid.rows.length) return null;
+              if (!inVis(ci) || ri < 0 || ri >= grid.rows.length) return null;
               return (
                 <div key={`idxhl-${i}`} style={{
                   position: "absolute",
-                  left: HEADER_W + cumX[ci], top: HEADER_H + cumY[ri],
+                  left: XL(ci), top: HEADER_H + cumY[ri],
                   width: grid.cols[ci].w_px, height: grid.rows[ri].h_px,
                   background: "#e2e8f0", pointerEvents: "none",
                 }} />
@@ -2918,9 +2936,9 @@
             {/* 邊框 (從範本讀的) */}
             {(grid.borders || []).map((b, i) => {
               const ci = b.c - 1, ri = b.r - 1;
-              if (ci < 0 || ri < 0 || ci >= grid.cols.length || ri >= grid.rows.length) return null;
+              if (!inVis(ci) || ri < 0 || ri >= grid.rows.length) return null;
               const cw = grid.cols[ci].w_px, rh = grid.rows[ri].h_px;
-              const x = HEADER_W + cumX[ci], y = HEADER_H + cumY[ri];
+              const x = XL(ci), y = HEADER_H + cumY[ri];
               return (
                 <div key={`b-${i}`} style={{
                   position: "absolute", left: x, top: y, width: cw, height: rh,
@@ -2936,11 +2954,11 @@
             {/* 範本中的文字 */}
             {grid.cells.map((cell, i) => {
               const ci = cell.c - 1, ri = cell.r - 1;
-              if (ci < 0 || ri < 0 || ci >= grid.cols.length || ri >= grid.rows.length) return null;
+              if (!inVis(ci) || ri < 0 || ri >= grid.rows.length) return null;
               return (
                 <div key={`txt-${i}`} style={{
                   position: "absolute",
-                  left: HEADER_W + cumX[ci], top: HEADER_H + cumY[ri],
+                  left: XL(ci), top: HEADER_H + cumY[ri],
                   width: grid.cols[ci].w_px, height: grid.rows[ri].h_px,
                   padding: "2px 4px",
                   fontSize: cell.font_pt,
@@ -2957,10 +2975,10 @@
             {/* 我們新加的內容 (圖片 + SN 文字) */}
             {placements.map((pl, i) => {
               const ci = pl.col - 1, ri = pl.row - 1;
-              if (ci < 0 || ri < 0 || ci >= grid.cols.length || ri >= grid.rows.length) return null;
+              if (!inVis(ci) || ri < 0 || ri >= grid.rows.length) return null;
               const w = (cumX[ci + pl.span_cols] || cumX[grid.cols.length]) - cumX[ci];
               const h = (cumY[ri + pl.span_rows] || cumY[grid.rows.length]) - cumY[ri];
-              const x = HEADER_W + cumX[ci], y = HEADER_H + cumY[ri];
+              const x = XL(ci), y = HEADER_H + cumY[ri];
               if (pl.text !== undefined && pl.text !== null) {
                 return (
                   <div key={`my-${i}`} style={{
@@ -3111,25 +3129,55 @@
       const [zoom, setZoom] = useState(1);
       const stageWrapRef = useRef(null);
       const userZoomedRef = useRef(false);  // 一旦手動調整 zoom，auto-fit 停止
+      const fitPrevRef = useRef(null);      // 上次 fit 的 mode|template，用來判斷「是否真的切換」才 reset 手動 zoom
       const [versionInfo, setVersionInfo] = useState(null);
 
       useEffect(() => {
         fetch("/api/version").then((r) => r.json()).then(setVersionInfo).catch(() => {});
       }, []);
 
+      const orderedFiles = useMemo(() => {
+        const map = new Map(files.map((f) => [f.path, f]));
+        return order.map((p) => map.get(p)).filter(Boolean);
+      }, [files, order]);
+
+      // 預覽的「內容欄範圍」(1-based {minC,maxC})：有框線範本→偵測到的表格區域；
+      //   全空範本(無框線)→ 用實際落點(圖片+寫入標籤)的欄範圍當虛擬表格，讓縮放/置中也成立。
+      const excelColRange = (grid) => {
+        if (!grid) return null;
+        const d = detectExcelTable(grid);
+        if (d) return { minC: d.region.minC, maxC: d.region.maxC };
+        try {
+          const cells = computeExcelCellsAuto(grid, cfg.excel, cfg.label, orderedFiles, cfg.autoAlign);
+          let mn = Infinity, mx = -Infinity;
+          for (const c of cells) if (c.col) { mn = Math.min(mn, c.col); mx = Math.max(mx, c.col + (c.span_cols || 1) - 1); }
+          return mx > 0 ? { minC: mn, maxC: mx } : null;
+        } catch (_) { return null; }
+      };
+
       // 自動 fit。使用者手動調 zoom 後 (userZoomedRef=true) auto-fit 停止，
       // 直到切換 mode/template 或按「⤢」鍵才再次觸發。
+      //   依 orderedFiles/autoAlign 也重算 → 載入圖片後（含全空範本內容變化）自動重新 fit；
+      //   但只有「切 mode/template」才 reset 使用者手動 zoom（圖片變動不覆蓋手調）。
       useEffect(() => {
-        userZoomedRef.current = false;  // 切 mode/template 重設為自動
         const el = stageWrapRef.current;
         if (!el) return;
+        if (fitPrevRef.current !== `${mode}|${tplPath}`) { userZoomedRef.current = false; fitPrevRef.current = `${mode}|${tplPath}`; }
         const recompute = () => {
           if (userZoomedRef.current) return;
           const containerW = el.clientWidth - 16;
           if (containerW <= 0) return;
           let contentW = 0;
           if (mode === "excel" && xlGrid) {
-            contentW = xlGrid.cols.reduce((a, c) => a + c.w_px, 0) + 40;
+            // 以「內容欄範圍寬」決定縮放（表格或全空範本的落點）→ 內容夠大、其餘靠捲動；無內容才用全寬
+            const r = excelColRange(xlGrid);
+            if (r) {
+              const cum = [0]; xlGrid.cols.forEach((c) => cum.push(cum[cum.length - 1] + c.w_px));
+              const tableW = (cum[r.maxC] || cum[cum.length - 1]) - (cum[r.minC - 1] || 0);
+              contentW = (32 + tableW) / 0.82;   // 內容+列號 ≈ 容器 82%，兩側各留一點邊
+            } else {
+              contentW = xlGrid.cols.reduce((a, c) => a + c.w_px, 0) + 40;
+            }
           } else if (mode === "slides") {
             contentW = 656;   // 舞台寬(640)+小邊距；Y stepper 已移進舞台、不再額外佔寬
           }
@@ -3148,7 +3196,21 @@
           if (ro) ro.disconnect();
           window.removeEventListener("resize", recompute);
         };
-      }, [mode, xlGrid, tplPath]);
+      }, [mode, xlGrid, tplPath, orderedFiles, cfg.autoAlign]);
+
+      // 表格水平置中：載入/縮放後，捲動讓「表格中心」對齊預覽中央（欄位不隱藏，靠捲動置中）
+      useLayoutEffect(() => {
+        const el = stageWrapRef.current;
+        if (!el || mode !== "excel" || !xlGrid) return;
+        const raf = requestAnimationFrame(() => {
+          const r = excelColRange(xlGrid);
+          if (!r) return;
+          const cum = [0]; xlGrid.cols.forEach((c) => cum.push(cum[cum.length - 1] + c.w_px));
+          const centerX = (32 + ((cum[r.minC - 1] || 0) + (cum[r.maxC] || 0)) / 2) * zoom;
+          el.scrollLeft = Math.max(0, centerX - el.clientWidth / 2);
+        });
+        return () => cancelAnimationFrame(raf);
+      }, [xlGrid, zoom, mode, tplPath, orderedFiles, cfg.autoAlign]);
       const tplInputRef = useRef(null);
       const imgInputRef = useRef(null);
 
@@ -3171,11 +3233,6 @@
         }
         return base;
       };
-
-      const orderedFiles = useMemo(() => {
-        const map = new Map(files.map((f) => [f.path, f]));
-        return order.map((p) => map.get(p)).filter(Boolean);
-      }, [files, order]);
 
       // 直式（轉置）xlsx（PD #31）：解析最終方向(含手選) + 對不到左欄標籤的零件警示，給 UI 用
       const xlOrient = useMemo(() => {
@@ -5482,11 +5539,18 @@
                     const containerW = el.clientWidth - 16;
                     let contentW = STAGE_W;
                     if (mode === "excel" && xlGrid) {
-                      const cumX = xlGrid.cols.reduce((a, c) => a + c.w_px, 0);
-                      contentW = cumX + 32;
+                      // 與載入時的 auto-fit 一致：以「內容欄範圍寬」決定縮放（全空範本用落點；無內容才用全寬）
+                      const r = excelColRange(xlGrid);
+                      if (r) {
+                        const cum = [0]; xlGrid.cols.forEach((c) => cum.push(cum[cum.length - 1] + c.w_px));
+                        const tableW = (cum[r.maxC] || cum[cum.length - 1]) - (cum[r.minC - 1] || 0);
+                        contentW = (32 + tableW) / 0.82;
+                      } else {
+                        contentW = xlGrid.cols.reduce((a, c) => a + c.w_px, 0) + 32;
+                      }
                     }
                     userZoomedRef.current = false;  // ⤢ 鈕重新開啟 auto-fit
-                    setZoom(Math.min(2, Math.max(0.1, containerW / contentW)));
+                    setZoom(Math.min(2.2, Math.max(0.3, containerW / contentW)));
                   };
                   return (
                     <>
@@ -5533,9 +5597,9 @@
                         </div>
                         )}
                       </div>
-                      <div ref={stageWrapRef} className="flex-1 min-h-0 relative" style={{ overflow: "auto" }}>
+                      <div ref={stageWrapRef} className="flex-1 min-h-0 relative border rounded-lg bg-white" style={{ overflow: "auto" }}>
                        {!tplPath && <WelcomeHero />}
-                       <div style={{ zoom: zoom, MozTransform: `scale(${zoom})`, MozTransformOrigin: "top left" }}>
+                       <div style={{ zoom: zoom, MozTransform: `scale(${zoom})`, MozTransformOrigin: "top left", width: "fit-content", marginLeft: "auto", marginRight: "auto" }}>
 
                       {tplPath && mode === "excel" && (
                         <ExcelPreview grid={xlGrid} cfg={cfg} orderedFiles={orderedFiles} selected={selected} thumbUrl={thumbUrl} snList={snList}
