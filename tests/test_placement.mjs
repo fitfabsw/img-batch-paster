@@ -265,23 +265,27 @@ fail += labFail;
 
 // ── 回歸（#24/#31）：範本 index 標籤之間有「空欄/空列」→ image 須對齊「標籤實際位置」、跳過空隙 ──
 //   曾把 index 落點寫死成連續 start+ci*step（group 軸有查標籤、index 軸漏了）→ 範本有間隙就錯位。
-function gridFromCells(cellList) {
+function gridFromCells(cellList, region) {
   const cells = cellList.map(([r, c, text]) => ({ r, c, text }));
   const rs = cellList.map((x) => x[0]), cs = cellList.map((x) => x[1]);
-  const minR = Math.min(...rs), maxR = Math.max(...rs), minC = Math.min(...cs), maxC = Math.max(...cs);
+  const minR = region ? region[0] : Math.min(...rs), minC = region ? region[1] : Math.min(...cs);
+  const maxR = region ? region[2] : Math.max(...rs), maxC = region ? region[3] : Math.max(...cs);
   const borders = [];
   for (let r = minR; r <= maxR; r++) for (let c = minC; c <= maxC; c++) borders.push({ r, c });
   const cols = []; for (let c = 1; c <= maxC + 3; c++) cols.push({ letter: get_column_letter(c) });
   return { cols, cells, borders };
 }
-function placeGap(grid, orient) {
+function placeGap(grid, orient, { includeText } = {}) {
   const d = F.detectExcelTable(grid);
   const ax = F.readAxisLabels(grid, d);
   const excel = { startCell: d.startCell, snCol: d.snCol, cellCols: 1, cellRows: 1, gapRows: 0, orient };
   const idxAxis = orient === "vertical" ? ax.leftLabelsArr : ax.topLabelsArr;
   const label = { pattern: "{group}-{idx}", idxSort: "custom", idxOrder: [...idxAxis], groupSrc: "auto", idxIgnore: [], font_pt: 12 };
   const out = {};
-  for (const c of F.computeExcelCellsAuto(grid, excel, label, FILES, true)) if (c.path) out[c.path.replace(/\.[^.]+$/, "")] = get_column_letter(c.col) + c.row;
+  for (const c of F.computeExcelCellsAuto(grid, excel, label, FILES, true)) {
+    if (c.path) out[c.path.replace(/\.[^.]+$/, "")] = get_column_letter(c.col) + c.row;
+    else if (includeText && c.text != null) out[`T:${c.text}`] = get_column_letter(c.col) + c.row;
+  }
   return out;
 }
 const GAP = {
@@ -291,9 +295,23 @@ const GAP = {
   // 直式：index 標籤 2@B3、(B4 空)、3@B5 → BBB-3 須到第 5 列（跳過空列 4）
   "直式·index 標籤有空列": { grid: gridFromCells([[2,2,"Title"],[2,3,"BBB"],[2,4,"CCC"],[3,2,"2"],[5,2,"3"]]),
     orient: "vertical", expect: { "BBB-2": "C3", "BBB-3": "C5" } },
+  // 横式·index 標籤稀疏(2@H,3@K,4@L；缺 1)、group 依檔名 → 圖對齊標籤欄、跳過空欄
+  "横式·稀疏 index 標籤(group 依檔名)": {
+    grid: gridFromCells([[2,8,"2"],[2,11,"3"],[2,12,"4"]], [2,6,5,12]),
+    orient: "horizontal", includeText: true,
+    expect: { "T:AAA": "F3", "T:BBB": "F4", "AAA-2": "H3", "BBB-2": "H4", "BBB-3": "K4" } },
+  // 直式·index 稀疏(2@B4,3@B7,4@B8)、group 依檔名 → group 標籤須在表格頂列(第2列)，非 startRow-1
+  "直式·稀疏 index 標籤(group 依檔名)": {
+    grid: gridFromCells([[4,2,"2"],[7,2,"3"],[8,2,"4"]], [2,2,8,5]),
+    orient: "vertical", includeText: true,
+    expect: { "T:AAA": "C2", "T:BBB": "D2", "AAA-2": "C4", "BBB-2": "D4", "BBB-3": "D7" } },
+  // 直式·兩軸標籤、index 稀疏 → 須讀到頂列 group(BBB,CCC)、用範本 group（AAA 不在範本→跳過）
+  "直式·稀疏 index + 頂列 group 標籤": {
+    grid: gridFromCells([[2,3,"BBB"],[2,4,"CCC"],[4,2,"2"],[7,2,"3"],[8,2,"4"]], [2,2,8,4]),
+    orient: "vertical", expect: { "BBB-2": "C4", "BBB-3": "C7" } },
 };
 for (const [name, t] of Object.entries(GAP)) {
-  const got = placeGap(t.grid, t.orient);
+  const got = placeGap(t.grid, t.orient, { includeText: t.includeText });
   try { assert.deepStrictEqual(got, t.expect); console.log(`  ✓ ${name}`); }
   catch (e) { fail++; console.log(`  ✗ ${name}\n      expected ${JSON.stringify(t.expect)}\n      got      ${JSON.stringify(got)}`); }
 }

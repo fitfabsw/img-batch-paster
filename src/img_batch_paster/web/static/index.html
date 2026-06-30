@@ -208,12 +208,17 @@
       const textRows = new Set(
         cells.filter((c) => c.c > minC && c.text != null && String(c.text).trim() !== "").map((c) => c.r)
       );
+      const topRowHasLabels = textRows.has(minR);   // 頂列(影像欄)有文字 → 頂列就是表頭
       let skipRows = 0;
       while (minR + skipRows <= maxR && textRows.has(minR + skipRows)) skipRows++;
       // 也看左欄(標籤欄)：若標籤從某列才開始(其上有空白列)，那空白列就是表頭 → 資料從首個左欄標籤列起。
       //   解決「group 標籤在左欄、頂列無文字」(如 h7) 時表頭偵測不到、資料錨點誤落表格頂列的問題。
-      const leftRows = cells.filter((c) => c.c === minC && c.text != null && String(c.text).trim() !== "").map((c) => c.r);
-      if (leftRows.length) skipRows = Math.max(skipRows, Math.min(...leftRows) - minR);
+      //   ⚠ 僅在「頂列無表頭」時套用：否則左欄若是稀疏 index 標籤(2,3,4 從第4列起)會把表頭灌到資料列、
+      //      讀不到頂列 group 標籤(v3) → 退回檔名 group。頂列有標籤時表頭就是頂列。
+      if (!topRowHasLabels) {
+        const leftRows = cells.filter((c) => c.c === minC && c.text != null && String(c.text).trim() !== "").map((c) => c.r);
+        if (leftRows.length) skipRows = Math.max(skipRows, Math.min(...leftRows) - minR);
+      }
       // 頂列永遠是(index)表頭列：即使全空也保留一列給標頭、資料從下一列起（否則寫入的 index 標頭會擠掉資料）
       skipRows = Math.max(skipRows, 1);
       if (minR + skipRows > maxR) skipRows = Math.max(0, maxR - minR); // 至少留 1 列放圖
@@ -263,7 +268,7 @@
     }
 
     // 計算 Excel 的儲存格 placements。writeIdx=true 時把 index 標頭(2,3,4)寫進頂列(與 group 對稱)。
-    function computeExcelCells(excel, label, orderedFiles, autoAlign, writeIdx) {
+    function computeExcelCells(excel, label, orderedFiles, autoAlign, writeIdx, idxColMap) {
       if (!orderedFiles || orderedFiles.length === 0) return [];
       const start = parseCell(excel.startCell);
       const snCol = excel.snCol ? parseCell(excel.snCol + "1").col : 0;
@@ -291,10 +296,17 @@
         }
         rowCells.forEach((f, ci) => {
           if (!f) return;  // 缺的照片留空
+          // index=依範本(頂列稀疏標籤) → 用標籤實際欄位；否則從 startCell 連續排
+          let col = start.col + ci * stepCol;
+          if (idxColMap && Array.isArray(colsArg)) {
+            const mapped = idxColMap.get(_normLabel(colsArg[ci]));
+            if (mapped == null) return;   // 該 index 對不到範本頂列標籤 → 跳過
+            col = mapped;
+          }
           cells.push({
             path: f.path,
             row: targetRow,
-            col: start.col + ci * stepCol,
+            col,
             span_cols: excel.cellCols,
             span_rows: excel.cellRows,
           });
@@ -430,7 +442,8 @@
           if (g && !snSet.has(g)) { snSet.add(g); snList.push(g); }
         }
         colOf = new Map(snList.map((sn, k) => [sn, startCol + k * stepCol]));
-        const grpLabelRow = startRow - 1;   // group 標籤在資料列上方一列(隨自由軸移動)
+        // group 標籤列＝表格頂列(region.minR)；用 startRow-1 在 index 稀疏(從第4列起)時會偏移到資料列。
+        const grpLabelRow = idxIsFilename ? (startRow - 1) : ax.region.minR;
         if (grpLabelRow >= 1) {   // 依檔名(自動產生)→ 一律把 Group 寫進頂列標籤
           for (const sn of snList) {
             cells.push({ row: grpLabelRow, col: colOf.get(sn), span_cols: excel.cellCols, span_rows: 1, text: sn, font_pt: label.font_pt });
@@ -496,8 +509,12 @@
         }
       }
       // Case1/2（横式 group 依檔名）：範本頂列無 index 標籤 → 一併寫入 index 標頭(與 group 對稱)
-      const topEmpty = detect ? ((readAxisLabels(grid, detect)?.topLabelsArr || []).length === 0) : true;
-      return computeExcelCells(excel, label, orderedFiles, autoAlign, topEmpty);
+      const axH = detect ? readAxisLabels(grid, detect) : null;
+      const topEmpty = axH ? (axH.topLabelsArr || []).length === 0 : true;
+      // index=依範本(頂列有標籤、可能稀疏) → 圖片欄對齊標籤實際位置(處理空欄)
+      const idxIsTemplate = axH && (axH.topLabelsArr || []).length > 0
+        && idxSrcShown(label, axH.topLabelsArr) === "template";
+      return computeExcelCells(excel, label, orderedFiles, autoAlign, topEmpty, idxIsTemplate ? axH.topLabels : null);
     }
 
     // pattern → regex 字串：先轉義字面字元，再展開 placeholder ({group}/{idx}/{skip})
